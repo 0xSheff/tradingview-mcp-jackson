@@ -19,7 +19,9 @@ if exist "%PROGRAMFILES(x86)%\TradingView\TradingView.exe" set "TV_EXE=%PROGRAMF
 
 REM Check MSIX / Windows Store installs
 if "%TV_EXE%"=="" (
-    for /f "tokens=*" %%i in ('dir /s /b "%PROGRAMFILES%\WindowsApps\TradingView*\TradingView.exe" 2^>nul') do set "TV_EXE=%%i"
+    for /f "usebackq tokens=*" %%i in (`powershell -NoProfile -Command "(Get-AppxPackage -Name *TradingView*).InstallLocation"`) do (
+        if exist "%%i\TradingView.exe" set "TV_EXE=%%i\TradingView.exe"
+    )
 )
 if "%TV_EXE%"=="" (
     for /f "tokens=*" %%i in ('where TradingView.exe 2^>nul') do set "TV_EXE=%%i"
