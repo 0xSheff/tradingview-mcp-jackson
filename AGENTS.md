@@ -84,6 +84,10 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
+## Agent Git & Version Control Rules
+
+1. **Never commit or push automatically.** Always prepare or stage your work, then STOP and ask the user to review. The user prefers to review and execute all `git commit` and `git push` commands manually.
+
 ## Context Management Rules
 
 These tools can return large payloads. Follow these rules to avoid context bloat:

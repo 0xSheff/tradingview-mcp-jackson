@@ -9,6 +9,47 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
+import * as indicators from "./indicators.js";
+
+function formatTf(tf, chartTf) {
+  const raw = tf === "" || tf === null || tf === undefined ? chartTf : tf;
+  const map = { D: "Daily", W: "Weekly", M: "Monthly", "1": "1M", "3": "3M",
+    "5": "5M", "10": "10M", "15": "15M", "30": "30M", "45": "45M",
+    "60": "1H", "120": "2H", "180": "3H", "240": "4H", "360": "6H",
+    "480": "8H", "720": "12H" };
+  return map[raw] ?? raw;
+}
+
+async function readIndicatorTfs(studies, chartTf) {
+  const fvgStudy = studies.find(s => /fair value/i.test(s.name));
+  const sdStudy  = studies.find(s => /supply.*demand/i.test(s.name));
+  const result = {};
+
+  if (fvgStudy) {
+    try {
+      const inp = await data.getIndicator({ entity_id: fvgStudy.id });
+      const tf = inp.inputs?.find(i => i.id === "tf");
+      result.fvg_timeframe = formatTf(tf?.value, chartTf);
+    } catch (_) {}
+  }
+
+  if (sdStudy) {
+    try {
+      const inp = await data.getIndicator({ entity_id: sdStudy.id });
+      const tfs = [];
+      for (let n = 1; n <= 3; n++) {
+        const enabled = inp.inputs?.find(i => i.id === `timeframe${n}Enabled`);
+        const tf      = inp.inputs?.find(i => i.id === `timeframe${n}`);
+        if (enabled?.value !== false) {
+          tfs.push(formatTf(tf?.value, chartTf));
+        }
+      }
+      result.sd_timeframes = tfs.length ? tfs : [formatTf("", chartTf)];
+    } catch (_) {}
+  }
+
+  return result;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../../");
@@ -68,18 +109,21 @@ export async function runBrief({ rules_path } = {}) {
       await chart.setTimeframe({ timeframe: default_timeframe });
       await new Promise((r) => setTimeout(r, 900));
 
-      const [state, indicators, quote] = await Promise.all([
+      const [state, studyValues, quote] = await Promise.all([
         chart.getState(),
         data.getStudyValues(),
         data.getQuote({}),
       ]);
 
+      const tfs = await readIndicatorTfs(state.studies || [], default_timeframe);
+
       results.push({
         symbol,
         timeframe: default_timeframe,
         state,
-        indicators,
+        indicators: studyValues,
         quote,
+        ...tfs,
       });
     } catch (err) {
       results.push({ symbol, error: err.message });
@@ -107,7 +151,9 @@ export async function runBrief({ rules_path } = {}) {
     symbols_scanned: results,
     instruction: [
       "For each symbol in symbols_scanned, apply the bias_criteria from rules to the indicator readings.",
-      "Output one line per symbol: SYMBOL | BIAS: [bullish/bearish/neutral] | KEY LEVEL: [price] | WATCH: [what to monitor]",
+      "Each symbol entry includes fvg_timeframe (the timeframe of the FVG indicator) and sd_timeframes (active timeframes of the S&D indicator).",
+      "Output one line per symbol: SYMBOL | BIAS: [bullish/bearish/neutral] | LEVELS: [list each key level with its timeframe, e.g. 'Bear FVG 6681-6715 (4H)', 'Demand 6553-6632 (4H)', 'Supply 6894-6949 (4H)'] | WATCH: [what to monitor]",
+      "Always include the timeframe label in parentheses next to every level mentioned.",
       "End with a one-sentence overall market read.",
       "Be direct. No preamble.",
     ].join(" "),
