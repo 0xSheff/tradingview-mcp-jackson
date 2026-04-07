@@ -1,61 +1,192 @@
 /**
  * Morning brief core logic.
- * Reads rules.json, scans watchlist symbols, returns structured data
- * for Claude to apply bias criteria and generate a session brief.
+ * Reads rules.json, scans watchlist symbols across multiple timeframes,
+ * collects FVG zones, S&D zones, OHLCV bars for 3-bar formation,
+ * and returns structured data for Claude to apply the BIAS methodology.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { loadRules } from "./config.js";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
-import * as indicators from "./indicators.js";
 
-function formatTf(tf, chartTf) {
-  const raw = tf === "" || tf === null || tf === undefined ? chartTf : tf;
-  const map = { D: "Daily", W: "Weekly", M: "Monthly", "1": "1M", "3": "3M",
-    "5": "5M", "10": "10M", "15": "15M", "30": "30M", "45": "45M",
-    "60": "1H", "120": "2H", "180": "3H", "240": "4H", "360": "6H",
-    "480": "8H", "720": "12H" };
-  return map[raw] ?? raw;
-}
-
-async function readIndicatorTfs(studies, chartTf) {
-  const fvgStudy = studies.find(s => /fair value/i.test(s.name));
-  const sdStudy  = studies.find(s => /supply.*demand/i.test(s.name));
-  const result = {};
-
-  if (fvgStudy) {
-    try {
-      const inp = await data.getIndicator({ entity_id: fvgStudy.id });
-      const tf = inp.inputs?.find(i => i.id === "tf");
-      result.fvg_timeframe = formatTf(tf?.value, chartTf);
-    } catch (_) {}
-  }
-
-  if (sdStudy) {
-    try {
-      const inp = await data.getIndicator({ entity_id: sdStudy.id });
-      const tfs = [];
-      for (let n = 1; n <= 3; n++) {
-        const enabled = inp.inputs?.find(i => i.id === `timeframe${n}Enabled`);
-        const tf      = inp.inputs?.find(i => i.id === `timeframe${n}`);
-        if (enabled?.value !== false) {
-          tfs.push(formatTf(tf?.value, chartTf));
-        }
-      }
-      result.sd_timeframes = tfs.length ? tfs : [formatTf("", chartTf)];
-    } catch (_) {}
-  }
-
-  return result;
-}
-
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, "../../");
 const SESSIONS_DIR = join(homedir(), ".tradingview-mcp", "sessions");
+
+const TF_SWITCH_DELAY = 1500;
+
+/**
+ * Timeframe scan configuration.
+ * bars:          OHLCV bars to fetch (for 3-bar formation on W and D)
+ * fvg:           read FVG pine boxes
+ * sd:            read S&D pine boxes
+ * labels:        read pine labels (BSL/SSL/liquidity levels)
+ * study_values:  read indicator plot outputs (FVG Top/Bot, S&D levels)
+ * fractals:      read naked fractals from "0x Fractals Advanced"
+ *                (W/D → liquidity levels; H4/H1 → POI)
+ */
+const SCAN_TIMEFRAMES = [
+  { key: "weekly", tf: "W",   bars: 3, fvg: true,  sd: false, labels: true, study_values: true, fractals: true },
+  { key: "daily",  tf: "D",   bars: 3, fvg: true,  sd: false, labels: true, study_values: true, fractals: true },
+  { key: "h4",     tf: "240", bars: 0, fvg: true,  sd: true,  labels: true, study_values: true, fractals: true },
+  { key: "h1",     tf: "60",  bars: 0, fvg: true,  sd: true,  labels: true, study_values: true, fractals: true },
+];
+
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function scanTimeframe(config) {
+  await chart.setTimeframe({ timeframe: config.tf });
+  await delay(TF_SWITCH_DELAY);
+
+  const promises = [];
+  const keys = [];
+
+  if (config.bars > 0) {
+    keys.push("bars");
+    promises.push(
+      data.getOhlcv({ count: config.bars }).then((r) => r.bars || []).catch(() => [])
+    );
+  }
+
+  if (config.fvg) {
+    keys.push("fvg_zones");
+    promises.push(
+      data.getPineBoxes({ study_filter: "fair value" })
+        .then((r) => {
+          const study = r.studies?.[0];
+          return study?.zones || [];
+        })
+        .catch(() => [])
+    );
+  }
+
+  if (config.sd) {
+    keys.push("sd_zones");
+    promises.push(
+      data.getPineBoxes({ study_filter: "supply" })
+        .then((r) => {
+          const study = r.studies?.[0];
+          return study?.zones || [];
+        })
+        .catch(() => [])
+    );
+  }
+
+  if (config.labels) {
+    keys.push("labels");
+    promises.push(
+      data.getPineLabels({ max_labels: 30 })
+        .then((r) => {
+          const allLabels = [];
+          for (const s of r.studies || []) {
+            for (const l of s.labels || []) {
+              allLabels.push(l);
+            }
+          }
+          return allLabels;
+        })
+        .catch(() => [])
+    );
+  }
+
+  if (config.study_values) {
+    keys.push("study_values");
+    promises.push(
+      data.getStudyValues()
+        .then((r) => {
+          const parsed = {};
+          for (const study of r.studies || []) {
+            const nameLower = study.name.toLowerCase();
+            if (nameLower.includes("fair value") || nameLower.includes("fvg")) {
+              parsed.fvg = {};
+              for (const [k, v] of Object.entries(study.values)) {
+                const num = parseFloat(String(v).replace(/,/g, ""));
+                if (!isNaN(num)) parsed.fvg[k] = num;
+              }
+            }
+            if (nameLower.includes("supply") || nameLower.includes("demand") || nameLower.includes("s&d") || nameLower.includes("s/d")) {
+              parsed.sd = {};
+              for (const [k, v] of Object.entries(study.values)) {
+                const num = parseFloat(String(v).replace(/,/g, ""));
+                if (!isNaN(num)) parsed.sd[k] = num;
+              }
+            }
+          }
+          return parsed;
+        })
+        .catch(() => ({}))
+    );
+  }
+
+  if (config.fractals) {
+    keys.push("naked_fractals");
+    promises.push(
+      data.getPineLabels({ study_filter: "0x Fractals", max_labels: 100 })
+        .then((r) => {
+          const out = { highs: [], lows: [] };
+          for (const s of r.studies || []) {
+            for (const lb of s.labels || []) {
+              const text = String(lb.text || "");
+              // Label format: "NFH <price>" or "NFL <price>"
+              const m = text.match(/^(NFH|NFL)\s+([0-9]*\.?[0-9]+)/);
+              if (!m) continue;
+              const price = parseFloat(m[2]);
+              if (isNaN(price)) continue;
+              if (m[1] === "NFH") out.highs.push(price);
+              else out.lows.push(price);
+            }
+          }
+          // Deduplicate and sort
+          out.highs = [...new Set(out.highs)].sort((a, b) => a - b);
+          out.lows  = [...new Set(out.lows)].sort((a, b) => a - b);
+          return out;
+        })
+        .catch(() => ({ highs: [], lows: [] }))
+    );
+  }
+
+  const results = await Promise.all(promises);
+  const out = {};
+  for (let i = 0; i < keys.length; i++) {
+    out[keys[i]] = results[i];
+  }
+  return out;
+}
+
+function loadRules(rulesPath) {
+  const candidates = [
+    rulesPath,
+    join(PROJECT_ROOT, "rules.json"),
+    join(homedir(), ".tradingview-mcp", "rules.json"),
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      try {
+        return { rules: JSON.parse(readFileSync(p, "utf8")), path: p };
+      } catch (e) {
+        throw new Error(`Failed to parse rules.json at ${p}: ${e.message}`);
+      }
+    }
+  }
+
+  throw new Error(
+    "No rules.json found. Copy rules.example.json to rules.json and fill in your trading rules.\n" +
+      "Looked in:\n" +
+      candidates
+        .filter(Boolean)
+        .map((p) => `  - ${p}`)
+        .join("\n"),
+  );
+}
 
 export async function runBrief({ rules_path } = {}) {
   const { rules, path: loadedFrom } = loadRules(rules_path);
-  const { watchlist = [], default_timeframe = "240" } = rules;
+  const { watchlist = [] } = rules;
 
   if (!watchlist.length) {
     throw new Error(
@@ -76,26 +207,23 @@ export async function runBrief({ rules_path } = {}) {
   for (const symbol of watchlist) {
     try {
       await chart.setSymbol({ symbol });
-      await new Promise((r) => setTimeout(r, 900));
-      await chart.setTimeframe({ timeframe: default_timeframe });
-      await new Promise((r) => setTimeout(r, 900));
+      await delay(TF_SWITCH_DELAY);
 
-      const [state, studyValues, quote] = await Promise.all([
-        chart.getState(),
-        data.getStudyValues(),
-        data.getQuote({}),
-      ]);
+      const symbolData = { symbol };
 
-      const tfs = await readIndicatorTfs(state.studies || [], default_timeframe);
+      // Scan each timeframe
+      for (const config of SCAN_TIMEFRAMES) {
+        symbolData[config.key] = await scanTimeframe(config);
+      }
 
-      results.push({
-        symbol,
-        timeframe: default_timeframe,
-        state,
-        indicators: studyValues,
-        quote,
-        ...tfs,
-      });
+      // Get current quote (from last TF, price is the same)
+      try {
+        symbolData.quote = await data.getQuote({});
+      } catch (_) {
+        symbolData.quote = null;
+      }
+
+      results.push(symbolData);
     } catch (err) {
       results.push({ symbol, error: err.message });
     }
@@ -115,20 +243,77 @@ export async function runBrief({ rules_path } = {}) {
     generated_at: new Date().toISOString(),
     rules_loaded_from: loadedFrom,
     rules: {
-      bias_criteria: rules.bias_criteria || null,
+      bias_model: rules.bias_model || null,
       risk_rules: rules.risk_rules || null,
       notes: rules.notes || null,
     },
     symbols_scanned: results,
-    instruction: [
-      "For each symbol in symbols_scanned, apply the bias_criteria from rules to the indicator readings.",
-      "Each symbol entry includes fvg_timeframe (the timeframe of the FVG indicator) and sd_timeframes (active timeframes of the S&D indicator).",
-      "Output one line per symbol: SYMBOL | BIAS: [bullish/bearish/neutral] | LEVELS: [list each key level with its timeframe, e.g. 'Bear FVG 6681-6715 (4H)', 'Demand 6553-6632 (4H)', 'Supply 6894-6949 (4H)'] | WATCH: [what to monitor]",
-      "Always include the timeframe label in parentheses next to every level mentioned.",
-      "End with a one-sentence overall market read.",
-      "Be direct. No preamble.",
-    ].join(" "),
+    instruction: buildInstruction(),
   };
+}
+
+function buildInstruction() {
+  return [
+    "BIAS METHODOLOGY — Apply this analysis for each symbol:\n",
+
+    "STEP 1 — WEEKLY BIAS (FVG Context + 3-Bar Formation):",
+    "A) FVG Context: Check weekly.fvg_zones AND weekly.study_values.fvg (Bull FVG Top/Bot, Bear FVG Top/Bot) relative to current price.",
+    "   - Read BOTH bullish and bearish FVGs together — analyze price's journey between them, not each in isolation.",
+    "   - If price traveled from a bearish FVG down into a bullish FVG and only mitigated it with wicks (not body close inside the zone), then failed to rally → bullish FVG is weakened, bias is BEARISH.",
+    "   - If price rallied from a bullish FVG with body closing inside/above it → bullish FVG holds, bias is BULLISH.",
+    "   - Unmitigated bearish FVG above price = resistance / target for shorts.",
+    "   - Check weekly.labels for BSL/SSL sweeps — liquidity swept = cause of next directional move.",
+    "   - Price moves from liquidity to liquidity, rebalancing FVGs in between.",
+    "B) 3-Bar Formation: Analyze weekly.bars (last 3 weekly candles, ordered oldest→newest as bar1, bar2, bar3-current):",
+    "   - REVERSAL: If bar2 swept bar1's high (bar2.high > bar1.high) but closed below it (bar2.close < bar1.high) → bearish reversal expected for bar3.",
+    "   - REVERSAL: If bar2 swept bar1's low (bar2.low < bar1.low) but closed above it (bar2.close > bar1.low) → bullish reversal expected for bar3.",
+    "   - CONTINUATION: If bar2 swept bar1's high AND closed above it (bar2.close > bar1.high) → bullish continuation for bar3.",
+    "   - CONTINUATION: If bar2 swept bar1's low AND closed below it (bar2.close < bar1.low) → bearish continuation for bar3.",
+    "   - If bar2 did not sweep bar1's high or low → no clear formation, skip this signal.",
+    "C) Combine FVG context + 3-bar formation → Weekly Bias: BULLISH / BEARISH / NEUTRAL.\n",
+
+    "STEP 2 — DAILY BIAS (FVG Context + 3-Bar Formation):",
+    "Apply the same FVG context + 3-bar logic to daily.fvg_zones, daily.study_values.fvg, and daily.bars.",
+    "Daily bias must be subordinate to weekly bias. If daily conflicts with weekly, mark as NEUTRAL or note the conflict.",
+    "Key question: Will today's daily candle close higher or lower?\n",
+
+    "STEP 3 — KEY LIQUIDITY LEVELS (Naked Fractals on W & D):",
+    "Read weekly.naked_fractals and daily.naked_fractals — these come from the '0x Fractals Advanced' indicator, which tracks pivot highs/lows over the last 50–100 bars and flags those not yet swept by subsequent price action.",
+    "Each bucket contains { highs: [prices], lows: [prices] } sorted ascending.",
+    "- UPPER liquidity (key level above price): closest naked fractal HIGH that is > current price. Search weekly first, then daily.",
+    "- LOWER liquidity (key level below price): closest naked fractal LOW that is < current price. Search weekly first, then daily.",
+    "- These are the draw-on-liquidity targets — price tends to reach for naked highs/lows before reversing.",
+    "- Report W and D levels separately; weekly levels outrank daily when both exist on the same side.\n",
+
+    "STEP 4 — POINTS OF INTEREST (POI) on H4 and H1:",
+    "POIs are where you look to ENTER trades in the direction of bias. Three POI types, all relative to current price:",
+    "  (1) FVG zones — from h4/h1 fvg_zones and study_values.fvg (keys: 'Bull FVG Top/Bot', 'Bear FVG Top/Bot').",
+    "  (2) S&D zones — from h4/h1 sd_zones and study_values.sd (keys: 'Nearest Demand Top/Bot', 'Nearest Supply Top/Bot').",
+    "  (3) Naked fractal levels — from h4/h1 naked_fractals (closest upper fractal HIGH above price and closest lower fractal LOW below price, per timeframe).",
+    "",
+    "For each side (above price / below price) on each TF (4H, 1H), identify:",
+    "  - closest FVG, closest S&D zone, closest naked fractal level.",
+    "",
+    "CONFLUENCE STRENGTHENING: If a naked fractal level falls INSIDE (or within a tight tolerance of) an FVG zone or an S&D zone, that POI is STRONGER — mark it as ★ STRONG. Treat 'inside' as: fractal price between the zone's top and bottom. If an FVG and S&D also overlap at the same fractal, that's the highest-confluence POI.\n",
+
+    "STEP 5 — SYNTHESIS:",
+    "Weekly bias (FVG + 3-bar) is the primary direction.",
+    "Daily bias must align — if it conflicts, note it and lower confidence.",
+    "Use W/D naked fractals as the DRAW-ON-LIQUIDITY targets (where price is likely headed).",
+    "Use H4/H1 POIs as ENTRY zones in the direction of bias, preferring STRONG (confluence) POIs.\n",
+
+    "OUTPUT FORMAT:",
+    "For each symbol output:",
+    "SYMBOL | WEEKLY BIAS: [bullish/bearish/neutral] (reason) | DAILY BIAS: [bullish/bearish/neutral] (reason) | OVERALL: [bullish/bearish/neutral]",
+    "3-BAR W: [reversal/continuation/none] — describe the formation",
+    "3-BAR D: [reversal/continuation/none] — describe the formation",
+    "KEY LIQUIDITY: [W upper: price | W lower: price | D upper: price | D lower: price]  (omit any side with no naked fractal)",
+    "POI 4H ABOVE: [FVG: range | S&D: range | Fractal: price]  (mark ★ if confluence)",
+    "POI 4H BELOW: [FVG: range | S&D: range | Fractal: price]  (mark ★ if confluence)",
+    "POI 1H ABOVE: [FVG: range | S&D: range | Fractal: price]  (mark ★ if confluence)",
+    "POI 1H BELOW: [FVG: range | S&D: range | Fractal: price]  (mark ★ if confluence)",
+    "End with a one-sentence overall market read across all symbols. Be direct. No preamble.",
+  ].join("\n");
 }
 
 export function saveSession({ brief, date } = {}) {
