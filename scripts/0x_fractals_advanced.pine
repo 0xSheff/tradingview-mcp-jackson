@@ -1,0 +1,105 @@
+//@version=6
+indicator("0x Fractals Advanced", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// -----------------------------------------------------------------------------
+// Inputs
+// -----------------------------------------------------------------------------
+left_bars      = input.int(2,   "Left Bars",   minval = 1)
+right_bars     = input.int(2,   "Right Bars",  minval = 1)
+lookback       = input.int(100, "Lookback Bars", minval = 10, maxval = 500,
+     tooltip = "How many bars back to track fractals and display naked ones")
+
+show_markers   = input.bool(true,  "Show Pivot Markers (triangles)")
+show_naked     = input.bool(true,  "Show Naked Fractal Lines & Labels")
+extend_right   = input.int(5, "Extend Lines Right (bars)", minval = 0, maxval = 50)
+
+naked_high_col = input.color(color.new(#ef5350, 0), "Naked High Color")
+naked_low_col  = input.color(color.new(#26a69a, 0), "Naked Low Color")
+line_width_in  = input.int(1, "Line Width", minval = 1, maxval = 4)
+line_style_in  = input.string("dashed", "Line Style", options = ["solid", "dashed", "dotted"])
+
+// -----------------------------------------------------------------------------
+// Fractal tracker
+// -----------------------------------------------------------------------------
+type Fractal
+    int   bar
+    float price
+    bool  isHigh
+    bool  swept
+
+var array<Fractal> fractals = array.new<Fractal>()
+
+ph = ta.pivothigh(left_bars, right_bars)
+pl = ta.pivotlow(left_bars, right_bars)
+
+// Optional original visual markers (same behavior as before)
+plotshape(show_markers and not na(ph) ? ph : na,
+     style = shape.triangledown, offset = -right_bars,
+     location = location.abovebar, color = color.new(#ef5350, 0), size = size.tiny)
+plotshape(show_markers and not na(pl) ? pl : na,
+     style = shape.triangleup,   offset = -right_bars,
+     location = location.belowbar, color = color.new(#26a69a, 0), size = size.tiny)
+
+// Register newly confirmed pivots. Pivot bar is `right_bars` ago.
+if not na(ph)
+    array.push(fractals, Fractal.new(bar_index - right_bars, ph, true,  false))
+if not na(pl)
+    array.push(fractals, Fractal.new(bar_index - right_bars, pl, false, false))
+
+// Mark fractals as swept by any later bar that reached them.
+// A fractal is "naked" until a subsequent bar's high (for fractal highs) or
+// low (for fractal lows) touches or pierces its price. We only count bars
+// strictly after the pivot's own bar (the right_bars window cannot sweep it
+// by construction, but we guard with bar_index > f.bar anyway).
+if array.size(fractals) > 0
+    for i = 0 to array.size(fractals) - 1
+        f = array.get(fractals, i)
+        if not f.swept and bar_index > f.bar
+            if f.isHigh and high >= f.price
+                f.swept := true
+            else if (not f.isHigh) and low <= f.price
+                f.swept := true
+
+// Prune fractals older than lookback window (oldest at front)
+while array.size(fractals) > 0 and (bar_index - array.get(fractals, 0).bar) > lookback
+    array.shift(fractals)
+
+// -----------------------------------------------------------------------------
+// Draw naked fractals on the last bar only
+// -----------------------------------------------------------------------------
+var array<line>  drawn_lines  = array.new<line>()
+var array<label> drawn_labels = array.new<label>()
+
+line_style = line_style_in == "dashed" ? line.style_dashed :
+             line_style_in == "dotted" ? line.style_dotted : line.style_solid
+
+if barstate.islast
+    // Clear previous frame's drawings
+    if array.size(drawn_lines) > 0
+        for i = 0 to array.size(drawn_lines) - 1
+            line.delete(array.get(drawn_lines, i))
+        array.clear(drawn_lines)
+    if array.size(drawn_labels) > 0
+        for i = 0 to array.size(drawn_labels) - 1
+            label.delete(array.get(drawn_labels, i))
+        array.clear(drawn_labels)
+
+    if show_naked and array.size(fractals) > 0
+        right_x = bar_index + extend_right
+        for i = 0 to array.size(fractals) - 1
+            f = array.get(fractals, i)
+            if not f.swept
+                col = f.isHigh ? naked_high_col : naked_low_col
+                txt = f.isHigh ? "NFH" : "NFL"
+                ln  = line.new(f.bar, f.price, right_x, f.price,
+                     xloc = xloc.bar_index, color = col,
+                     style = line_style, width = line_width_in)
+                array.push(drawn_lines, ln)
+                lb  = label.new(right_x, f.price,
+                     txt + " " + str.tostring(f.price),
+                     xloc = xloc.bar_index, yloc = yloc.price,
+                     style = label.style_label_left,
+                     color = color.new(col, 80),
+                     textcolor = col,
+                     size = size.small)
+                array.push(drawn_labels, lb)
