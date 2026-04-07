@@ -84,9 +84,48 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
+## Windows Environment Notes
+
+This project runs on Windows. The bash shell that AI agents use does **not** inherit the Windows system PATH, so common commands need full paths:
+
+- **Node.js:** `C:\nvm4w\nodejs\node.exe` (managed by nvm4w)
+- **npm:** `C:\nvm4w\nodejs\npm.cmd`
+- **npx:** `C:\nvm4w\nodejs\npx.cmd`
+- Bare `node` / `npm` will fail with "command not found" in the bash tool.
+
+### Launching TradingView (CDP)
+
+The MCP server and CLI communicate with TradingView Desktop via Chrome DevTools Protocol on `localhost:9222`. If TradingView is not running, **all scan/data tools will fail** with "CDP connection failed."
+
+**Before running any chart-reading workflow (morning brief, batch scan, etc.), check CDP and launch if needed:**
+
+```bash
+# 1. Check if CDP is up
+curl -s http://localhost:9222/json/version
+
+# 2. If not running, launch via PowerShell (the .bat blocks, so use Start-Process)
+powershell.exe -NoProfile -Command "Start-Process 'cmd.exe' -ArgumentList '/c','C:\c_projects\tradingview-mcp-jackson\scripts\launch_tv_debug.bat' -WindowStyle Normal"
+
+# 3. Wait for CDP readiness (poll)
+for i in 1 2 3 4 5 6; do curl -s http://localhost:9222/json/version && break; echo "Waiting..."; sleep 3; done
+```
+
+The launch script (`scripts/launch_tv_debug.bat`) auto-detects the TradingView install location, kills any existing instance, and restarts with `--remote-debugging-port=9222`.
+
+### Running the CLI
+
+Use the full node path to invoke the CLI:
+
+```bash
+/c/nvm4w/nodejs/node.exe src/cli/index.js brief          # morning brief
+/c/nvm4w/nodejs/node.exe src/cli/index.js session get     # get saved session
+```
+
 ## Agent Git & Version Control Rules
 
 1. **Never commit or push automatically.** Always prepare or stage your work, then STOP and ask the user to review. The user prefers to review and execute all `git commit` and `git push` commands manually.
+
+2. Always work in the main repository, not in session one.
 
 ## Context Management Rules
 
