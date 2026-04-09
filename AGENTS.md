@@ -103,14 +103,14 @@ The MCP server and CLI communicate with TradingView Desktop via Chrome DevTools 
 # 1. Check if CDP is up
 curl -s http://localhost:9222/json/version
 
-# 2. If not running, launch via PowerShell (the .bat blocks, so use Start-Process)
-powershell.exe -NoProfile -Command "Start-Process 'cmd.exe' -ArgumentList '/c','C:\c_projects\tradingview-mcp-jackson\scripts\launch_tv_debug.bat' -WindowStyle Normal"
+# 2. If not running, launch the bat script (it blocks until CDP is ready)
+scripts/launch_tv_debug.bat
 
-# 3. Wait for CDP readiness (poll)
-for i in 1 2 3 4 5 6; do curl -s http://localhost:9222/json/version && break; echo "Waiting..."; sleep 3; done
+# 3. Verify CDP is up
+curl -s http://localhost:9222/json/version
 ```
 
-The launch script (`scripts/launch_tv_debug.bat`) auto-detects the TradingView install location, kills any existing instance, and restarts with `--remote-debugging-port=9222`.
+The launch script auto-detects the TradingView install location, kills any existing instance, and restarts with `--remote-debugging-port=9222`.
 
 ### Running the CLI
 
