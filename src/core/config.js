@@ -36,3 +36,79 @@ export function loadRules(rulesPath) {
         .join("\n"),
   );
 }
+
+/**
+ * Resolve a watchlist from rules.json.
+ *
+ * Supported shapes in rules.json:
+ *   1. New:    "watchlists": { "primary": [...], "crypto": [...] }
+ *      Optional: "default_watchlist": "primary"
+ *      If default_watchlist is omitted, the FIRST key is the default.
+ *   2. Legacy: "watchlist": [...]   (treated as the sole default list)
+ *
+ * @param {object} rules  Parsed rules.json
+ * @param {string} [name] Watchlist name. Omit for the default.
+ * @returns {{ name: string, symbols: string[], available: string[] }}
+ */
+export function getWatchlistSymbols(rules, name) {
+  // Legacy single-array support
+  if (Array.isArray(rules.watchlist)) {
+    const legacyName = "default";
+    if (name && name.toLowerCase() !== legacyName) {
+      throw new Error(
+        `Watchlist "${name}" not found. rules.json uses the legacy single "watchlist" array format — ` +
+          `migrate to the "watchlists" object to use multiple named watchlists.`,
+      );
+    }
+    return { name: legacyName, symbols: rules.watchlist, available: [legacyName] };
+  }
+
+  const watchlists = rules.watchlists;
+  if (!watchlists || typeof watchlists !== "object" || Array.isArray(watchlists)) {
+    throw new Error(
+      'rules.json must contain a "watchlists" object (e.g. { "primary": ["TVC:DXY", ...] }) ' +
+        'or a legacy "watchlist" array.',
+    );
+  }
+
+  const keys = Object.keys(watchlists);
+  if (!keys.length) {
+    throw new Error('rules.json "watchlists" is empty. Add at least one named watchlist.');
+  }
+
+  // Default resolution: explicit default_watchlist wins, else first key
+  if (!name) {
+    const explicit = rules.default_watchlist;
+    const defaultName =
+      explicit && Object.prototype.hasOwnProperty.call(watchlists, explicit)
+        ? explicit
+        : keys[0];
+    return {
+      name: defaultName,
+      symbols: Array.isArray(watchlists[defaultName]) ? watchlists[defaultName] : [],
+      available: keys,
+    };
+  }
+
+  // Named lookup — exact, then case-insensitive
+  if (Object.prototype.hasOwnProperty.call(watchlists, name)) {
+    return {
+      name,
+      symbols: Array.isArray(watchlists[name]) ? watchlists[name] : [],
+      available: keys,
+    };
+  }
+  const lowered = name.toLowerCase();
+  const match = keys.find((k) => k.toLowerCase() === lowered);
+  if (match) {
+    return {
+      name: match,
+      symbols: Array.isArray(watchlists[match]) ? watchlists[match] : [],
+      available: keys,
+    };
+  }
+
+  throw new Error(
+    `Watchlist "${name}" not found in rules.json. Available: ${keys.join(", ")}`,
+  );
+}

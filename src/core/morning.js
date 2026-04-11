@@ -6,13 +6,11 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
+import { loadRules, getWatchlistSymbols } from "./config.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, "../../");
 const SESSIONS_DIR = join(homedir(), ".tradingview-mcp", "sessions");
 
 const TF_SWITCH_DELAY = 1500;
@@ -154,43 +152,54 @@ async function scanTimeframe(config) {
   for (let i = 0; i < keys.length; i++) {
     out[keys[i]] = results[i];
   }
-  return out;
-}
 
-function loadRules(rulesPath) {
-  const candidates = [
-    rulesPath,
-    join(PROJECT_ROOT, "rules.json"),
-    join(homedir(), ".tradingview-mcp", "rules.json"),
-  ].filter(Boolean);
-
-  for (const p of candidates) {
-    if (existsSync(p)) {
+  // Mid-term timeframes (H4/H1) expect S&D zones. The indicator sometimes
+  // needs an extra beat after a TF switch to render its boxes/values — if
+  // the first read came back empty, stay on the chart 2s longer and retry.
+  if (config.sd && (!out.sd_zones || out.sd_zones.length === 0)) {
+    await delay(2000);
+    try {
+      const retry = await data.getPineBoxes({ study_filter: "supply" });
+      out.sd_zones = retry.studies?.[0]?.zones || out.sd_zones || [];
+    } catch (_) {}
+    if (config.study_values) {
       try {
-        return { rules: JSON.parse(readFileSync(p, "utf8")), path: p };
-      } catch (e) {
-        throw new Error(`Failed to parse rules.json at ${p}: ${e.message}`);
-      }
+        const r = await data.getStudyValues();
+        const parsed = out.study_values || {};
+        for (const study of r.studies || []) {
+          const nameLower = study.name.toLowerCase();
+          if (
+            nameLower.includes("supply") ||
+            nameLower.includes("demand") ||
+            nameLower.includes("s&d") ||
+            nameLower.includes("s/d")
+          ) {
+            parsed.sd = {};
+            for (const [k, v] of Object.entries(study.values)) {
+              const num = parseFloat(String(v).replace(/,/g, ""));
+              if (!isNaN(num)) parsed.sd[k] = num;
+            }
+          }
+        }
+        out.study_values = parsed;
+      } catch (_) {}
     }
   }
 
-  throw new Error(
-    "No rules.json found. Copy rules.example.json to rules.json and fill in your trading rules.\n" +
-      "Looked in:\n" +
-      candidates
-        .filter(Boolean)
-        .map((p) => `  - ${p}`)
-        .join("\n"),
-  );
+  return out;
 }
 
-export async function runBrief({ rules_path } = {}) {
+export async function runBrief({ rules_path, watchlist: watchlistName } = {}) {
   const { rules, path: loadedFrom } = loadRules(rules_path);
-  const { watchlist = [] } = rules;
+  const { name: resolvedName, symbols: watchlist, available } = getWatchlistSymbols(
+    rules,
+    watchlistName,
+  );
 
   if (!watchlist.length) {
     throw new Error(
-      "rules.json watchlist is empty. Add at least one symbol to your watchlist array.",
+      `rules.json watchlist "${resolvedName}" is empty. Add at least one symbol to it.` +
+        (available.length > 1 ? ` Available: ${available.join(", ")}` : ""),
     );
   }
 
@@ -242,6 +251,10 @@ export async function runBrief({ rules_path } = {}) {
     success: true,
     generated_at: new Date().toISOString(),
     rules_loaded_from: loadedFrom,
+    watchlist: {
+      name: resolvedName,
+      available,
+    },
     rules: {
       bias_model: rules.bias_model || null,
       risk_rules: rules.risk_rules || null,
