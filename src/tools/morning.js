@@ -5,7 +5,7 @@ import * as core from "../core/morning.js";
 export function registerMorningTools(server) {
   server.tool(
     "morning_brief",
-    "Scan your watchlist across multiple timeframes (W/D/4H/1H), collecting FVG zones, S&D zones, and OHLCV bars for 3-bar formation analysis. Returns structured multi-timeframe data for Claude to apply the BIAS methodology (FVG context + 3-bar candlestick patterns) and identify Points of Interest.",
+    "Scan a named watchlist from rules.json across multiple timeframes (W/D/4H/1H), collecting FVG zones, S&D zones, and OHLCV bars for 3-bar formation analysis. Returns structured multi-timeframe data for Claude to apply the BIAS methodology (FVG context + 3-bar candlestick patterns) and identify Points of Interest. rules.json can define multiple named watchlists under the \"watchlists\" key — pass the `watchlist` parameter to target one by name (e.g. \"crypto\", \"futures\"); omit it to use the default (first listed).",
     {
       rules_path: z
         .string()
@@ -13,10 +13,16 @@ export function registerMorningTools(server) {
         .describe(
           "Optional path to rules.json. Defaults to rules.json in the project root.",
         ),
+      watchlist: z
+        .string()
+        .optional()
+        .describe(
+          "Name of the watchlist in rules.json to scan (e.g. \"primary\", \"crypto\"). Omit for the default (first watchlist listed).",
+        ),
     },
-    async ({ rules_path } = {}) => {
+    async ({ rules_path, watchlist } = {}) => {
       try {
-        return jsonResult(await core.runBrief({ rules_path }));
+        return jsonResult(await core.runBrief({ rules_path, watchlist }));
       } catch (err) {
         return jsonResult({ success: false, error: err.message }, true);
       }

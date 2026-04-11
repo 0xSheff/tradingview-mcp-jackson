@@ -5,7 +5,7 @@
 import * as chart from './chart.js';
 import * as drawing from './drawing.js';
 import * as data from './data.js';
-import { loadRules } from './config.js';
+import { loadRules, getWatchlistSymbols } from './config.js';
 
 const BULL_STYLE = {
   backgroundColor: 'rgba(76, 175, 80, 0.25)',
@@ -201,12 +201,21 @@ async function drawFvgs(existing) {
 /**
  * Main entry point — draw FVGs and PW lines for all watchlist symbols.
  */
-export async function runDrawAll({ rules_path } = {}) {
+export async function runDrawAll({ rules_path, watchlist: watchlistName } = {}) {
   const { rules } = loadRules(rules_path);
-  const symbols = rules.watchlist ?? [];
+  let resolvedName, symbols, available;
+  try {
+    ({ name: resolvedName, symbols, available } = getWatchlistSymbols(rules, watchlistName));
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 
   if (!symbols.length) {
-    return { success: false, error: 'No symbols in rules.watchlist' };
+    return {
+      success: false,
+      error: `Watchlist "${resolvedName}" is empty.` +
+        (available.length > 1 ? ` Available: ${available.join(', ')}` : ''),
+    };
   }
 
   const report = [];
@@ -241,6 +250,7 @@ export async function runDrawAll({ rules_path } = {}) {
 
   return {
     success: true,
+    watchlist: { name: resolvedName, available },
     symbols_drawn: report.length,
     total_pw_lines: totalPw,
     total_fvg_zones: totalFvg,
