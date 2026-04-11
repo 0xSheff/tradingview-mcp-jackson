@@ -1,5 +1,8 @@
 {
-  "watchlist": ["BTCUSD", "ETHUSD", "SOLUSD"],
+  "watchlists": {
+    "primary": ["BTCUSD", "ETHUSD", "SOLUSD"],
+    "stocks": ["NASDAQ:AAPL", "NASDAQ:NVDA", "NASDAQ:MSFT"]
+  },
   "default_timeframe": "240",
 
   "bias_criteria": {

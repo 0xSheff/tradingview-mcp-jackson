@@ -9,6 +9,13 @@ register('draw-all', {
       short: 'r',
       description: 'Path to rules.json (default: ./rules.json)',
     },
+    watchlist: {
+      type: 'string',
+      short: 'w',
+      description:
+        'Name of the watchlist in rules.json to draw (default: first listed)',
+    },
   },
-  handler: async ({ rules }) => runDrawAll({ rules_path: rules }),
+  handler: async ({ rules, watchlist }) =>
+    runDrawAll({ rules_path: rules, watchlist }),
 });

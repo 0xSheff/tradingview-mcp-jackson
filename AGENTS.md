@@ -84,6 +84,26 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
+## Watchlists
+
+`rules.json` defines one or more named watchlists under the `watchlists` key:
+
+```json
+"watchlists": {
+  "primary": ["TVC:DXY", "CME:6E1!", "CME_MINI:MES1!", "COMEX_MINI:MGC1!"],
+  "crypto":  ["BINANCE:BTCUSDT", "BINANCE:ETHUSDT"]
+}
+```
+
+**The first watchlist is the default** — it's used by every command (`morning_brief`, `tv brief`, `tv draw-all`, etc.) when no watchlist is specified. An explicit `"default_watchlist": "primary"` field overrides the first-key rule.
+
+To target a non-default watchlist, pass its name:
+- Natural language: "give me a morning brief for the **crypto** watchlist" → call `morning_brief({ watchlist: "crypto" })`
+- CLI: `tv brief --watchlist crypto` (or `-w crypto`), `tv draw-all --watchlist crypto`
+- Name lookup is case-insensitive-tolerant.
+
+The legacy `"watchlist": [...]` single-array format is still accepted for backwards compatibility and behaves as the sole default list.
+
 ## Windows Environment Notes
 
 This project runs on Windows. The bash shell that AI agents use does **not** inherit the Windows system PATH, so common commands need full paths:
