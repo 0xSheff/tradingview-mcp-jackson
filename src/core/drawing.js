@@ -101,3 +101,39 @@ export async function clearAll() {
   await evaluate(`${apiPath}.removeAllShapes()`);
   return { success: true, action: 'all_shapes_removed' };
 }
+
+/**
+ * Restrict a drawing's visibility to a range of intraday timeframes.
+ * Writes into the shape's `intervalsVisibilities` property group.
+ * Only the keys you pass are modified — the rest keep TradingView defaults.
+ *
+ *   visibility = {
+ *     minutes: true, minutesFrom: 30, minutesTo: 59,
+ *     hours:   true, hoursFrom:   1,  hoursTo:   4,
+ *     days:    false, weeks: false, months: false,
+ *     ticks:   false, seconds: false, ranges: false,
+ *   }
+ */
+export async function setIntervalVisibility({ entity_id, visibility }) {
+  const apiPath = await getChartApi();
+  const vis = JSON.stringify(visibility || {});
+  const result = await evaluate(`
+    (function() {
+      var api = ${apiPath};
+      var s = api.getShapeById('${entity_id}');
+      if (!s) return { error: 'Shape not found: ${entity_id}' };
+      var p = s._source && s._source.properties && s._source.properties();
+      if (!p) return { error: 'No properties on shape' };
+      var iv = p.child && p.child('intervalsVisibilities');
+      if (!iv) return { error: 'No intervalsVisibilities group' };
+      var v = ${vis};
+      Object.keys(v).forEach(function(k) {
+        var c = iv.child(k);
+        if (c) c.setValue(v[k]);
+      });
+      return { ok: true, state: iv.state() };
+    })()
+  `);
+  if (result?.error) throw new Error(result.error);
+  return { success: true, entity_id, state: result.state };
+}

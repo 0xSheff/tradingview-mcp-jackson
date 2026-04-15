@@ -27,6 +27,7 @@ import "./commands/tab.js";
 import "./commands/stream.js";
 import "./commands/morning.js";
 import "./commands/draw-all.js";
+import "./commands/draw-ideas.js";
 
 // Run
 import { run } from "./router.js";
