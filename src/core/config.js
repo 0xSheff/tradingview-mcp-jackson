@@ -19,11 +19,14 @@ export function loadRules(rulesPath) {
 
   for (const p of candidates) {
     if (existsSync(p)) {
+      let rules;
       try {
-        return { rules: JSON.parse(readFileSync(p, "utf8")), path: p };
+        rules = JSON.parse(readFileSync(p, "utf8"));
       } catch (e) {
         throw new Error(`Failed to parse rules.json at ${p}: ${e.message}`);
       }
+      mergeWatchlistsFile(rules, dirname(p));
+      return { rules, path: p };
     }
   }
 
@@ -35,6 +38,33 @@ export function loadRules(rulesPath) {
         .map((p) => `  - ${p}`)
         .join("\n"),
   );
+}
+
+/**
+ * Merge watchlists.json (sibling of rules.json) into the rules object.
+ * Shapes accepted:
+ *   - { "primary": [...], "crypto": [...] }            (flat)
+ *   - { "watchlists": {...}, "default_watchlist": "x" } (wrapper)
+ * watchlists.json entries win over rules.watchlists on key collision.
+ */
+function mergeWatchlistsFile(rules, rulesDir) {
+  const p = join(rulesDir, "watchlists.json");
+  if (!existsSync(p)) return;
+  let wl;
+  try {
+    wl = JSON.parse(readFileSync(p, "utf8"));
+  } catch (e) {
+    throw new Error(`Failed to parse watchlists.json at ${p}: ${e.message}`);
+  }
+  if (!wl || typeof wl !== "object" || Array.isArray(wl)) return;
+  const fromFile =
+    wl.watchlists && typeof wl.watchlists === "object" && !Array.isArray(wl.watchlists)
+      ? wl.watchlists
+      : wl;
+  rules.watchlists = { ...(rules.watchlists || {}), ...fromFile };
+  if (wl.default_watchlist && !rules.default_watchlist) {
+    rules.default_watchlist = wl.default_watchlist;
+  }
 }
 
 /**
