@@ -1,0 +1,53 @@
+{
+  "bias_model": {
+    "description": "ICT-style BIAS: FVG context hierarchy (W→D→4H) + 3-bar candlestick formation on W and D, with naked-fractal liquidity levels from W/D and 3-type POI confluence on H4/H1.",
+    "weekly_bias": {
+      "timeframes": ["W", "D"],
+      "method": "Determine weekly candle direction using FVG context and 3-bar formation on Weekly chart. Confirm with Daily structure.",
+      "fvg_context": "Identify FVGs on Weekly. Analyze price's relationship to both bullish and bearish FVGs together — not in isolation. If price traveled from a bearish FVG down into a bullish FVG and only mitigated it with wicks (not body close inside), then failed to rally, the bullish FVG is weakened and bias is bearish. A properly mitigated FVG (body closes inside the zone) that holds = support/resistance confirmed. Price moves from liquidity to liquidity, rebalancing FVGs in between.",
+      "three_bar_formation": {
+        "reversal": "If candle 2 sweeps candle 1's high/low but does NOT close beyond that level → candle 3 likely reverses.",
+        "continuation": "If candle 2 sweeps candle 1's high/low AND closes beyond that level → candle 3 likely continues the trend."
+      }
+    },
+    "daily_bias": {
+      "timeframes": ["D", "240"],
+      "method": "Determine daily candle direction using FVG context and 3-bar formation on Daily chart. Must align with weekly bias. Never skip the daily bias analyze.",
+      "key_question": "Will the daily candle close higher or lower?"
+    },
+    "liquidity_levels": {
+      "description": "Key liquidity targets from Weekly and Daily timeframes. Source: '0x Fractals Advanced' indicator, which identifies pivot highs/lows (ta.pivothigh/ta.pivotlow) over a 50–100 bar lookback and flags those that have NOT yet been swept by subsequent price action — 'naked' fractals.",
+      "timeframes": ["W", "D"],
+      "lookback_bars": "50-100",
+      "method": "Stepping back from the current bar, find the CLOSEST naked fractal HIGH above current price (upper liquidity) and the CLOSEST naked fractal LOW below current price (lower liquidity) on each of W and D.",
+      "naked_definition": "A fractal is 'naked' if no later bar's high (for fractal highs) or low (for fractal lows) has touched or pierced its price level since the fractal was confirmed.",
+      "usage": "Naked fractals are draw-on-liquidity targets — price tends to reach for them before reversing. Weekly levels outrank daily when both exist on the same side."
+    },
+    "poi": {
+      "description": "Points of Interest on H4 and H1 — candidate entry zones in the direction of bias. Two POI types, all located as the closest level above AND the closest level below current price. Surfaced when asked for trading ideas after the morning brief is complete.",
+      "timeframes": ["60", "240"],
+      "types": [
+        {
+          "name": "fvg",
+          "source": "fvg_zones (pine boxes) and study_values.fvg (Bull/Bear FVG Top/Bot)",
+          "selection": "Closest FVG above price and closest FVG below price on each of 4H and 1H."
+        },
+        {
+          "name": "naked_fractal",
+          "source": "'0x Fractals Advanced' naked fractal lines/labels (NFH/NFL)",
+          "selection": "Closest naked fractal HIGH above price and closest naked fractal LOW below price on each of 4H and 1H."
+        }
+      ],
+      "confluence_rule": "If a naked fractal level falls INSIDE an FVG zone (fractal price between the zone's top and bottom), that POI is STRONGER — mark it as ★ STRONG and prefer it as an entry."
+    }
+  },
+
+  "risk_rules": [
+    "Only take trades where R:R is at least 1:2",
+    "No trading in the first 15 minutes of the NY session open",
+    "Maximum 2 open positions at once",
+    "If I have 2 losing trades in a row, stop for the day"
+  ],
+
+  "notes": "Add any other context you want Claude to factor in — e.g. macro events this week, key dates, anything that should affect your bias."
+}
