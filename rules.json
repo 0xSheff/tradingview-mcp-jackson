@@ -1,9 +1,14 @@
 {
   "bias_model": {
-    "description": "ICT-style BIAS: FVG context hierarchy (W→D→4H) + 3-bar candlestick formation on W and D, with naked-fractal liquidity levels from W/D and 3-type POI confluence on H4/H1.",
+    "description": "ICT-style BIAS: FVG context hierarchy (M→W→D→4H) + 3-bar candlestick formation on M, W and D, with naked-fractal liquidity levels from M/W/D and 3-type POI confluence on H4/H1.",
+    "monthly_bias": {
+      "timeframes": ["M"],
+      "method": "Determine the macro regime using FVG context and 3-bar formation on the Monthly chart. Monthly bias frames whether W/D moves are trend or retracement — it does not have to resolve into a trade on its own, but it filters everything below.",
+      "fvg_context": "Monthly FVGs are the largest structural zones. Read bull and bear FVGs together; note which sit above vs. below current price as the biggest draws."
+    },
     "weekly_bias": {
       "timeframes": ["W", "D"],
-      "method": "Determine weekly candle direction using FVG context and 3-bar formation on Weekly chart. Confirm with Daily structure.",
+      "method": "Determine weekly candle direction using FVG context and 3-bar formation on Weekly chart. Confirm with Daily structure. Must be read in the context of monthly bias — if weekly conflicts with monthly, treat the weekly move as counter-trend/retracement.",
       "fvg_context": "Identify FVGs on Weekly. Analyze price's relationship to both bullish and bearish FVGs together — not in isolation. If price traveled from a bearish FVG down into a bullish FVG and only mitigated it with wicks (not body close inside), then failed to rally, the bullish FVG is weakened and bias is bearish. A properly mitigated FVG (body closes inside the zone) that holds = support/resistance confirmed. Price moves from liquidity to liquidity, rebalancing FVGs in between.",
       "three_bar_formation": {
         "reversal": "If candle 2 sweeps candle 1's high/low but does NOT close beyond that level → candle 3 likely reverses.",
@@ -12,16 +17,16 @@
     },
     "daily_bias": {
       "timeframes": ["D", "240"],
-      "method": "Determine daily candle direction using FVG context and 3-bar formation on Daily chart. Must align with weekly bias. Never skip the daily bias analyze.",
+      "method": "Determine daily candle direction using FVG context and 3-bar formation on Daily chart. Must align with weekly bias (which itself is framed by monthly). Never skip the daily bias analyze.",
       "key_question": "Will the daily candle close higher or lower?"
     },
     "liquidity_levels": {
-      "description": "Key liquidity targets from Weekly and Daily timeframes. Source: '0x Fractals Advanced' indicator, which identifies pivot highs/lows (ta.pivothigh/ta.pivotlow) over a 50–100 bar lookback and flags those that have NOT yet been swept by subsequent price action — 'naked' fractals.",
-      "timeframes": ["W", "D"],
+      "description": "Key liquidity targets from Monthly, Weekly, and Daily timeframes. Source: '0x Fractals Advanced' indicator, which identifies pivot highs/lows (ta.pivothigh/ta.pivotlow) over a 50–100 bar lookback and flags those that have NOT yet been swept by subsequent price action — 'naked' fractals.",
+      "timeframes": ["M", "W", "D"],
       "lookback_bars": "50-100",
-      "method": "Stepping back from the current bar, find the CLOSEST naked fractal HIGH above current price (upper liquidity) and the CLOSEST naked fractal LOW below current price (lower liquidity) on each of W and D.",
+      "method": "Stepping back from the current bar, find the CLOSEST naked fractal HIGH above current price (upper liquidity) and the CLOSEST naked fractal LOW below current price (lower liquidity) on each of M, W and D.",
       "naked_definition": "A fractal is 'naked' if no later bar's high (for fractal highs) or low (for fractal lows) has touched or pierced its price level since the fractal was confirmed.",
-      "usage": "Naked fractals are draw-on-liquidity targets — price tends to reach for them before reversing. Weekly levels outrank daily when both exist on the same side."
+      "usage": "Naked fractals are draw-on-liquidity targets — price tends to reach for them before reversing. Monthly levels outrank weekly, which outrank daily, when multiple exist on the same side."
     },
     "poi": {
       "description": "Points of Interest on H4 and H1 — candidate entry zones in the direction of bias. Two POI types, all located as the closest level above AND the closest level below current price. Surfaced when asked for trading ideas after the morning brief is complete.",
