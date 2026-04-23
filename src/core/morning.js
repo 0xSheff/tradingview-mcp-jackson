@@ -1,8 +1,9 @@
 /**
  * Morning brief core logic.
- * Reads rules.json, scans watchlist symbols across multiple timeframes,
- * collects FVG zones, OHLCV bars for 3-bar formation, and naked fractal
- * levels, then returns structured data for Claude to apply the BIAS methodology.
+ * Reads rules.json, scans watchlist symbols across multiple timeframes
+ * (M/W/D/H4/H1), collects FVG zones, OHLCV bars for 3-bar formation on
+ * M/W/D, and naked fractal levels, then returns structured data for Claude
+ * to apply the BIAS methodology.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -25,10 +26,11 @@ const TF_SWITCH_DELAY = 1500;
  *                (W/D → liquidity levels; H4/H1 → POI)
  */
 const SCAN_TIMEFRAMES = [
-  { key: "weekly", tf: "W",   bars: 3, fvg: true, labels: true, study_values: true, fractals: true },
-  { key: "daily",  tf: "D",   bars: 3, fvg: true, labels: true, study_values: true, fractals: true },
-  { key: "h4",     tf: "240", bars: 0, fvg: true, labels: true, study_values: true, fractals: true },
-  { key: "h1",     tf: "60",  bars: 0, fvg: true, labels: true, study_values: true, fractals: true },
+  { key: "monthly", tf: "M",   bars: 3, fvg: true, labels: true, study_values: true, fractals: true },
+  { key: "weekly",  tf: "W",   bars: 3, fvg: true, labels: true, study_values: true, fractals: true },
+  { key: "daily",   tf: "D",   bars: 3, fvg: true, labels: true, study_values: true, fractals: true },
+  { key: "h4",      tf: "240", bars: 0, fvg: true, labels: true, study_values: true, fractals: true },
+  { key: "h1",      tf: "60",  bars: 0, fvg: true, labels: true, study_values: true, fractals: true },
 ];
 
 function delay(ms) {
@@ -247,7 +249,23 @@ function buildInstruction() {
   return [
     "BIAS METHODOLOGY — Apply this analysis for each symbol:\n",
 
-    "STEP 1 — WEEKLY BIAS (FVG Context + 3-Bar Formation):",
+    "STEP 1 — MONTHLY BIAS (FVG Context + 3-Bar Formation):",
+    "A) FVG Context: Use monthly.study_values.fvg_bull and monthly.study_values.fvg_bear.",
+    "   Each array holds up to 3 unmitigated zones ordered most-recent first: [{top, bot, formed}, …].",
+    "   Supplement with monthly.fvg_zones (boxes) for any additional context.",
+    "   - Monthly FVGs are the most structural — they define the multi-month regime and frame all lower-TF moves.",
+    "   - Read bull and bear FVGs together. Note which sit above vs. below current price — these are the largest-scale draws.",
+    "   - Check monthly.labels for any macro BSL/SSL sweeps.",
+    "B) 3-Bar Formation: Analyze monthly.bars (last 3 monthly candles, ordered oldest→newest as bar1, bar2, bar3-current):",
+    "   - REVERSAL: bar2 swept bar1's high (bar2.high > bar1.high) but closed below it (bar2.close < bar1.high) → bearish reversal expected for bar3.",
+    "   - REVERSAL: bar2 swept bar1's low (bar2.low < bar1.low) but closed above it (bar2.close > bar1.low) → bullish reversal expected for bar3.",
+    "   - CONTINUATION: bar2 swept bar1's high AND closed above it → bullish continuation for bar3.",
+    "   - CONTINUATION: bar2 swept bar1's low AND closed below it → bearish continuation for bar3.",
+    "   - No sweep of bar1's high or low → no clear formation, skip.",
+    "C) Combine FVG context + 3-bar formation → Monthly Bias: BULLISH / BEARISH / NEUTRAL.",
+    "   Monthly bias is the TOP-OF-STACK context — it does not have to resolve into a trade by itself, but it filters everything below.\n",
+
+    "STEP 2 — WEEKLY BIAS (FVG Context + 3-Bar Formation):",
     "A) FVG Context: Use weekly.study_values.fvg_bull and weekly.study_values.fvg_bear.",
     "   Each array holds up to 3 unmitigated zones ordered most-recent first: [{top, bot, formed}, …].",
     "   'formed' is the date (YYYY-MM-DD) when the FVG was created — use it to judge recency.",
@@ -266,14 +284,15 @@ function buildInstruction() {
     "   - CONTINUATION: If bar2 swept bar1's high AND closed above it (bar2.close > bar1.high) → bullish continuation for bar3.",
     "   - CONTINUATION: If bar2 swept bar1's low AND closed below it (bar2.close < bar1.low) → bearish continuation for bar3.",
     "   - If bar2 did not sweep bar1's high or low → no clear formation, skip this signal.",
-    "C) Combine FVG context + 3-bar formation → Weekly Bias: BULLISH / BEARISH / NEUTRAL.\n",
+    "C) Combine FVG context + 3-bar formation → Weekly Bias: BULLISH / BEARISH / NEUTRAL.",
+    "   Weekly bias must be read IN THE CONTEXT of monthly bias — if weekly conflicts with monthly, the weekly move is likely counter-trend/retracement; note it.\n",
 
-    "STEP 2 — DAILY BIAS (FVG Context + 3-Bar Formation):",
+    "STEP 3 — DAILY BIAS (FVG Context + 3-Bar Formation):",
     "Apply the same FVG context + 3-bar logic to daily.study_values.fvg_bull, daily.study_values.fvg_bear, daily.fvg_zones, and daily.bars.",
-    "Daily bias must be subordinate to weekly bias. If daily conflicts with weekly, mark as NEUTRAL or note the conflict.",
+    "Daily bias must be subordinate to weekly bias (which itself is subordinate to monthly). If daily conflicts with weekly, mark as NEUTRAL or note the conflict.",
     "Key question: Will today's daily candle close higher or lower?\n",
 
-    "STEP 3 — ATR (Average True Range):",
+    "STEP 4 — ATR (Average True Range):",
     "Read the ATR value from each timeframe's study_values.atr (from the ATR indicator on the chart).",
     "Available as: daily.study_values.atr, h4.study_values.atr, h1.study_values.atr.",
     "Usage:",
@@ -281,13 +300,14 @@ function buildInstruction() {
     "  - H4 ATR: expected move per 4-hour block. Use for stop sizing (stop = 1–1.5× H4 ATR from entry).",
     "  - H1 ATR: use for entry precision — if price is more than 1× H1 ATR away from a POI, wait for it to come to the zone rather than chasing.\n",
 
-    "STEP 4 — MULTI-TIMEFRAME FVG CONFLUENCE:",
-    "Cross-reference the last 3 bull and 3 bear FVGs from each timeframe (W, D, H4, H1) to find overlapping zones.",
+    "STEP 5 — MULTI-TIMEFRAME FVG CONFLUENCE:",
+    "Cross-reference the last 3 bull and 3 bear FVGs from each timeframe (M, W, D, H4, H1) to find overlapping zones.",
     "Overlap definition: two FVG zones overlap if one zone's top > the other zone's bottom AND vice versa (ranges intersect).",
-    "Check all pairwise combinations: W vs D, W vs H4, W vs H1, D vs H4, D vs H1, H4 vs H1.",
+    "Check all pairwise combinations across M/W/D/H4/H1.",
     "When 2+ timeframes share overlapping FVGs on the same side:",
     "  - The overlapping sub-range (the intersection) is a CONFLUENCE ZONE — stronger support/resistance than any single TF.",
     "  - 3+ timeframes overlapping = HIGH CONFLUENCE — treat as a major structural level.",
+    "  - Any confluence that INCLUDES the monthly zone is the strongest possible — mark it explicitly.",
     "  - Note the exact overlap range (intersection of the zones), not the full zones.",
     "Use confluence zones to:",
     "  (a) REFINE ENTRIES: prefer entering at a confluence zone over a single-TF FVG.",
@@ -295,15 +315,15 @@ function buildInstruction() {
     "  (c) ADJUST STOPS: place stops beyond the confluence zone, not just beyond a single-TF FVG.",
     "Only report confluence zones that are RELEVANT to the current price and bias — within roughly 2× D ATR of current price.\n",
 
-    "STEP 5 — KEY LIQUIDITY LEVELS (Naked Fractals on W & D):",
-    "Read weekly.naked_fractals and daily.naked_fractals — these come from the '0x Fractals Advanced' indicator, which tracks pivot highs/lows over the last 50–100 bars and flags those not yet swept by subsequent price action.",
+    "STEP 6 — KEY LIQUIDITY LEVELS (Naked Fractals on M, W & D):",
+    "Read monthly.naked_fractals, weekly.naked_fractals, and daily.naked_fractals — these come from the '0x Fractals Advanced' indicator, which tracks pivot highs/lows over the last 50–100 bars and flags those not yet swept by subsequent price action.",
     "Each bucket contains { highs: [prices], lows: [prices] } sorted ascending.",
-    "- UPPER liquidity (key level above price): closest naked fractal HIGH that is > current price. Search weekly first, then daily.",
-    "- LOWER liquidity (key level below price): closest naked fractal LOW that is < current price. Search weekly first, then daily.",
+    "- UPPER liquidity (key level above price): closest naked fractal HIGH that is > current price. Search monthly first, then weekly, then daily.",
+    "- LOWER liquidity (key level below price): closest naked fractal LOW that is < current price. Search monthly first, then weekly, then daily.",
     "- These are the draw-on-liquidity targets — price tends to reach for naked highs/lows before reversing.",
-    "- Report W and D levels separately; weekly levels outrank daily when both exist on the same side.\n",
+    "- Report M, W and D levels separately; monthly outranks weekly, which outranks daily, when multiple exist on the same side.\n",
 
-    "STEP 6 — POINTS OF INTEREST (POI) on H4 and H1:",
+    "STEP 7 — POINTS OF INTEREST (POI) on H4 and H1:",
     "POIs are where you look to ENTER trades in the direction of bias. Two POI types, all relative to current price:",
     "  (1) FVG zones — from h4/h1 study_values.fvg_bull and study_values.fvg_bear (last 3 bull/bear each, [{top,bot}…]),",
     "      supplemented by h4/h1 fvg_zones (boxes) for additional context.",
@@ -313,28 +333,33 @@ function buildInstruction() {
     "  - closest FVG, closest naked fractal level.",
     "",
     "CONFLUENCE STRENGTHENING: If a naked fractal level falls INSIDE (or within a tight tolerance of) an FVG zone, that POI is STRONGER — mark it as ★ STRONG. Treat 'inside' as: fractal price between the zone's top and bottom.",
-    "Additionally, if a POI falls inside or near a multi-TF FVG confluence zone (from Step 4), upgrade that POI's rating.\n",
+    "Additionally, if a POI falls inside or near a multi-TF FVG confluence zone (from Step 5), upgrade that POI's rating.\n",
 
-    "STEP 7 — SYNTHESIS:",
-    "Weekly bias (FVG + 3-bar) is the primary direction.",
-    "Daily bias must align — if it conflicts, note it and lower confidence.",
+    "STEP 8 — SYNTHESIS:",
+    "Monthly bias is the macro regime — it frames whether weekly/daily moves are trend or retracement.",
+    "Weekly bias is the primary trading direction, read in the context of monthly.",
+    "Daily bias must align with weekly — if it conflicts, note it and lower confidence.",
+    "When all three (M/W/D) align → highest-confidence setup. When M and W disagree → expect choppy/counter-trend behavior, trade smaller or stand aside.",
     "Use ATR to validate that entries are realistic (price not already over-extended) and to size stops.",
-    "Use W/D naked fractals as the DRAW-ON-LIQUIDITY targets (where price is likely headed).",
+    "Use M/W/D naked fractals as the DRAW-ON-LIQUIDITY targets (where price is likely headed); monthly levels are the biggest magnets.",
     "Use H4/H1 POIs as ENTRY zones in the direction of bias, preferring STRONG (confluence) POIs.",
     "Use multi-TF FVG confluence zones to sharpen both entries and stop placement.\n",
 
     "OUTPUT FORMAT:",
     "For each symbol output:",
-    "SYMBOL | WEEKLY BIAS: [bullish/bearish/neutral] (reason) | DAILY BIAS: [bullish/bearish/neutral] (reason) | OVERALL: [bullish/bearish/neutral]",
+    "SYMBOL | MONTHLY BIAS: [bullish/bearish/neutral] (reason) | WEEKLY BIAS: [bullish/bearish/neutral] (reason) | DAILY BIAS: [bullish/bearish/neutral] (reason) | OVERALL: [bullish/bearish/neutral]",
+    "3-BAR M: [reversal/continuation/none] — describe the formation",
     "3-BAR W: [reversal/continuation/none] — describe the formation",
     "3-BAR D: [reversal/continuation/none] — describe the formation",
+    "M FVGs BULL: [#1 top–bot | #2 top–bot | #3 top–bot]  (above/below price, most recent first)",
+    "M FVGs BEAR: [#1 top–bot | #2 top–bot | #3 top–bot]  (above/below price, most recent first)",
     "W FVGs BULL: [#1 top–bot | #2 top–bot | #3 top–bot]  (above/below price, most recent first)",
     "W FVGs BEAR: [#1 top–bot | #2 top–bot | #3 top–bot]  (above/below price, most recent first)",
     "D FVGs BULL: [#1 top–bot | #2 top–bot | #3 top–bot]",
     "D FVGs BEAR: [#1 top–bot | #2 top–bot | #3 top–bot]",
     "ATR: D [value] | H4 [value] | H1 [value]",
-    "FVG CONFLUENCE: [list confluence zones within ~2× D ATR of price, with timeframes and overlap range, or 'none near price']",
-    "KEY LIQUIDITY: [W upper: price | W lower: price | D upper: price | D lower: price]  (omit any side with no naked fractal)",
+    "FVG CONFLUENCE: [list confluence zones within ~2× D ATR of price, with timeframes and overlap range, or 'none near price'; flag any overlap that includes M]",
+    "KEY LIQUIDITY: [M upper: price | M lower: price | W upper: price | W lower: price | D upper: price | D lower: price]  (omit any side with no naked fractal)",
     "POI 4H ABOVE: [FVG: range | Fractal: price]  (mark ★ if confluence)",
     "POI 4H BELOW: [FVG: range | Fractal: price]  (mark ★ if confluence)",
     "POI 1H ABOVE: [FVG: range | Fractal: price]  (mark ★ if confluence)",
