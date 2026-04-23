@@ -5,7 +5,7 @@ import * as core from "../core/morning.js";
 export function registerMorningTools(server) {
   server.tool(
     "morning_brief",
-    "Scan a named watchlist from rules.json across multiple timeframes (W/D/4H/1H), collecting FVG zones, S&D zones, and OHLCV bars for 3-bar formation analysis. Returns structured multi-timeframe data for Claude to apply the BIAS methodology (FVG context + 3-bar candlestick patterns) and identify Points of Interest. rules.json can define multiple named watchlists under the \"watchlists\" key — pass the `watchlist` parameter to target one by name (e.g. \"crypto\", \"futures\"); omit it to use the default (first listed).",
+    "Scan a named watchlist from rules.json across multiple timeframes (M/W/D/4H/1H), collecting FVG zones, S&D zones, and OHLCV bars for 3-bar formation analysis on M/W/D. Returns structured multi-timeframe data for Claude to apply the BIAS methodology (FVG context + 3-bar candlestick patterns across monthly/weekly/daily) and identify Points of Interest. rules.json can define multiple named watchlists under the \"watchlists\" key — pass the `watchlist` parameter to target one by name (e.g. \"crypto\", \"futures\"); omit it to use the default (first listed).",
     {
       rules_path: z
         .string()
