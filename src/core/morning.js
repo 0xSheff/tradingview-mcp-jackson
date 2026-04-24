@@ -11,6 +11,7 @@ import { join } from "node:path";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
 import { loadRules, getWatchlistSymbols } from "./config.js";
+import { fetchTodayHighImpact } from "./calendar.js";
 
 const SESSIONS_DIR = join(homedir(), ".tradingview-mcp", "sessions");
 
@@ -183,6 +184,13 @@ export async function runBrief({ rules_path, watchlist: watchlistName } = {}) {
     );
   }
 
+  // Kick off calendar fetch in parallel with the chart scan.
+  const calendarCfg = rules.calendar || {};
+  const calendarPromise = fetchTodayHighImpact({
+    currencies: calendarCfg.currencies || ["USD", "EUR"],
+    timezone: calendarCfg.timezone || "Europe/Athens",
+  });
+
   // Save current chart state so we can restore after scanning
   let originalSymbol, originalTimeframe;
   try {
@@ -227,6 +235,8 @@ export async function runBrief({ rules_path, watchlist: watchlistName } = {}) {
     } catch (_) {}
   }
 
+  const calendar = await calendarPromise;
+
   return {
     success: true,
     generated_at: new Date().toISOString(),
@@ -240,6 +250,7 @@ export async function runBrief({ rules_path, watchlist: watchlistName } = {}) {
       risk_rules: rules.risk_rules || null,
       notes: rules.notes || null,
     },
+    calendar,
     symbols_scanned: results,
     instruction: buildInstruction(),
   };
@@ -344,6 +355,15 @@ function buildInstruction() {
     "Use M/W/D naked fractals as the DRAW-ON-LIQUIDITY targets (where price is likely headed); monthly levels are the biggest magnets.",
     "Use H4/H1 POIs as ENTRY zones in the direction of bias, preferring STRONG (confluence) POIs.",
     "Use multi-TF FVG confluence zones to sharpen both entries and stop placement.\n",
+
+    "STEP 0 — ECONOMIC CALENDAR (render FIRST, before any symbol blocks):",
+    "Use `calendar.events` — today's high-impact (red-folder) releases for USD / EUR.",
+    "If `calendar.success` is false OR `calendar.events` is empty, print: `CALENDAR: none / unavailable` and move on.",
+    "Otherwise render one line per event in local time:",
+    "  CALENDAR ({calendar.date}, {calendar.timezone}):",
+    "    HH:MM  CCY  Title  (f: forecast / p: previous)",
+    "Flag any event whose time_local is within the next 2 hours of generated_at with a ⚠ prefix so the reader sees immediate risk windows.",
+    "Keep it tight — one line per event, no commentary.\n",
 
     "OUTPUT FORMAT:",
     "For each symbol output:",
