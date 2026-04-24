@@ -12,6 +12,7 @@ import * as chart from "./chart.js";
 import * as data from "./data.js";
 import { loadRules, getWatchlistSymbols } from "./config.js";
 import { fetchTodayHighImpact } from "./calendar.js";
+import { runPreflight, buildPreflightInstruction } from "./preflight.js";
 
 const SESSIONS_DIR = join(homedir(), ".tradingview-mcp", "sessions");
 
@@ -170,7 +171,11 @@ async function scanTimeframe(config) {
   return out;
 }
 
-export async function runBrief({ rules_path, watchlist: watchlistName } = {}) {
+export async function runBrief({
+  rules_path,
+  watchlist: watchlistName,
+  skip_preflight = false,
+} = {}) {
   const { rules, path: loadedFrom } = loadRules(rules_path);
   const { name: resolvedName, symbols: watchlist, available } = getWatchlistSymbols(
     rules,
@@ -184,12 +189,52 @@ export async function runBrief({ rules_path, watchlist: watchlistName } = {}) {
     );
   }
 
-  // Kick off calendar fetch in parallel with the chart scan.
+  // Preflight: verify required indicators + calendar access before the scan.
+  // Also reuses the calendar result so we don't refetch on success.
+  let preflight = null;
+  let calendarResult = null;
+  if (!skip_preflight) {
+    preflight = await runPreflight({ rules });
+    calendarResult = preflight.calendar._success
+      ? { success: true, events: preflight.calendar._events, date: preflight.calendar.date, timezone: preflight.calendar.timezone }
+      : { success: false, events: [], date: preflight.calendar.date, timezone: preflight.calendar.timezone, error: preflight.calendar.error };
+
+    if (!preflight.ok) {
+      return {
+        success: false,
+        preflight_failed: true,
+        generated_at: new Date().toISOString(),
+        rules_loaded_from: loadedFrom,
+        watchlist: { name: resolvedName, available },
+        preflight: {
+          ok: preflight.ok,
+          indicators: preflight.indicators,
+          calendar: {
+            ok: preflight.calendar.ok,
+            currencies: preflight.calendar.currencies,
+            timezone: preflight.calendar.timezone,
+            date: preflight.calendar.date,
+            event_count: preflight.calendar.event_count,
+            error: preflight.calendar.error,
+          },
+          issues: preflight.issues,
+          blocker_count: preflight.blocker_count,
+          warning_count: preflight.warning_count,
+        },
+        instruction: buildPreflightInstruction(preflight),
+      };
+    }
+  }
+
+  // Calendar fetch: if preflight ran and succeeded, reuse its result.
+  // Otherwise (skip_preflight) fire a fresh fetch in parallel with the scan.
   const calendarCfg = rules.calendar || {};
-  const calendarPromise = fetchTodayHighImpact({
-    currencies: calendarCfg.currencies || ["USD", "EUR"],
-    timezone: calendarCfg.timezone || "Europe/Athens",
-  });
+  const calendarPromise = calendarResult
+    ? Promise.resolve(calendarResult)
+    : fetchTodayHighImpact({
+        currencies: calendarCfg.currencies || ["USD", "EUR"],
+        timezone: calendarCfg.timezone || "Europe/Athens",
+      });
 
   // Save current chart state so we can restore after scanning
   let originalSymbol, originalTimeframe;
