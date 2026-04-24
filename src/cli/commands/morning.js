@@ -16,9 +16,19 @@ register("brief", {
       description:
         "Name of the watchlist in rules.json to scan (default: first listed)",
     },
+    "skip-preflight": {
+      type: "boolean",
+      short: "s",
+      description:
+        "Skip preflight checks (required indicators + calendar access)",
+    },
   },
-  handler: async ({ rules, watchlist }) =>
-    core.runBrief({ rules_path: rules, watchlist }),
+  handler: async ({ rules, watchlist, "skip-preflight": skipPreflight }) =>
+    core.runBrief({
+      rules_path: rules,
+      watchlist,
+      skip_preflight: !!skipPreflight,
+    }),
 });
 
 register("session", {
