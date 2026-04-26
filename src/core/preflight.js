@@ -7,7 +7,7 @@
  */
 import * as chart from "./chart.js";
 import * as data from "./data.js";
-import { fetchTodayHighImpact } from "./calendar.js";
+import { fetchTodayHighImpact, fetchWeekHighImpact } from "./calendar.js";
 
 /**
  * Required indicators for the brief, with substring matchers for name
@@ -100,12 +100,28 @@ async function checkIndicators() {
   return { ok: checks.every((c) => c.status === "ok"), checks };
 }
 
-async function checkCalendar(calendarCfg) {
+async function checkCalendar(calendarCfg, mode = "today") {
   const currencies = calendarCfg.currencies || ["USD", "EUR"];
   const timezone = calendarCfg.timezone || "Europe/Athens";
+  if (mode === "week") {
+    const result = await fetchWeekHighImpact({ currencies, timezone });
+    return {
+      ok: result.success,
+      mode: "week",
+      currencies,
+      timezone,
+      week_start: result.week_start,
+      event_count: result.events.length,
+      error: result.error || null,
+      _events: result.events,
+      _by_day: result.by_day,
+      _success: result.success,
+    };
+  }
   const result = await fetchTodayHighImpact({ currencies, timezone });
   return {
     ok: result.success,
+    mode: "today",
     currencies,
     timezone,
     date: result.date,
@@ -121,12 +137,12 @@ async function checkCalendar(calendarCfg) {
  * Run all preflight checks. Returns aggregated result plus a human-readable
  * issues list the model can surface to the user.
  */
-export async function runPreflight({ rules } = {}) {
+export async function runPreflight({ rules, calendarMode = "today" } = {}) {
   const calendarCfg = (rules && rules.calendar) || {};
 
   const [indicators, calendar] = await Promise.all([
     checkIndicators(),
-    checkCalendar(calendarCfg),
+    checkCalendar(calendarCfg, calendarMode),
   ]);
 
   const issues = [];
@@ -189,18 +205,18 @@ export async function runPreflight({ rules } = {}) {
  * Instruction block rendered when preflight fails. The model must surface
  * this to the user and await their decision before any scan runs.
  */
-export function buildPreflightInstruction(preflight) {
+export function buildPreflightInstruction(preflight, briefName = "morning_brief") {
   const lines = [
     "PREFLIGHT FAILED — do NOT proceed with the watchlist scan.",
     "",
     "Report the issues below to the user exactly, then ASK what they want to do.",
     "",
     "Acceptable replies and required next actions:",
-    '  - "fixed" / "retry" / "go" → call morning_brief again (preflight will re-run).',
-    '  - "continue" / "skip" / "proceed anyway" → call morning_brief again with skip_preflight: true.',
+    `  - "fixed" / "retry" / "go" → call ${briefName} again (preflight will re-run).`,
+    `  - "continue" / "skip" / "proceed anyway" → call ${briefName} again with skip_preflight: true.`,
     '  - "abort" / "cancel" → stop; do nothing else.',
     "",
-    "Do NOT call morning_brief again until the user has explicitly chosen one of these options.",
+    `Do NOT call ${briefName} again until the user has explicitly chosen one of these options.`,
     "",
     "Issues:",
   ];

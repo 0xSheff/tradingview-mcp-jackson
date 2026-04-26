@@ -1,6 +1,6 @@
 # TradingView MCP — Claude Instructions
 
-68 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+71 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
 
 ## Decision Tree — Which Tool When
 
@@ -32,6 +32,21 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 5. `data_get_pine_tables` → session stats, analytics tables
 6. `data_get_ohlcv` with `summary: true` → price action summary
 7. `capture_screenshot` → visual confirmation
+
+### "Plan the upcoming week" (weekend planning brief)
+Run on the weekend to lay out the structural picture for the next trading week — separate from `morning_brief` (execution-tuned). Scans M/W/D/4H only (no H1) and produces:
+1. Per-symbol M/W/D bias (FVG context + 3-bar formation)
+2. Multi-TF FVG confluence + M/W/D naked-fractal liquidity
+3. 4H structure note framing where intra-week setups will likely form (no triggers)
+4. **Probable week range** — primary ceiling/floor with bounce-vs-break call, plus secondary level if break-likely
+5. Bull / bear scenarios with explicit invalidation prices
+6. Mon–Fri high-impact (red-folder) economic calendar grouped by day
+
+Tools: `weekly_brief` → analyze → `weekly_session_save`. Retrieve with `weekly_session_get`. Sessions key by Monday of the planned week.
+
+CLI: `tv weekly`, `tv weekly-session get|save --week-start YYYY-MM-DD`.
+
+THESIS + LEVELS + SCENARIOS only — no entries, no triggers, no ATR-based stops. Execution decisions belong to the morning brief.
 
 ### "Change the chart"
 - `chart_set_symbol` → switch ticker (e.g., "AAPL", "ES1!", "NYMEX:CL1!")

@@ -1,0 +1,206 @@
+//@version=6
+indicator("0x Fractals Advanced", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// -----------------------------------------------------------------------------
+// Inputs
+// -----------------------------------------------------------------------------
+left_bars      = input.int(2,   "Left Bars",   minval = 1)
+right_bars     = input.int(2,   "Right Bars",  minval = 1)
+lookback       = input.int(100, "Lookback Bars", minval = 10, maxval = 500,
+     tooltip = "How many bars back to track fractals")
+
+show_naked     = input.bool(true, "Show Naked Fractals (live liquidity)",    group = "Levels")
+show_swept     = input.bool(true, "Show Swept Fractals (dead, faded triangle)", group = "Levels")
+show_sweepers  = input.bool(true, "Show Sweeper Fractals (stop candidates)", group = "Levels")
+extend_right   = input.int(5, "Extend Naked Rays Right (bars)", minval = 0, maxval = 50, group = "Levels")
+sweeper_tail   = input.int(5, "Sweeper Marker Length (bars)",   minval = 1, maxval = 50, group = "Levels")
+
+naked_high_col = input.color(color.new(#ef5350, 0),  "Naked High Color",  group = "Colors")
+naked_low_col  = input.color(color.new(#26a69a, 0),  "Naked Low Color",   group = "Colors")
+sweeper_col    = input.color(color.new(#C77700, 0),  "Sweeper Color",     group = "Colors",
+     tooltip = "Sweeper = pivot that took out prior naked liquidity. No resting liquidity on it, so it's a stop candidate, not an entry target.")
+swept_transp   = input.int(80, "Swept Triangle Transparency (0-100)", minval = 0, maxval = 100, group = "Colors",
+     tooltip = "Higher = more faded. Swept fractals are dead liquidity; they show only as a faint triangle.")
+
+line_width_in  = input.int(1, "Line Width", minval = 1, maxval = 4)
+line_style_in  = input.string("dashed", "Naked Line Style", options = ["solid", "dashed", "dotted"])
+
+// -----------------------------------------------------------------------------
+// Fractal tracker
+// -----------------------------------------------------------------------------
+type Fractal
+    int   bar
+    float price
+    bool  isHigh
+    bool  swept
+    int   sweptBar
+    bool  isSweeper
+
+var array<Fractal> fractals = array.new<Fractal>()
+
+ph = ta.pivothigh(left_bars, right_bars)
+pl = ta.pivotlow(left_bars, right_bars)
+
+// -----------------------------------------------------------------------------
+// Sweep / sweeper detection
+// -----------------------------------------------------------------------------
+bool  newSweepThisBar = false
+float newSweepLevel   = na
+bool  newSweepIsHigh  = false
+
+// On new confirmed pivot: if it took out any same-direction naked fractal during
+// its formation, mark those fractals swept (if not already) and tag the new
+// pivot as a sweeper. A sweeper has no resting liquidity on it.
+if not na(ph)
+    int ph_pivot_bar = bar_index - right_bars
+    bool ph_is_sweeper = false
+    if array.size(fractals) > 0
+        for i = 0 to array.size(fractals) - 1
+            f = array.get(fractals, i)
+            if f.isHigh and f.bar < ph_pivot_bar and ph >= f.price
+                if not f.swept
+                    f.swept         := true
+                    f.sweptBar      := ph_pivot_bar
+                    ph_is_sweeper   := true
+                    newSweepThisBar := true
+                    newSweepLevel   := f.price
+                    newSweepIsHigh  := true
+                else if f.sweptBar >= ph_pivot_bar
+                    ph_is_sweeper := true
+    array.push(fractals, Fractal.new(ph_pivot_bar, ph, true, false, 0, ph_is_sweeper))
+
+if not na(pl)
+    int pl_pivot_bar = bar_index - right_bars
+    bool pl_is_sweeper = false
+    if array.size(fractals) > 0
+        for i = 0 to array.size(fractals) - 1
+            f = array.get(fractals, i)
+            if (not f.isHigh) and f.bar < pl_pivot_bar and pl <= f.price
+                if not f.swept
+                    f.swept         := true
+                    f.sweptBar      := pl_pivot_bar
+                    pl_is_sweeper   := true
+                    newSweepThisBar := true
+                    newSweepLevel   := f.price
+                    newSweepIsHigh  := false
+                else if f.sweptBar >= pl_pivot_bar
+                    pl_is_sweeper := true
+    array.push(fractals, Fractal.new(pl_pivot_bar, pl, false, false, 0, pl_is_sweeper))
+
+// Per-bar sweep detection: catches sweeps by bars whose pivot role is not (yet)
+// confirmed. Keeps the `swept` state live for real-time reading.
+if array.size(fractals) > 0
+    for i = 0 to array.size(fractals) - 1
+        f = array.get(fractals, i)
+        if not f.swept and bar_index > f.bar
+            if f.isHigh and high >= f.price
+                f.swept         := true
+                f.sweptBar      := bar_index
+                newSweepThisBar := true
+                newSweepLevel   := f.price
+                newSweepIsHigh  := true
+            else if (not f.isHigh) and low <= f.price
+                f.swept         := true
+                f.sweptBar      := bar_index
+                newSweepThisBar := true
+                newSweepLevel   := f.price
+                newSweepIsHigh  := false
+
+// Prune fractals older than the lookback window
+while array.size(fractals) > 0 and (bar_index - array.get(fractals, 0).bar) > lookback
+    array.shift(fractals)
+
+// -----------------------------------------------------------------------------
+// Render on the last bar only
+// -----------------------------------------------------------------------------
+var array<line>  drawn_lines  = array.new<line>()
+var array<label> drawn_labels = array.new<label>()
+
+line_style = line_style_in == "dashed" ? line.style_dashed :
+             line_style_in == "dotted" ? line.style_dotted : line.style_solid
+
+if barstate.islast
+    if array.size(drawn_lines) > 0
+        for i = 0 to array.size(drawn_lines) - 1
+            line.delete(array.get(drawn_lines, i))
+        array.clear(drawn_lines)
+    if array.size(drawn_labels) > 0
+        for i = 0 to array.size(drawn_labels) - 1
+            label.delete(array.get(drawn_labels, i))
+        array.clear(drawn_labels)
+
+    right_x = bar_index + extend_right
+
+    if array.size(fractals) > 0
+        for i = 0 to array.size(fractals) - 1
+            f = array.get(fractals, i)
+            col_base   = f.isHigh ? naked_high_col : naked_low_col
+            bool isSw  = (not f.swept) and f.isSweeper
+            bool visible = isSw ? show_sweepers : (f.swept ? show_swept : show_naked)
+
+            if visible
+                // Triangle marker at the pivot bar, drawn as a text character so
+                // it renders smaller than label.style_triangleup/down. Color
+                // reflects state:
+                //  - live sweeper  → amber
+                //  - swept         → faded col_base
+                //  - naked         → bright col_base
+                tri_txt  = f.isHigh ? "▾" : "▴"
+                tri_yloc = f.isHigh ? yloc.abovebar : yloc.belowbar
+                color tri_col = col_base
+                if isSw
+                    tri_col := sweeper_col
+                else if f.swept
+                    tri_col := color.new(col_base, swept_transp)
+                tri = label.new(f.bar, f.price, tri_txt,
+                     xloc = xloc.bar_index, yloc = tri_yloc,
+                     style = label.style_none,
+                     textcolor = tri_col,
+                     size = size.tiny)
+                array.push(drawn_labels, tri)
+
+            if isSw and show_sweepers
+                // SWEEPER: stop candidate — amber line + SW label.
+                tail_x = f.bar + sweeper_tail
+                ln = line.new(f.bar, f.price, tail_x, f.price,
+                     xloc = xloc.bar_index, color = sweeper_col,
+                     style = line.style_solid, width = line_width_in)
+                array.push(drawn_lines, ln)
+                txt = f.isHigh ? "SW-H " : "SW-L "
+                lb = label.new(tail_x, f.price,
+                     txt + str.tostring(f.price),
+                     xloc = xloc.bar_index, yloc = yloc.price,
+                     style = label.style_label_left,
+                     color = color.new(sweeper_col, 70),
+                     textcolor = sweeper_col,
+                     size = size.small)
+                array.push(drawn_labels, lb)
+
+            else if (not f.swept) and show_naked
+                // NAKED: live liquidity — bright ray + NFH/NFL.
+                txt = f.isHigh ? "NFH" : "NFL"
+                ln  = line.new(f.bar, f.price, right_x, f.price,
+                     xloc = xloc.bar_index, color = col_base,
+                     style = line_style, width = line_width_in)
+                array.push(drawn_lines, ln)
+                lb  = label.new(right_x, f.price,
+                     txt + " " + str.tostring(f.price),
+                     xloc = xloc.bar_index, yloc = yloc.price,
+                     style = label.style_label_left,
+                     color = color.new(col_base, 80),
+                     textcolor = col_base,
+                     size = size.small)
+                array.push(drawn_labels, lb)
+            // Swept (not sweeper) → triangle only, no extra marker.
+
+// -----------------------------------------------------------------------------
+// Alerts
+// -----------------------------------------------------------------------------
+if newSweepThisBar
+    alert("0xFA Sweep: " + (newSweepIsHigh ? "HIGH" : "LOW") + " @ " +
+         str.tostring(newSweepLevel) + " on " + syminfo.ticker + " " + timeframe.period,
+         alert.freq_once_per_bar)
+
+alertcondition(newSweepThisBar,
+     title   = "New Liquidity Sweep",
+     message = "0x Fractals: new liquidity sweep on {{ticker}} {{interval}}")
