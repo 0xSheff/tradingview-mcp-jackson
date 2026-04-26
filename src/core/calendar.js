@@ -130,6 +130,45 @@ function todayInZone(now, timeZone) {
 }
 
 /**
+ * Fetch the raw weekly XML once, parse, and return all events. Internal helper
+ * shared by today and week filters so the network call happens at most once.
+ */
+async function fetchAllEvents() {
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(FEED_URL, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; tradingview-mcp/1.0; +https://github.com/)",
+        Accept: "application/xml, text/xml, */*",
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return parseEvents(await res.text());
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+function buildEvent(ev, parsed, timezone) {
+  return {
+    time_local: parsed.isAllDay
+      ? "All Day"
+      : parsed.isTentative
+        ? "Tentative"
+        : formatInZone(parsed.date, timezone),
+    time_utc: parsed.date.toISOString(),
+    currency: ev.currency,
+    title: ev.title,
+    impact: ev.impact,
+    forecast: ev.forecast || null,
+    previous: ev.previous || null,
+  };
+}
+
+/**
  * Fetch today's high-impact events for the given currencies.
  *
  * @param {object} opts
@@ -146,24 +185,9 @@ export async function fetchTodayHighImpact({
   const currencySet = new Set(currencies.map((c) => c.toUpperCase()));
   const today = todayInZone(now, timezone);
 
-  let xml;
+  let raw;
   try {
-    const controller = new AbortController();
-    const to = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    try {
-      const res = await fetch(FEED_URL, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (compatible; tradingview-mcp/1.0; +https://github.com/)",
-          Accept: "application/xml, text/xml, */*",
-        },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      xml = await res.text();
-    } finally {
-      clearTimeout(to);
-    }
+    raw = await fetchAllEvents();
   } catch (err) {
     return {
       success: false,
@@ -174,7 +198,6 @@ export async function fetchTodayHighImpact({
     };
   }
 
-  const raw = parseEvents(xml);
   const out = [];
   for (const ev of raw) {
     if (ev.impact !== "High") continue;
@@ -186,23 +209,124 @@ export async function fetchTodayHighImpact({
     const localDate = todayInZone(parsed.date, timezone);
     if (localDate !== today) continue;
 
-    out.push({
-      time_local: parsed.isAllDay
-        ? "All Day"
-        : parsed.isTentative
-          ? "Tentative"
-          : formatInZone(parsed.date, timezone),
-      time_utc: parsed.date.toISOString(),
-      currency: ev.currency,
-      title: ev.title,
-      impact: ev.impact,
-      forecast: ev.forecast || null,
-      previous: ev.previous || null,
-    });
+    out.push(buildEvent(ev, parsed, timezone));
   }
 
-  // Sort by UTC time; all-day/tentative items still sort by their ET anchor
   out.sort((a, b) => a.time_utc.localeCompare(b.time_utc));
 
   return { success: true, events: out, date: today, timezone };
+}
+
+/**
+ * Compute the Monday (YYYY-MM-DD) of the upcoming planning week, in the
+ * target timezone. Saturday/Sunday → next Monday. Mon–Fri → next Monday
+ * (the user is planning the *next* week, not the current one).
+ */
+export function nextMondayInZone(now, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+    })
+      .formatToParts(now)
+      .map((p) => [p.type, p.value]),
+  );
+  const dowMap = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 0 };
+  const dow = dowMap[parts.weekday] ?? 0;
+  // Days until next Monday (always strictly forward).
+  const daysAhead = dow === 1 ? 7 : (8 - dow) % 7 || 7;
+  const baseUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day);
+  const monUtc = new Date(baseUtc + daysAhead * 86400000);
+  const y = monUtc.getUTCFullYear();
+  const m = String(monUtc.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(monUtc.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Fetch high-impact events for Monday–Friday of the planning week
+ * (the week starting at `weekStart`, default = next Monday).
+ *
+ * Output groups events by weekday (Mon..Fri).
+ *
+ * @param {object} opts
+ * @param {string[]} [opts.currencies=["USD","EUR"]]
+ * @param {string}   [opts.timezone="Europe/Athens"]
+ * @param {string}   [opts.weekStart]   YYYY-MM-DD Monday; defaults to next Monday in zone.
+ * @param {Date}     [opts.now=new Date()]
+ */
+export async function fetchWeekHighImpact({
+  currencies = ["USD", "EUR"],
+  timezone = "Europe/Athens",
+  weekStart,
+  now = new Date(),
+} = {}) {
+  const currencySet = new Set(currencies.map((c) => c.toUpperCase()));
+  const monday = weekStart || nextMondayInZone(now, timezone);
+
+  // Build the Mon..Fri date set in the target zone.
+  const [y, m, d] = monday.split("-").map(Number);
+  const mondayUtc = Date.UTC(y, m - 1, d);
+  const weekDates = [];
+  const byDay = {};
+  const dowNames = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+  for (let i = 0; i < 5; i++) {
+    const dt = new Date(mondayUtc + i * 86400000);
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getUTCDate()).padStart(2, "0");
+    const iso = `${yy}-${mm}-${dd}`;
+    weekDates.push(iso);
+    byDay[dowNames[i]] = { date: iso, events: [] };
+  }
+  const dateSet = new Set(weekDates);
+
+  let raw;
+  try {
+    raw = await fetchAllEvents();
+  } catch (err) {
+    return {
+      success: false,
+      error: `Calendar feed unavailable: ${err.message}`,
+      events: [],
+      by_day: byDay,
+      week_start: monday,
+      timezone,
+    };
+  }
+
+  const flat = [];
+  for (const ev of raw) {
+    if (ev.impact !== "High") continue;
+    if (!currencySet.has(ev.currency.toUpperCase())) continue;
+
+    const parsed = parseEventDateTime(ev.date, ev.time);
+    if (!parsed) continue;
+
+    const localDate = todayInZone(parsed.date, timezone);
+    if (!dateSet.has(localDate)) continue;
+
+    const item = buildEvent(ev, parsed, timezone);
+    item.date_local = localDate;
+    flat.push(item);
+
+    const dayIdx = weekDates.indexOf(localDate);
+    if (dayIdx >= 0) byDay[dowNames[dayIdx]].events.push(item);
+  }
+
+  flat.sort((a, b) => a.time_utc.localeCompare(b.time_utc));
+  for (const day of Object.values(byDay)) {
+    day.events.sort((a, b) => a.time_utc.localeCompare(b.time_utc));
+  }
+
+  return {
+    success: true,
+    events: flat,
+    by_day: byDay,
+    week_start: monday,
+    timezone,
+  };
 }
