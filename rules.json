@@ -1,0 +1,25 @@
+{
+  "watchlist": [
+    "CAPITALCOM:DXY",
+    "CME_MINI:MES1!",
+    "CME_MINI:MNQ1!",
+    "CBOT_MINI:MYM1!",
+    "CME_MINI:M2K1!",
+    "COMEX_MINI:MGC1!",
+    "CME:6E1!",
+    "CME:6J1!"
+  ],
+  "default_timeframe": "240",
+
+  "cls": {
+    "timeframes": ["W", "D"],
+    "m1_target_ratio": 0.5,
+    "m2_zone": [0.618, 0.8],
+    "liquidity_lookback": 40,
+    "eq_tolerance_ratio": 0.0005,
+    "consecutive_filter": 3,
+    "bars_to_fetch": 60
+  },
+
+  "notes": "CLS branch: analysis is CLS-methodology only (docs/CLS.md). DXY is bias input only — translate its read to 6E. User timezone: Europe/Athens."
+}

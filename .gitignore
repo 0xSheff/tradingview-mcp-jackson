@@ -5,6 +5,7 @@ temp_*
 *.log
 discovery-log.json
 .mcp.json
-rules.json
 .claude/
 .vscode/
+tmp/
+briefs/

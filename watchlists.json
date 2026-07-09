@@ -1,0 +1,45 @@
+{
+  "primary": [
+    "CAPITALCOM:DXY",
+    "COMEX_MINI:MGC1!",
+    "CME_MINI:MES1!",
+    "CME_MINI:MNQ1!",
+    "CBOT_MINI:MYM1!",
+    "CME_MINI:M2K1!",
+    "CME:6E1!",
+    "CME:6S1!"
+  ],
+  "crypto": [
+    "BINANCE:BTCUSDT",
+    "BINANCE:ETHUSDT",
+    "BINANCE:SOLUSDT",
+    "BINANCE:BNBUSDT",
+    "BINANCE:XRPUSDT",
+    "BINANCE:DOGEUSDT",
+    "BINANCE:AVAXUSDT",
+    "BINANCE:LINKUSDT",
+    "BINANCE:SUIUSDT",
+    "BINANCE:NEARUSDT"
+  ],
+  "sessioned_watchlists": {
+    "primary": [
+      { "symbol": "CAPITALCOM:DXY",            "session_window": "london" },
+      { "symbol": "CME:6E1!",           "session_window": ["london", "new_york"] },
+      { "symbol": "COMEX_MINI:MGC1!",   "session_window": ["london", "new_york"] },
+      { "symbol": "CME_MINI:MES1!",     "session_window": "new_york" },
+      { "symbol": "CME_MINI:MNQ1!",     "session_window": "new_york" }
+    ],
+    "crypto": [
+      { "symbol": "BINANCE:BTCUSDT",  "session_window": "24_7" },
+      { "symbol": "BINANCE:ETHUSDT",  "session_window": "24_7" },
+      { "symbol": "BINANCE:SOLUSDT",  "session_window": "24_7" },
+      { "symbol": "BINANCE:BNBUSDT",  "session_window": "24_7" },
+      { "symbol": "BINANCE:XRPUSDT",  "session_window": "24_7" },
+      { "symbol": "BINANCE:DOGEUSDT", "session_window": "24_7" },
+      { "symbol": "BINANCE:AVAXUSDT", "session_window": "24_7" },
+      { "symbol": "BINANCE:LINKUSDT", "session_window": "24_7" },
+      { "symbol": "BINANCE:SUIUSDT",  "session_window": "24_7" },
+      { "symbol": "BINANCE:NEARUSDT", "session_window": "24_7" }
+    ]
+  }
+}
