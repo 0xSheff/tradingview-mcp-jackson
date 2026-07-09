@@ -12,6 +12,14 @@ lookback       = input.int(100, "Lookback Bars", minval = 10, maxval = 500,
 show_naked     = input.bool(true, "Show Naked Fractals (live liquidity)",    group = "Levels")
 show_swept     = input.bool(true, "Show Swept Fractals (dead, faded triangle)", group = "Levels")
 show_sweepers  = input.bool(true, "Show Sweeper Fractals (stop candidates)", group = "Levels")
+show_sfp       = input.bool(true, "Show Wick Sweeps (SFP)", group = "Levels",
+     tooltip = "Highlights bars whose wick takes the latest N same-direction naked fractals but whose close stays back inside the level.")
+show_sfp_label = input.bool(true, "Show SFP Labels", group = "Levels",
+     tooltip = "If off, draws only the SFP line without the SFP-H/SFP-L price label.")
+sfp_scope      = input.int(2, "SFP Scope (latest N fractals)", minval = 1, maxval = 5, group = "Levels",
+     tooltip = "Only sweeps of the latest N same-direction fractals (any state) get tagged as SFP. Matches the 'previous / previous-previous' read.")
+sfp_max_dist   = input.int(10, "SFP Max Distance (bars)", minval = 1, maxval = 50, group = "Levels",
+     tooltip = "SFP fires only when the wick-sweep bar is within this many bars after the fractal pivot. Keeps SFP focused on adjacent-swing sweeps — far-away sweeps stay tagged as SW.")
 extend_right   = input.int(5, "Extend Naked Rays Right (bars)", minval = 0, maxval = 50, group = "Levels")
 sweeper_tail   = input.int(5, "Sweeper Marker Length (bars)",   minval = 1, maxval = 50, group = "Levels")
 
@@ -19,6 +27,8 @@ naked_high_col = input.color(color.new(#ef5350, 0),  "Naked High Color",  group 
 naked_low_col  = input.color(color.new(#26a69a, 0),  "Naked Low Color",   group = "Colors")
 sweeper_col    = input.color(color.new(#C77700, 0),  "Sweeper Color",     group = "Colors",
      tooltip = "Sweeper = pivot that took out prior naked liquidity. No resting liquidity on it, so it's a stop candidate, not an entry target.")
+sfp_high_col   = input.color(color.new(#AB47BC, 0),  "SFP High Color (bearish)", group = "Colors")
+sfp_low_col    = input.color(color.new(#5C6BC0, 0),  "SFP Low Color (bullish)",  group = "Colors")
 swept_transp   = input.int(80, "Swept Triangle Transparency (0-100)", minval = 0, maxval = 100, group = "Colors",
      tooltip = "Higher = more faded. Swept fractals are dead liquidity; they show only as a faint triangle.")
 
@@ -35,6 +45,7 @@ type Fractal
     bool  swept
     int   sweptBar
     bool  isSweeper
+    bool  sfpHit
     int   t
 
 var array<Fractal> fractals = array.new<Fractal>()
@@ -45,9 +56,30 @@ pl = ta.pivotlow(left_bars, right_bars)
 // -----------------------------------------------------------------------------
 // Sweep / sweeper detection
 // -----------------------------------------------------------------------------
-bool  newSweepThisBar = false
-float newSweepLevel   = na
-bool  newSweepIsHigh  = false
+bool  newSweepThisBar  = false
+bool  sweepBodyThisBar = false
+bool  sweepWickThisBar = false
+float newSweepLevel    = na
+bool  newSweepIsHigh   = false
+
+// Identify the latest N same-direction fractals (regardless of swept state)
+// before any sweep logic runs this bar. SFP classification is gated to sweeps
+// of these adjacent-swing levels only — counting includes swept fractals so
+// stale naked liquidity doesn't sneak into the pool just because newer levels
+// already got taken.
+array<int> sfpHighIdx = array.new<int>()
+array<int> sfpLowIdx  = array.new<int>()
+// Pine v6 disallows negative step in `for ... by`, so walk newest-first via `while`.
+int sfp_j = array.size(fractals) - 1
+while sfp_j >= 0
+    f = array.get(fractals, sfp_j)
+    if f.isHigh and array.size(sfpHighIdx) < sfp_scope
+        array.push(sfpHighIdx, sfp_j)
+    else if (not f.isHigh) and array.size(sfpLowIdx) < sfp_scope
+        array.push(sfpLowIdx, sfp_j)
+    if array.size(sfpHighIdx) >= sfp_scope and array.size(sfpLowIdx) >= sfp_scope
+        break
+    sfp_j := sfp_j - 1
 
 // On new confirmed pivot: if it took out any same-direction naked fractal during
 // its formation, mark those fractals swept (if not already) and tag the new
@@ -68,7 +100,7 @@ if not na(ph)
                     newSweepIsHigh  := true
                 else if f.sweptBar >= ph_pivot_bar
                     ph_is_sweeper := true
-    array.push(fractals, Fractal.new(ph_pivot_bar, ph, true, false, 0, ph_is_sweeper, time[right_bars]))
+    array.push(fractals, Fractal.new(ph_pivot_bar, ph, true, false, 0, ph_is_sweeper, false, time[right_bars]))
 
 if not na(pl)
     int pl_pivot_bar = bar_index - right_bars
@@ -86,26 +118,38 @@ if not na(pl)
                     newSweepIsHigh  := false
                 else if f.sweptBar >= pl_pivot_bar
                     pl_is_sweeper := true
-    array.push(fractals, Fractal.new(pl_pivot_bar, pl, false, false, 0, pl_is_sweeper, time[right_bars]))
+    array.push(fractals, Fractal.new(pl_pivot_bar, pl, false, false, 0, pl_is_sweeper, false, time[right_bars]))
 
 // Per-bar sweep detection: catches sweeps by bars whose pivot role is not (yet)
 // confirmed. Keeps the `swept` state live for real-time reading.
+//
+// Classifies each sweep as body break (close beyond the level) vs wick-only
+// sweep (close back inside = SFP). SFP tagging is restricted to fractals in
+// sfpHighIdx / sfpLowIdx — the latest N same-direction naked levels.
 if array.size(fractals) > 0
     for i = 0 to array.size(fractals) - 1
         f = array.get(fractals, i)
         if not f.swept and bar_index > f.bar
-            if f.isHigh and high >= f.price
+            bool isHi    = f.isHigh
+            bool touched = isHi ? high >= f.price : low <= f.price
+            if touched
+                bool wickOnly    = isHi ? close < f.price : close > f.price
+                bool inScope     = isHi ? array.includes(sfpHighIdx, i) : array.includes(sfpLowIdx, i)
+                bool inRange     = (bar_index - f.bar) <= sfp_max_dist
+                bool sfpEligible = inScope and inRange
+
                 f.swept         := true
                 f.sweptBar      := bar_index
                 newSweepThisBar := true
                 newSweepLevel   := f.price
-                newSweepIsHigh  := true
-            else if (not f.isHigh) and low <= f.price
-                f.swept         := true
-                f.sweptBar      := bar_index
-                newSweepThisBar := true
-                newSweepLevel   := f.price
-                newSweepIsHigh  := false
+                newSweepIsHigh  := isHi
+
+                if wickOnly
+                    if sfpEligible
+                        f.sfpHit         := true
+                        sweepWickThisBar := true
+                else
+                    sweepBodyThisBar := true
 
 // Prune fractals older than the lookback window
 while array.size(fractals) > 0 and (bar_index - array.get(fractals, 0).bar) > lookback
@@ -202,18 +246,47 @@ if barstate.islast
                 array.push(drawn_labels, lb)
             // Swept (not sweeper) → triangle only, no extra marker.
 
+            // SFP marker: line from the swept fractal's pivot bar to the bar
+            // that wick-swept it. Distinct color from sweeper (amber) so the
+            // two stop-candidate flavors are visually separable.
+            if f.sfpHit and show_sfp and inView
+                color sfp_col = f.isHigh ? sfp_high_col : sfp_low_col
+                ln_sfp = line.new(f.bar, f.price, f.sweptBar, f.price,
+                     xloc = xloc.bar_index, color = sfp_col,
+                     style = line.style_solid, width = line_width_in)
+                array.push(drawn_lines, ln_sfp)
+                if show_sfp_label
+                    txt_sfp = f.isHigh ? "SFP-H " : "SFP-L "
+                    lb_sfp = label.new(f.sweptBar, f.price,
+                         txt_sfp + str.tostring(f.price),
+                         xloc = xloc.bar_index, yloc = yloc.price,
+                         style = label.style_label_left,
+                         color = color.new(sfp_col, 70),
+                         textcolor = sfp_col,
+                         size = size.small)
+                    array.push(drawn_labels, lb_sfp)
+
 // -----------------------------------------------------------------------------
 // Alerts
-// Gate on barstate.isconfirmed so the trigger only goes true on the closing
-// tick of the sweeping bar — a wick that pierces and reverts won't fire.
+// Gated on barstate.isconfirmed so triggers only fire on bar close — wick vs
+// body classification is a closing read and meaningless intrabar.
 // -----------------------------------------------------------------------------
-bool sweepConfirmed = newSweepThisBar and barstate.isconfirmed
+bool sweepBodyConfirmed = sweepBodyThisBar and barstate.isconfirmed
+bool sweepWickConfirmed = sweepWickThisBar and barstate.isconfirmed
 
-if sweepConfirmed
-    alert("0xFA Sweep: " + (newSweepIsHigh ? "HIGH" : "LOW") + " @ " +
+if sweepBodyConfirmed
+    alert("0xFA Sweep BODY: " + (newSweepIsHigh ? "HIGH" : "LOW") + " @ " +
          str.tostring(newSweepLevel) + " on " + syminfo.ticker + " " + timeframe.period,
          alert.freq_once_per_bar_close)
 
-alertcondition(sweepConfirmed,
-     title   = "New Liquidity Sweep",
-     message = "0x Fractals: new liquidity sweep on {{ticker}} {{interval}}")
+if sweepWickConfirmed
+    alert("0xFA Sweep WICK (SFP): " + (newSweepIsHigh ? "HIGH" : "LOW") + " @ " +
+         str.tostring(newSweepLevel) + " on " + syminfo.ticker + " " + timeframe.period,
+         alert.freq_once_per_bar_close)
+
+alertcondition(sweepBodyConfirmed,
+     title   = "Liquidity Sweep (body)",
+     message = "0x Fractals: body sweep on {{ticker}} {{interval}}")
+alertcondition(sweepWickConfirmed,
+     title   = "Liquidity Sweep (wick/SFP)",
+     message = "0x Fractals: wick sweep / SFP on {{ticker}} {{interval}}")
