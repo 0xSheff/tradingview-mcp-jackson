@@ -5,7 +5,7 @@ import * as core from "../core/morning.js";
 export function registerMorningTools(server) {
   server.tool(
     "morning_brief",
-    "Scan your watchlist, read all indicator values, and return structured data for a session brief. Reads rules.json for your bias criteria and watchlist. Claude applies the rules to generate your daily bias.",
+    "Scan your watchlist, read all indicator values, and return structured data for a session brief. Reads the symbol list from watchlists.json (\"primary\") and bias criteria from rules.json. Claude applies the rules to generate your daily bias.",
     {
       rules_path: z
         .string()
