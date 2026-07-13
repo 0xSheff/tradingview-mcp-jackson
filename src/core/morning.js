@@ -6,7 +6,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadRules } from "./config.js";
+import { loadRules, loadWatchlist } from "./config.js";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
 import * as indicators from "./indicators.js";
@@ -55,11 +55,12 @@ const SESSIONS_DIR = join(homedir(), ".tradingview-mcp", "sessions");
 
 export async function runBrief({ rules_path } = {}) {
   const { rules, path: loadedFrom } = loadRules(rules_path);
-  const { watchlist = [], default_timeframe = "240" } = rules;
+  const { default_timeframe = "240" } = rules;
+  const watchlist = loadWatchlist("primary").watchlist;
 
   if (!watchlist.length) {
     throw new Error(
-      "rules.json watchlist is empty. Add at least one symbol to your watchlist array.",
+      'watchlists.json "primary" is empty. Add at least one symbol.',
     );
   }
 

@@ -20,7 +20,7 @@ Copy the example rules file and open it for the user to fill in:
 cp ~/tradingview-mcp-jackson/rules.example.json ~/tradingview-mcp-jackson/rules.json
 ```
 
-Tell the user: "Open `rules.json` and fill in your watchlist (the symbols you trade), your bias criteria (what makes something bullish/bearish for you), and your risk rules. This is what the morning brief uses every day."
+Tell the user: "Open `watchlists.json` and fill in your `primary` list (the symbols you trade). Then open `rules.json` and set your bias criteria (what makes something bullish/bearish for you) and your risk rules. This is what the morning brief uses every day."
 
 ## Step 3: Add to MCP Config
 

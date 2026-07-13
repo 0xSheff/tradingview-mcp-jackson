@@ -6,8 +6,22 @@
     "CME_MINI:MNQ1!",
     "CBOT_MINI:MYM1!",
     "CME_MINI:M2K1!",
+    "CME:6J1!",
     "CME:6E1!",
-    "CME:6S1!"
+    "CME:6C1!",
+    "CME:6S1!",
+    "CME:6A1!",
+    "CME:6N1!",
+    "CME:6B1!"
+  ],
+  "cls": [
+    "CME:6J1!",
+    "CME:6E1!",
+    "CME:6C1!",
+    "CME:6S1!",
+    "CME:6A1!",
+    "CME:6N1!",
+    "CME:6B1!"
   ],
   "crypto": [
     "BINANCE:BTCUSDT",
