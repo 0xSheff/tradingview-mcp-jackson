@@ -16,8 +16,16 @@ register("cls", {
             short: "r",
             description: "Path to rules.json (default: ./rules.json)",
           },
+          compact: {
+            type: "boolean",
+            short: "c",
+            description: "Return a compact, report-ready payload without duplicated ranked level data",
+          },
         },
-        handler: async ({ rules }) => core.runClsBrief({ rules_path: rules }),
+        handler: async ({ rules, compact }) => {
+          const result = await core.runClsBrief({ rules_path: rules });
+          return compact ? core.compactClsBrief(result) : result;
+        },
       },
     ],
     [
@@ -30,11 +38,17 @@ register("cls", {
             short: "r",
             description: "Path to rules.json (default: ./rules.json)",
           },
+          compact: {
+            type: "boolean",
+            short: "c",
+            description: "Return a compact, report-ready payload without duplicated ranked level data",
+          },
         },
-        handler: async ({ rules }, positionals) => {
+        handler: async ({ rules, compact }, positionals) => {
           const symbol = positionals?.[0];
           if (!symbol) throw new Error("Usage: tv cls scan <SYMBOL>");
-          return core.runClsBrief({ rules_path: rules, symbols: [symbol] });
+          const result = await core.runClsBrief({ rules_path: rules, symbols: [symbol] });
+          return compact ? core.compactClsBrief(result) : result;
         },
       },
     ],

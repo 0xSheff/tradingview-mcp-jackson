@@ -658,6 +658,43 @@ async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+export function compactClsBrief(brief) {
+  return {
+    success: brief.success,
+    generated_at: brief.generated_at,
+    rules_loaded_from: brief.rules_loaded_from,
+    methodology: brief.methodology,
+    compact: true,
+    notes: brief.notes,
+    symbols_scanned: (brief.symbols_scanned || []).map((scan) => {
+      if (scan.error) return scan;
+      return {
+        symbol: scan.symbol,
+        methodology_scope: scan.methodology_scope,
+        quote: scan.quote,
+        timeframes: scan.timeframes,
+        amd: scan.amd?.error
+          ? scan.amd
+          : {
+              execution_timeframe: scan.amd?.execution_timeframe,
+              session_bars: scan.amd?.session_bars,
+              levels: (scan.amd?.levels || []).filter(
+                (level) => level.status !== "NO_SETUP",
+              ),
+            },
+        outlook: scan.outlook
+          ? {
+              state: scan.outlook.state,
+              driver: scan.outlook.driver,
+              deadline: scan.outlook.deadline,
+            }
+          : null,
+      };
+    }),
+    instruction: brief.instruction,
+  };
+}
+
 export async function runClsBrief({ rules_path, symbols } = {}) {
   const { rules, path: loadedFrom } = loadRules(rules_path);
   const cfg = { ...CLS_DEFAULTS, ...(rules.cls || {}) };
@@ -725,7 +762,14 @@ export async function runClsBrief({ rules_path, symbols } = {}) {
               currentPrice: quote?.last ?? quote?.close,
             })
           : null;
-      results.push({ symbol, quote, timeframes, amd, outlook });
+      results.push({
+        symbol,
+        methodology_scope: /(?:^|:)MGC1!$/i.test(symbol) ? "adapted" : "native",
+        quote,
+        timeframes,
+        amd,
+        outlook,
+      });
     } catch (err) {
       results.push({ symbol, error: err.message });
     }

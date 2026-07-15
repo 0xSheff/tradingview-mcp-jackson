@@ -21,7 +21,8 @@
     "CME:6S1!",
     "CME:6A1!",
     "CME:6N1!",
-    "CME:6B1!"
+    "CME:6B1!",
+    "COMEX_MINI:MGC1!"
   ],
   "crypto": [
     "BINANCE:BTCUSDT",

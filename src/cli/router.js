@@ -3,6 +3,7 @@
  * Zero dependencies — uses only Node.js built-ins.
  */
 import { parseArgs } from 'node:util';
+import { disconnect } from '../connection.js';
 
 /** @type {Map<string, { description: string, options?: object, handler: Function, subcommands?: Map<string, object> }>} */
 const commands = new Map();
@@ -105,7 +106,7 @@ export async function run(argv) {
       }
       await execute(handler, values, positionals);
     } catch (err) {
-      handleError(err);
+      await handleError(err);
     }
   } else {
     handler = cmd.handler;
@@ -123,7 +124,7 @@ export async function run(argv) {
       }
       await execute(handler, values, positionals);
     } catch (err) {
-      handleError(err);
+      await handleError(err);
     }
   }
 }
@@ -132,19 +133,22 @@ async function execute(handler, values, positionals) {
   try {
     const result = await handler(values, positionals);
     console.log(JSON.stringify(result, null, 2));
-    process.exit(0);
+    await disconnect();
+    process.exitCode = 0;
   } catch (err) {
-    handleError(err);
+    await handleError(err);
   }
 }
 
-function handleError(err) {
+async function handleError(err) {
+  await disconnect();
   const message = err.message || String(err);
   // Connection failures get exit code 2
   if (/CDP|connection|ECONNREFUSED|not running/i.test(message)) {
     console.error(JSON.stringify({ success: false, error: message }, null, 2));
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   console.error(JSON.stringify({ success: false, error: message }, null, 2));
-  process.exit(1);
+  process.exitCode = 1;
 }

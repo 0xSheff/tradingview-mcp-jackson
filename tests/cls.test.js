@@ -13,6 +13,7 @@ import {
   amdLevelReads,
   model2Plan,
   clsOutlook,
+  compactClsBrief,
 } from "../src/core/cls.js";
 
 let t = 0;
@@ -23,6 +24,51 @@ const bar = (open, high, low, close) => ({
   low,
   close,
   volume: 0,
+});
+
+describe("compactClsBrief", () => {
+  test("keeps report inputs and removes duplicated/inactive level data", () => {
+    const compact = compactClsBrief({
+      success: true,
+      generated_at: "2026-07-15T10:00:00.000Z",
+      rules_loaded_from: "rules.json",
+      methodology: "CLS",
+      config_used: { bars_to_fetch: 60 },
+      notes: "test",
+      symbols_scanned: [
+        {
+          symbol: "COMEX_MINI:MGC1!",
+          methodology_scope: "adapted",
+          quote: { last: 4100 },
+          timeframes: { W: { setup: null }, D: { setup: null } },
+          amd: {
+            execution_timeframe: "15",
+            session_bars: 40,
+            levels: [
+              { level_type: "PWL", status: "MANIPULATED" },
+              { level_type: "PWH", status: "NO_SETUP" },
+            ],
+          },
+          outlook: {
+            state: "WAIT",
+            driver: { level_type: "PWL" },
+            deadline: { decide_by_local: "11:30" },
+            ranked: [{ level_type: "PWL" }, { level_type: "PWH" }],
+          },
+        },
+      ],
+      instruction: "render",
+    });
+
+    assert.equal(compact.compact, true);
+    assert.equal(compact.config_used, undefined);
+    assert.equal(compact.symbols_scanned[0].methodology_scope, "adapted");
+    assert.deepEqual(compact.symbols_scanned[0].amd.levels, [
+      { level_type: "PWL", status: "MANIPULATED" },
+    ]);
+    assert.equal(compact.symbols_scanned[0].outlook.ranked, undefined);
+    assert.equal(compact.instruction, "render");
+  });
 });
 
 describe("classifySignal", () => {
