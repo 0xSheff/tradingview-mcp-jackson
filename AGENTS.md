@@ -89,10 +89,10 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 This branch implements David Perk's CLS (Candle Liquidity Sweep) analysis. **On this branch, all analysis is CLS-only — do not mix in FVG/fractal/EMA reads from the regular morning brief.**
 
 - **Methodology source of truth:** `docs/CLS.md` (classification table, Model 1/2 rules, filters). Read it before producing any CLS analysis.
-- **Morning brief:** `node src/cli/index.js cls brief` — scans the `watchlists.json` `cls` list on W/D and returns CLS reads (signal classification, Model 1 levels, Model 2 reload zones, liquidity map, filters). Render per the `instruction` field in the output.
+- **Morning brief:** `node src/cli/index.js cls brief --compact` — scans the `watchlists.json` `cls` list on W/D and returns report-ready CLS reads without duplicated `outlook.ranked` data. Render per the `instruction` field in the output. A full 8-symbol live scan can take roughly 2.5–3 minutes; use a timeout of at least 300 seconds (360 recommended).
 - **Single symbol:** `node src/cli/index.js cls scan CME:6E1!`
 - **Deep dive:** skill `skills/cls-analysis` — draw the setup on the chart, screenshot, write M1/M2 scenarios.
-- **Config:** `cls` section in `rules.json` (tracked in git) overrides `CLS_DEFAULTS` in `src/core/cls.js`. The instrument list comes from `watchlists.json` (`cls` list — currency futures).
+- **Config:** `cls` section in `rules.json` (tracked in git) overrides `CLS_DEFAULTS` in `src/core/cls.js`. The instrument list comes from `watchlists.json` (`cls` list — currency futures plus MGC). FX futures are native CLS instruments; MGC must always be labeled **adapted CLS**.
 - **Tests:** `npm run test:cls` (pure detection functions, no TradingView needed).
 - DXY stays bias-only — translate its read into a 6E (or other FX) plan.
 - `live` fields in scan output come from the developing candle — always label them as "developing, not confirmed until close".

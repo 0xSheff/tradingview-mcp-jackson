@@ -251,7 +251,14 @@ open closes most of the NY gap if wanted.
 
 David's core set: EURUSD, GBPUSD, USDCHF, DXY. In this repo the
 `watchlists.json` `cls` list is used — currency futures (6E/6J/6C/6S/6A/6N/6B),
-native CLS territory. DXY stays bias-only — translate to 6E (see memory rules).
+which are native CLS territory, plus MGC. Gold uses the same mechanical
+rules but every MGC read must be labeled **adapted CLS**, not native. DXY
+stays bias-only — translate to 6E (see memory rules).
+
+For agent/automation runs, prefer `node src/cli/index.js cls brief --compact`.
+The compact payload preserves the report inputs while removing duplicated
+ranked-level data. A live 8-symbol brief typically needs 2.5–3 minutes, so
+use a timeout of at least 300 seconds (360 recommended).
 
 Quality over quantity: properly filtered, expect ~6 A-setups per week
 across three pairs.
