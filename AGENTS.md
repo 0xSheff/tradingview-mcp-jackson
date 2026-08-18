@@ -84,42 +84,101 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
-## Windows Environment Notes
+## Environment Notes
 
-This project runs on Windows. The bash shell that AI agents use does **not** inherit the Windows system PATH, so common commands need full paths:
+This project runs on Linux (Ubuntu). It previously ran on Windows only; the Windows
+notes are kept at the end of this section for reference.
 
-- **Node.js:** `C:\nvm4w\nodejs\node.exe` (managed by nvm4w)
-- **npm:** `C:\nvm4w\nodejs\npm.cmd`
-- **npx:** `C:\nvm4w\nodejs\npx.cmd`
-- Bare `node` / `npm` will fail with "command not found" in the bash tool.
+- **Node.js:** installed via nvm — `node` / `npm` / `npx` work directly in the agent
+  shell. The absolute path is `/home/vadym/.nvm/versions/node/v22.22.2/bin/node`; use it
+  in MCP configs and anywhere the process may not inherit the nvm shell setup.
+- **TradingView Desktop:** `/opt/TradingView/tradingview` (deb install, also on PATH as
+  `/usr/bin/tradingview`).
 
 ### Launching TradingView (CDP)
 
-The MCP server and CLI communicate with TradingView Desktop via Chrome DevTools Protocol on `localhost:9222`. If TradingView is not running, **all scan/data tools will fail** with "CDP connection failed."
+The MCP server and CLI talk to TradingView Desktop over Chrome DevTools Protocol on
+`localhost:9222`. If TradingView is not running, **all scan/data tools fail** with
+"CDP connection failed."
 
-**Before running any chart-reading workflow (morning brief, batch scan, etc.), check CDP and launch if needed:**
+**Before any chart-reading workflow (morning brief, batch scan), check CDP
+and launch if needed:**
 
 ```bash
 # 1. Check if CDP is up
 curl -s http://localhost:9222/json/version
 
-# 2. If not running, launch the bat script (it blocks until CDP is ready)
-scripts/launch_tv_debug.bat
+# 2. If not running, launch (the script blocks until CDP is ready)
+scripts/launch_tv_debug_linux.sh
 
-# 3. Verify CDP is up
+# 3. Verify
 curl -s http://localhost:9222/json/version
 ```
 
-The launch script auto-detects the TradingView install location, kills any existing instance, and restarts with `--remote-debugging-port=9222`.
+`tv_launch` (MCP) and `node src/cli/index.js launch` do the same thing in-process.
+
+#### Never launch TradingView with a plain `tradingview --remote-debugging-port=9222`
+
+Launching it directly from an agent shell or an editor terminal fails, in two different
+ways, because of variables the parent process leaks. Both are handled inside
+`scripts/launch_tv_debug_linux.sh` and `launch()` in `src/core/health.js` — use those
+rather than calling the binary yourself.
+
+1. **`ELECTRON_RUN_AS_NODE=1`** — exported by Electron-based editors (VS Code, Cursor)
+   into every child process. TradingView is Electron too, so it starts as plain Node and
+   exits with `bad option: --remote-debugging-port`.
+2. **Snap runtime leakage** — when the editor is a snap (e.g. `snap install code`), it
+   exports its own snap runtime. `GSETTINGS_SCHEMA_DIR` and `XDG_DATA_DIRS` point into
+   `/snap/<editor>/...` and TradingView **segfaults** in GTK while reading those GSettings
+   schemas. Several variables trigger this independently, so both launch paths build the
+   child environment from an **allowlist** instead of unsetting offenders one by one.
+
+If you must launch by hand, go through a clean environment:
+
+```bash
+setsid env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin DISPLAY="$DISPLAY" \
+  WAYLAND_DISPLAY="$WAYLAND_DISPLAY" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+  XDG_SESSION_TYPE="$XDG_SESSION_TYPE" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+  XAUTHORITY="$XAUTHORITY" \
+  /opt/TradingView/tradingview --remote-debugging-port=9222 &
+```
+
+Note also that `pkill -f TradingView` from an agent shell can match — and kill — the
+agent's own shell, since the repo path contains the string. Match the binary path
+instead: `pkill -f '^/opt/TradingView/tradingview'`.
 
 ### Running the CLI
 
-Use the full node path to invoke the CLI:
-
 ```bash
-/c/nvm4w/nodejs/node.exe src/cli/index.js brief          # morning brief
-/c/nvm4w/nodejs/node.exe src/cli/index.js session get     # get saved session
+node src/cli/index.js brief          # morning brief
+node src/cli/index.js session get    # get saved session
+node src/cli/index.js status         # CDP health check
 ```
+
+### MCP config
+
+`.mcp.json` in the repo root (gitignored) registers the server for this project:
+
+```json
+{
+  "mcpServers": {
+    "tradingview": {
+      "command": "/home/vadym/.nvm/versions/node/v22.22.2/bin/node",
+      "args": ["/home/vadym/projects/tradingview-mcp-jackson/src/server.js"]
+    }
+  }
+}
+```
+
+### Windows notes (previous environment)
+
+The bash shell AI agents used on Windows did **not** inherit the Windows system PATH, so
+commands needed full paths: `C:\nvm4w\nodejs\node.exe`, `npm.cmd`, `npx.cmd`. The Codex
+sandbox could also fail to traverse the nvm4w symlink, making `node` invisible to the
+agent even though it worked in the user's PowerShell; the fix was to rerun outside the
+sandbox rather than reinstall Node. TradingView was launched via
+`scripts/launch_tv_debug.bat`.
+
 
 ## Agent Git & Version Control Rules
 

@@ -214,12 +214,49 @@ export async function launch({ port, kill_existing } = {}) {
   if (killFirst) {
     try {
       if (platform === 'win32') execSync('taskkill /F /IM TradingView.exe', { timeout: 5000 });
-      else execSync('pkill -f TradingView', { timeout: 5000 });
+      else execSync(`pkill -f "^${tvPath}"`, { timeout: 5000 });
       await new Promise(r => setTimeout(r, 1500));
     } catch { /* may not be running */ }
   }
 
-  const child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: 'ignore' });
+  // Build the child environment from an allowlist rather than inheriting this
+  // process's. When the MCP server is spawned by an editor (VS Code, Cursor) instead
+  // of a plain terminal, the parent leaks variables that break TradingView:
+  //   * Electron editors export ELECTRON_RUN_AS_NODE=1. TradingView is Electron too,
+  //     so it boots as plain Node and exits with "bad option: --remote-debugging-port".
+  //   * A snap-packaged editor exports its whole snap runtime (GSETTINGS_SCHEMA_DIR,
+  //     XDG_DATA_DIRS, GTK/GIO module paths under /snap/<editor>/...). TradingView then
+  //     segfaults in GTK while reading those GSettings schemas.
+  // Several variables trigger this independently, hence an allowlist over a denylist.
+  let launchEnv = { ...process.env };
+  // The ELECTRON_RUN_AS_NODE leak hits every platform; the GTK segfault is Linux-only,
+  // so only Linux gets the full allowlist treatment.
+  delete launchEnv.ELECTRON_RUN_AS_NODE;
+  delete launchEnv.ELECTRON_NO_ATTACH_CONSOLE;
+
+  if (platform === 'linux') {
+    const ALLOW = [
+      'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_TIME', 'TZ',
+      'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE',
+      'XDG_CURRENT_DESKTOP', 'XDG_SESSION_DESKTOP', 'DBUS_SESSION_BUS_ADDRESS',
+      'http_proxy', 'https_proxy', 'no_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+    ];
+    const clean = {};
+    for (const key of ALLOW) if (process.env[key]) clean[key] = process.env[key];
+
+    const path = (process.env.PATH || '').split(':').filter(p => p && !p.includes('/snap/'));
+    clean.PATH = path.length ? path.join(':') : '/usr/local/bin:/usr/bin:/bin';
+
+    // Snaps stash the pre-snap XDG_DATA_DIRS in XDG_DATA_DIRS_<NAME>_SNAP_ORIG; prefer
+    // that, and fall back to the current value only when it is snap-free.
+    const snapOrig = Object.keys(process.env).find(k => /^XDG_DATA_DIRS_.*_SNAP_ORIG$/.test(k));
+    const dataDirs = snapOrig ? process.env[snapOrig] : process.env.XDG_DATA_DIRS;
+    if (dataDirs && !dataDirs.includes('/snap/')) clean.XDG_DATA_DIRS = dataDirs;
+
+    launchEnv = clean;
+  }
+
+  const child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: 'ignore', env: launchEnv });
   child.unref();
 
   for (let i = 0; i < 15; i++) {
