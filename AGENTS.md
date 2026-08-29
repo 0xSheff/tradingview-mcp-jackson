@@ -84,6 +84,20 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
+## Pine Editor — destructive tool warning
+
+`pine_new` does **not** create a separate script. It opens a blank draft inside
+whatever saved script is currently open, so a following `pine_save` /
+`pine_smart_compile` **overwrites that user script**. `pine_get_source`
+returning the blank template does not prove otherwise. Pine tools also fail
+silently when the editor panel is closed — open it with
+`ui panel pine-editor open` first.
+
+Before any `pine set` / `pine save` / `pine_smart_compile`: back up the current
+editor source to the scratchpad, inject only into a throwaway sandbox script,
+then restore the original and verify it is byte-identical. TradingView's version
+history is the last line of defence.
+
 ## ChrisFX Breaker Blocks (branch `chris`)
 
 This branch implements ChrisFX's graded breaker-block method. **On this branch, all analysis is ChrisFX-only — do not mix in CLS, EMA/RSI or the regular morning-brief reads.**
