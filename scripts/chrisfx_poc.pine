@@ -1,0 +1,97 @@
+//@version=6
+// ChrisFX POC — a lower-timeframe approximation of the footprint step.
+//
+// The methodology (docs/CHRISFX.md §4.1) asks for a footprint chart: mark the
+// POC / high-delta cells that fall inside the breaker block, extend them right,
+// and enter from the highest one (longs) or the lowest one (shorts).
+//
+// TradingView exposes no historical order flow to this project, so this script
+// approximates it: request.security_lower_tf() pulls sub-bars inside every
+// chart candle, spreads their volume across price bins, and infers direction
+// from each sub-bar's own close. That is NOT exchange bid/ask footprint —
+// treat the levels as approximate.
+//
+// Boxes published here are read back by src/core/chris.js via
+// data_get_pine_boxes({ study_filter: "ChrisFX POC" }).
+
+indicator("ChrisFX POC", overlay = true, max_boxes_count = 500)
+
+lowerTf    = input.timeframe("1",  "Lower timeframe for the profile")
+bins       = input.int(24,   "Price bins per candle", minval = 4,  maxval = 100)
+lookback   = input.int(60,   "Publish for the last N bars", minval = 1, maxval = 200)
+extendBars = input.int(40,   "Extend boxes to the right (bars)", minval = 0)
+minDelta   = input.float(0.15, "Min |delta| share for a delta box", minval = 0, maxval = 1, step = 0.05)
+showDelta  = input.bool(true, "Also publish the strongest-delta bin")
+pocColor   = input.color(color.new(color.orange, 60), "POC bin")
+deltaColor = input.color(color.new(color.yellow, 70), "Delta bin")
+
+subH = request.security_lower_tf(syminfo.tickerid, lowerTf, high)
+subL = request.security_lower_tf(syminfo.tickerid, lowerTf, low)
+subO = request.security_lower_tf(syminfo.tickerid, lowerTf, open)
+subC = request.security_lower_tf(syminfo.tickerid, lowerTf, close)
+subV = request.security_lower_tf(syminfo.tickerid, lowerTf, volume)
+
+// Build one volume-at-price profile for the current candle.
+// Each sub-bar spreads its volume evenly over the bins its range covers, and
+// contributes signed volume (up sub-bar = buy, down sub-bar = sell) to delta.
+buildProfile(float barHigh, float barLow, int nBins) =>
+    volAt   = array.new_float(nBins, 0.0)
+    deltaAt = array.new_float(nBins, 0.0)
+    span    = barHigh - barLow
+    binSize = span / nBins
+    n       = array.size(subV)
+    if span > 0 and n > 0
+        for j = 0 to n - 1
+            v = array.get(subV, j)
+            h = array.get(subH, j)
+            l = array.get(subL, j)
+            o = array.get(subO, j)
+            c = array.get(subC, j)
+            if not na(v) and not na(h) and not na(l)
+                sign     = c >= o ? 1.0 : -1.0
+                firstBin = math.max(0,         int((l - barLow) / binSize))
+                lastBin  = math.min(nBins - 1, int((h - barLow) / binSize))
+                covered  = lastBin - firstBin + 1
+                if covered > 0
+                    share = v / covered
+                    for b = firstBin to lastBin
+                        array.set(volAt,   b, array.get(volAt,   b) + share)
+                        array.set(deltaAt, b, array.get(deltaAt, b) + share * sign)
+    [volAt, deltaAt, binSize]
+
+publishBin(int idx, float barLow, float binSize, color col, int right) =>
+    box.new(left       = bar_index,
+            top        = barLow + binSize * (idx + 1),
+            right      = bar_index + right,
+            bottom     = barLow + binSize * idx,
+            border_color = color.new(col, 0),
+            bgcolor    = col,
+            extend     = extend.none)
+
+if barstate.isconfirmed and bar_index > last_bar_index - lookback
+    [volAt, deltaAt, binSize] = buildProfile(high, low, bins)
+
+    pocIdx     = -1
+    pocVol     = 0.0
+    deltaIdx   = -1
+    deltaAbs   = 0.0
+    totalVol   = 0.0
+    for b = 0 to bins - 1
+        v  = array.get(volAt, b)
+        d  = math.abs(array.get(deltaAt, b))
+        totalVol += v
+        if v > pocVol
+            pocVol  := v
+            pocIdx  := b
+        if d > deltaAbs
+            deltaAbs := d
+            deltaIdx := b
+
+    if pocIdx >= 0 and pocVol > 0
+        publishBin(pocIdx, low, binSize, pocColor, extendBars)
+
+    // A separate box for the strongest-delta bin when it is meaningful and is
+    // not already the POC — this is the "any delta" cell of slide 22.
+    if showDelta and deltaIdx >= 0 and deltaIdx != pocIdx and totalVol > 0
+        if deltaAbs / totalVol >= minDelta
+            publishBin(deltaIdx, low, binSize, deltaColor, extendBars)

@@ -21,7 +21,9 @@ Built on top of the original [tradingview-mcp](https://github.com/tradesdontlie/
 |---------|-------------|
 | `morning_brief` | One command that scans your watchlist, reads all your indicators, and returns structured data for Claude to generate your session bias |
 | `session_save` / `session_get` | Saves your daily brief to `~/.tradingview-mcp/sessions/` so you can compare today vs yesterday |
-| `rules.json` | Write your trading rules once — bias criteria, risk rules, watchlist. The morning brief applies them automatically every day |
+| `rules.json` | Write your trading rules once — bias criteria, risk rules. The morning brief applies them automatically every day |
+| `watchlists.json` | The symbols you scan, grouped into lists (`primary`, `chris`, `crypto`, …). The morning brief reads the `primary` list |
+| `tv chris` CLI | ChrisFX breaker-block scanner — graded A++/A+/A/B setups on 5m/15m (`docs/CHRISFX.md`) |
 | Launch bug fix | Fixed `tv_launch` compatibility with TradingView Desktop v2.14+ |
 | `tv brief` CLI | Run your morning brief from the terminal in one word |
 
@@ -295,7 +297,7 @@ Full command list: `tv --help`
 | MCP server not showing in Claude Code | Check `~/.claude/.mcp.json` syntax, restart Claude Code |
 | `tv` command not found | Run `npm link` from the project directory |
 | `morning_brief` — "No rules.json found" | Run `cp rules.example.json rules.json` and fill it in |
-| `morning_brief` — watchlist empty | Add symbols to the `watchlist` array in `rules.json` |
+| `morning_brief` — watchlist empty | Add symbols to the `primary` array in `watchlists.json` |
 | Tools return stale data | TradingView still loading — wait a few seconds |
 | Pine Editor tools fail | Open Pine Editor panel first: `ui_open_panel pine-editor open` |
 

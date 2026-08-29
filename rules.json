@@ -1,0 +1,57 @@
+{
+  "default_timeframe": "240",
+
+  "chris": {
+    "timeframes": ["5", "15"],
+    "bars_to_fetch": 300,
+    "watchlist_section": "chris",
+
+    "liquidity": {
+      "fractal_strength": 1,
+      "lookback": 60,
+      "fresh_max_age_bars": 12
+    },
+
+    "grab": {
+      "atr_length": 14,
+      "impulse_body_atr_mult": 1.3,
+      "impulse_body_ratio": 0.6
+    },
+
+    "reversal": {
+      "instant_max_bars": 3,
+      "leg_lookback_bars": 10
+    },
+
+    "fvg": {
+      "require": true,
+      "min_overlap_ratio": 0.0,
+      "search_bars_after_grab": 5
+    },
+
+    "zone": {
+      "use_wicks": true,
+      "max_age_bars": 120,
+      "extend_bars": 40
+    },
+
+    "grading": {
+      "account_size": 50000,
+      "risk_per_grade": { "A++": 500, "A+": 300, "A": 200, "B": 100 }
+    },
+
+    "poc": {
+      "indicator_name": "ChrisFX POC",
+      "lower_tf": "1",
+      "bins": 24,
+      "min_delta_ratio": 0.15
+    },
+
+    "targets": {
+      "rr_levels": [2, 3],
+      "use_opposing_liquidity": true
+    }
+  },
+
+  "notes": "chris branch: analysis is ChrisFX breaker-block methodology only (docs/CHRISFX.md). Every number under \"chris\" that the source PDF leaves undefined is marked as OUR calibration in the docs — tune, do not treat as gospel. User timezone: Europe/Athens."
+}

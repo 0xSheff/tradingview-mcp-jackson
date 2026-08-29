@@ -84,6 +84,19 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
+## ChrisFX Breaker Blocks (branch `chris`)
+
+This branch implements ChrisFX's graded breaker-block method. **On this branch, all analysis is ChrisFX-only — do not mix in CLS, EMA/RSI or the regular morning-brief reads.**
+
+- **Methodology source of truth:** `docs/CHRISFX.md` (breaker definition, the A++/A+/A/B grading table, the FVG gate, the footprint step). Read it before producing any ChrisFX analysis. Statements there are tagged **[SOURCE]** (the author's rule) or **[CALIBRATION]** (a number we chose because the source leaves it qualitative) — never present a calibration as the author's.
+- **Scan the watchlist:** `node src/cli/index.js chris brief --compact` — scans the `watchlists.json` `chris` list on 5m/15m and returns report-ready graded setups. Render per the `instruction` field in the output. Allow a generous timeout for a full live scan (5 symbols x 2 timeframes).
+- **Single symbol:** `node src/cli/index.js chris scan CME_MINI:MNQ1! --tf 5`
+- **Deep dive:** skill `skills/chris-analysis` — draw zone/FVG/invalidation on the chart, screenshot, write the plan.
+- **Config:** `chris` section in `rules.json` (tracked in git) overrides `CHRIS_DEFAULTS` in `src/core/chris.js`. Instruments come from `watchlists.json` (`chris` list).
+- **Tests:** `npm run test:chris` — the six schematics the author grades on slide 2 of his deck are fixtures asserted against his own labels. No TradingView needed.
+- **POC / footprint:** the author's execution step needs order flow, which TradingView does not expose here. `scripts/chrisfx_poc.pine` approximates it from lower-timeframe volume and publishes boxes that the scanner reads back. Whenever a POC level is used, say it is an approximation, **not** exchange bid/ask footprint.
+- **Targets are ours.** The source document defines entries and stops only. Label every target as our addition.
+
 ## Environment Notes
 
 This project runs on Linux (Ubuntu). It previously ran on Windows only; the Windows

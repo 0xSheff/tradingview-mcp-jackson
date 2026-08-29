@@ -78,6 +78,13 @@ describe('CLI — help and routing', () => {
     assert.ok(stdout.includes('--count'));
     assert.ok(stdout.includes('--summary'));
   });
+
+  it('chris brief --help shows the timeframe and compact options', () => {
+    const { stdout, exitCode } = run(['chris', 'brief', '--help']);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes('--compact'));
+    assert.ok(stdout.includes('--tf'));
+  });
 });
 
 describe('CLI — pine analyze (offline)', () => {
