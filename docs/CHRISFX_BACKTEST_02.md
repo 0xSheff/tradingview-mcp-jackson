@@ -257,3 +257,58 @@ What has *not* been ruled out, in rough order of promise:
 2. Other instruments and timeframes — this is one symbol.
 3. The footprint at full POC coverage (currently 32%).
 4. A news filter, which nothing here tests.
+
+
+---
+
+# Run 04 — how far setups actually run
+
+Rather than guess a better target than a fixed 3R, measure the **maximum
+favourable excursion** of every setup: how far it ran before its stop would
+have closed it. Because MFE is measured to the stop, `P(MFE >= X)` *is* the win
+rate a fixed X-R target would have produced.
+
+The resolution also improved: each 15m bar is now walked through its 1-minute
+sub-bars, so the order of stop vs target is read rather than assumed. The
+intrabar budget runs out on older history — 209 of 690 setups resolved that
+way, 449 still fall back to the pessimistic bar-level rule.
+
+## The excursion distribution — 690 resolved setups
+
+| reached | >=1R | >=2R | >=3R | >=5R | >=10R | >=15R | >=20R | avg |
+|---|---|---|---|---|---|---|---|---|
+| share | 68.6% | 42.9% | 31.3% | 18.1% | 8.8% | 6.4% | 4.5% | **4.19R** |
+
+**The tail is real.** Average excursion is 4.19R, and 8.8% of setups run 10R or
+more. On MNQ a fixed 3R does cut those off.
+
+## But cutting them off is correct
+
+Expectancy of a fixed target follows directly from the table:
+
+| target | win rate | expectancy |
+|---|---|---|
+| **1R** | 68.6% | **+0.372R** |
+| 2R | 42.9% | +0.287R |
+| 3R | 31.3% | +0.252R |
+| 5R | 18.1% | +0.086R |
+| 10R | 8.8% | −0.032R |
+| 20R | 4.5% | −0.055R |
+
+The probability of reaching a target falls faster than the payout rises, all
+the way down. **A fixed 3R is not too small — every larger target is worse, and
+every smaller one is better.** The 15R row (+0.024R) is bucket noise, not a
+reversal of the trend.
+
+That settles the question as posed, but it also points at the answer the
+question was reaching for: no *single* target can both bank the 68.6% that
+reach 1R and ride the 8.8% that reach 10R. A partial exit can. Banking half at
+1R and letting the rest run is the author's own approach, and this distribution
+is exactly the shape that rewards it — that is run 05.
+
+## Side effect of the intrabar fix
+
+The liquidity exit model improves from −0.27R to −0.04R once the order of stop
+and target is read rather than assumed. Its targets sit further away, so more
+bars contained both, and it was carrying most of the pessimism. The fixed-3R
+model barely moves (+0.06R to +0.05R).

@@ -195,6 +195,9 @@ var array<float> sTgtL  = array.new_float()   // liquidity target, na when skipp
 var array<int>   sBar   = array.new_int()
 var array<bool>  sOpen  = array.new_bool()
 var array<int>   sSess  = array.new_int()
+var array<float> sMfe   = array.new_float()   // best excursion so far, in R
+var array<bool>  sResF  = array.new_bool()    // fixed-RR track already scored
+var array<bool>  sResL  = array.new_bool()    // liquidity track already scored
 
 // tallies: [grade] and [grade] x [model]
 var array<int> nSetup = array.new_int(4, 0)
@@ -214,6 +217,20 @@ var int nPocMiss  = 0
 var int nSkipBias = 0
 var int nSkipPrem = 0
 
+// How far each setup actually ran before its stop would have been hit. This is
+// what says whether a fixed 3R target is leaving the tail on the table.
+var array<int>   mfeBucket = array.new_int(7, 0)   // >=1,2,3,5,10,15,20 R
+var array<float> mfeSum    = array.new_float(1, 0.0)
+var int nResolved = 0
+var int nSubBar   = 0   // resolved with 1-minute sub-bars
+var int nBarOnly  = 0   // fell back to bar-level, stop takes priority
+
+// 1-minute sub-bars of the current chart bar, so the order of stop vs target is
+// read rather than assumed. The intrabar budget runs out on older history, and
+// those bars fall back to the pessimistic bar-level rule - counted separately.
+subH = request.security_lower_tf(syminfo.tickerid, "1", high)
+subL = request.security_lower_tf(syminfo.tickerid, "1", low)
+
 // Sessions in exchange time. The claim under test is that a method with no
 // time filter leaks its edge in the illiquid overnight hours.
 var array<int>   nSetupS = array.new_int(3, 0)
@@ -230,7 +247,28 @@ bump(array<int> a, int i) => array.set(a, i, array.get(a, i) + 1)
 addf(array<float> a, int i, float v) => array.set(a, i, array.get(a, i) + v)
 
 // --- Resolve the live records ------------------------------------------------
+// A record lives until its STOP is hit (or maxHold), even after a target has
+// been scored, so the excursion is measured to its true extent. Each exit model
+// scores once, on first touch.
+bumpMfe(float r) =>
+    array.set(mfeSum, 0, array.get(mfeSum, 0) + r)
+    if r >= 1.0
+        array.set(mfeBucket, 0, array.get(mfeBucket, 0) + 1)
+    if r >= 2.0
+        array.set(mfeBucket, 1, array.get(mfeBucket, 1) + 1)
+    if r >= 3.0
+        array.set(mfeBucket, 2, array.get(mfeBucket, 2) + 1)
+    if r >= 5.0
+        array.set(mfeBucket, 3, array.get(mfeBucket, 3) + 1)
+    if r >= 10.0
+        array.set(mfeBucket, 4, array.get(mfeBucket, 4) + 1)
+    if r >= 15.0
+        array.set(mfeBucket, 5, array.get(mfeBucket, 5) + 1)
+    if r >= 20.0
+        array.set(mfeBucket, 6, array.get(mfeBucket, 6) + 1)
+
 if array.size(sGrade) > 0
+    int nSub = array.size(subH)
     for i = array.size(sGrade) - 1 to 0
         int   g  = array.get(sGrade, i)
         int   d  = array.get(sDir, i)
@@ -238,53 +276,115 @@ if array.size(sGrade) > 0
         float st = array.get(sStop, i)
         float tf = array.get(sTgtF, i)
         float tl = array.get(sTgtL, i)
-        bool  op = array.get(sOpen, i)
+        int   sv = array.get(sSess, i)
+        float rk = math.abs(en - st)
         int   ag = bar_index - array.get(sBar, i)
+        bool  op = array.get(sOpen, i)
+        bool  rf = array.get(sResF, i)
+        bool  rl = array.get(sResL, i)
+        float mf = array.get(sMfe, i)
+        bool  stopped = false
         bool  done = false
 
-        if not op
-            bool touched = d > 0 ? low <= en : high >= en
-            if touched
-                array.set(sOpen, i, true)
-                bump(nFill, g)
-                bump(nFillS, array.get(sSess, i))
-                op := true
-            else if ag > pendMaxBars
-                nNoEntry += 1
-                done := true
+        if nSub > 0
+            // walk the minute bars in order: the first of stop / target wins
+            for j = 0 to nSub - 1
+                if not stopped
+                    float hh = array.get(subH, j)
+                    float ll = array.get(subL, j)
+                    if not op
+                        if d > 0 ? ll <= en : hh >= en
+                            op := true
+                            bump(nFill, g)
+                            bump(nFillS, sv)
+                    if op
+                        float exc = (d > 0 ? hh - en : en - ll) / rk
+                        mf := math.max(mf, exc)
+                        bool hs = d > 0 ? ll <= st : hh >= st
+                        bool hf = d > 0 ? hh >= tf : ll <= tf
+                        bool hl = na(tl) ? false : (d > 0 ? hh >= tl : ll <= tl)
+                        if hf and not rf and not hs
+                            bump(winF, g)
+                            addf(sumRF, g, rrFixed)
+                            bump(winFS, sv)
+                            addf(sumRFS, sv, rrFixed)
+                            rf := true
+                        if hl and not rl and not hs
+                            bump(winL, g)
+                            addf(sumRL, g, math.abs(tl - en) / rk)
+                            rl := true
+                        if hs
+                            if not rf
+                                bump(lossF, g)
+                                addf(sumRF, g, -1.0)
+                                bump(lossFS, sv)
+                                addf(sumRFS, sv, -1.0)
+                                rf := true
+                            if not rl and not na(tl)
+                                bump(lossL, g)
+                                addf(sumRL, g, -1.0)
+                                rl := true
+                            stopped := true
+            if stopped
+                nSubBar += 1
+        else
+            // no intrabar data: the pessimistic reading, stop takes priority
+            if not op
+                if d > 0 ? low <= en : high >= en
+                    op := true
+                    bump(nFill, g)
+                    bump(nFillS, sv)
+            if op
+                float exc = (d > 0 ? high - en : en - low) / rk
+                mf := math.max(mf, exc)
+                bool hs = d > 0 ? low <= st : high >= st
+                bool hf = d > 0 ? high >= tf : low <= tf
+                bool hl = na(tl) ? false : (d > 0 ? high >= tl : low <= tl)
+                if hs and (hf or hl)
+                    nAmbig += 1
+                if hs or hf
+                    if not rf
+                        if hs
+                            bump(lossF, g)
+                            addf(sumRF, g, -1.0)
+                            bump(lossFS, sv)
+                            addf(sumRFS, sv, -1.0)
+                        else
+                            bump(winF, g)
+                            addf(sumRF, g, rrFixed)
+                            bump(winFS, sv)
+                            addf(sumRFS, sv, rrFixed)
+                        rf := true
+                if not na(tl) and (hs or hl)
+                    if not rl
+                        if hs
+                            bump(lossL, g)
+                            addf(sumRL, g, -1.0)
+                        else
+                            bump(winL, g)
+                            addf(sumRL, g, math.abs(tl - en) / rk)
+                        rl := true
+                if hs
+                    stopped := true
+                    nBarOnly += 1
 
-        if op and not done
-            bool hitStop = d > 0 ? low <= st : high >= st
-            bool hitF    = d > 0 ? high >= tf : low <= tf
-            bool hitL    = na(tl) ? false : (d > 0 ? high >= tl : low <= tl)
-            if hitStop and (hitF or hitL)
-                nAmbig += 1
-            // fixed-RR track
-            if hitStop or hitF
-                int sv = array.get(sSess, i)
-                if hitStop
-                    bump(lossF, g)
-                    addf(sumRF, g, -1.0)
-                    bump(lossFS, sv)
-                    addf(sumRFS, sv, -1.0)
-                else
-                    bump(winF, g)
-                    addf(sumRF, g, rrFixed)
-                    bump(winFS, sv)
-                    addf(sumRFS, sv, rrFixed)
-            // liquidity track
-            if not na(tl) and (hitStop or hitL)
-                if hitStop
-                    bump(lossL, g)
-                    addf(sumRL, g, -1.0)
-                else
-                    bump(winL, g)
-                    addf(sumRL, g, math.abs(tl - en) / math.abs(en - st))
-            if hitStop or hitF or (not na(tl) and hitL)
-                done := true
-            else if ag > maxHold
-                nOpenEnd += 1
-                done := true
+        if not op and ag > pendMaxBars
+            nNoEntry += 1
+            done := true
+        if stopped
+            done := true
+        else if op and ag > maxHold
+            nOpenEnd += 1
+            done := true
+
+        if done and op
+            nResolved += 1
+            bumpMfe(mf)
+
+        array.set(sOpen, i, op)
+        array.set(sResF, i, rf)
+        array.set(sResL, i, rl)
+        array.set(sMfe,  i, mf)
 
         if done
             array.remove(sGrade, i)
@@ -296,6 +396,9 @@ if array.size(sGrade) > 0
             array.remove(sBar,   i)
             array.remove(sOpen,  i)
             array.remove(sSess,  i)
+            array.remove(sMfe,   i)
+            array.remove(sResF,  i)
+            array.remove(sResL,  i)
 
 // --- Detect and record -------------------------------------------------------
 [gL, lvlL, zhL, zlL, invL, bL] = detectSetup(EVAL_OFFSET, true)
@@ -382,6 +485,9 @@ if barstate.isconfirmed
             array.push(sBar,   bar_index)
             array.push(sOpen,  false)
             array.push(sSess,  sess)
+            array.push(sMfe,   0.0)
+            array.push(sResF,  false)
+            array.push(sResL,  false)
 
 // --- Results -----------------------------------------------------------------
 pct(int w, int l) => (w + l) > 0 ? str.tostring(100.0 * w / (w + l), "#.0") + "%" : "-"
@@ -389,6 +495,7 @@ expc(float sum, int w, int l) => (w + l) > 0 ? str.tostring(sum / (w + l), "#.00
 
 var table res  = table.new(position.bottom_right, 8, 7, border_width = 1)
 var table sess = table.new(position.middle_right, 5, 5, border_width = 1)
+var table mfe  = table.new(position.bottom_left, 9, 3, border_width = 1)
 cell(int c, int r, string txt, color bg) =>
     table.cell(res, c, r, txt, text_color = color.white, bgcolor = bg, text_size = size.small)
 
@@ -458,6 +565,20 @@ if barstate.islastconfirmedhistory or barstate.islast
         table.cell(sess, 2, k + 1, str.tostring(array.get(nFillS, k)),  text_color = color.white, bgcolor = sbg, text_size = size.small)
         table.cell(sess, 3, k + 1, pct(array.get(winFS, k), array.get(lossFS, k)), text_color = color.white, bgcolor = sbg, text_size = size.small)
         table.cell(sess, 4, k + 1, expc(array.get(sumRFS, k), array.get(winFS, k), array.get(lossFS, k)), text_color = color.white, bgcolor = sbg, text_size = size.small)
+    // how far the setups actually ran, before the stop would have closed them
+    color mh = color.new(color.gray, 10)
+    color mv = color.new(color.purple, 40)
+    float mTot = math.max(1, nResolved)
+    table.cell(mfe, 0, 0, "excursion reached", text_color = color.white, bgcolor = mh, text_size = size.small)
+    table.cell(mfe, 0, 1, "share of setups",   text_color = color.white, bgcolor = mv, text_size = size.small)
+    for k = 0 to 6
+        string lab = k == 0 ? ">= 1R" : k == 1 ? ">= 2R" : k == 2 ? ">= 3R" : k == 3 ? ">= 5R" : k == 4 ? ">= 10R" : k == 5 ? ">= 15R" : ">= 20R"
+        table.cell(mfe, k + 1, 0, lab, text_color = color.white, bgcolor = mh, text_size = size.small)
+        table.cell(mfe, k + 1, 1, str.tostring(100.0 * array.get(mfeBucket, k) / mTot, "#.0") + "%", text_color = color.white, bgcolor = mv, text_size = size.small)
+    table.cell(mfe, 8, 0, "avg MFE", text_color = color.white, bgcolor = mh, text_size = size.small)
+    table.cell(mfe, 8, 1, str.tostring(array.get(mfeSum, 0) / mTot, "#.00") + "R", text_color = color.white, bgcolor = mv, text_size = size.small)
+    table.cell(mfe, 0, 2, "resolved " + str.tostring(nResolved) + " | 1m-resolved " + str.tostring(nSubBar) + " | bar-only " + str.tostring(nBarOnly),
+         text_color = color.white, bgcolor = color.new(color.gray, 40), text_size = size.small)
     cell(5, 6, "still open", nte)
     cell(6, 6, str.tostring(nOpenEnd), nte)
     cell(7, 6, "", nte)
