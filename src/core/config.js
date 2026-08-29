@@ -36,3 +36,39 @@ export function loadRules(rulesPath) {
         .join("\n"),
   );
 }
+
+/**
+ * Load a named section from watchlists.json (single source of truth for
+ * instrument lists). Defaults to the "primary" section.
+ */
+export function loadWatchlist(section = "primary", watchlistPath) {
+  const candidates = [
+    watchlistPath,
+    join(PROJECT_ROOT, "watchlists.json"),
+    join(homedir(), ".tradingview-mcp", "watchlists.json"),
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      let data;
+      try {
+        data = JSON.parse(readFileSync(p, "utf8"));
+      } catch (e) {
+        throw new Error(`Failed to parse watchlists.json at ${p}: ${e.message}`);
+      }
+      const list = data[section];
+      if (!Array.isArray(list)) {
+        throw new Error(
+          `watchlists.json at ${p} has no "${section}" array section.`,
+        );
+      }
+      return { watchlist: list, path: p };
+    }
+  }
+
+  throw new Error(
+    `No watchlists.json found. Add one with a "${section}" array of symbols.\n` +
+      "Looked in:\n" +
+      candidates.map((p) => `  - ${p}`).join("\n"),
+  );
+}
