@@ -107,10 +107,13 @@ it. Encoded per docs/CHRISFX.md §5.1 and applied to the same 740 setups.
 | **bias filter, 3R** | **51** | **30** | **40.0%** | **+0.60** |
 | bias filter, 2R | 51 | 30 | 43.3% | +0.30 |
 
-**The daily bias is the largest single effect we have measured** — a 15×
-improvement in expectancy, and the only change that moved the method off the
-breakeven line. It is also the one filter the author added *after* the deck,
-which is consistent with him having found the same problem.
+> ### Superseded — read run 03 below
+>
+> The +0.60R figure came from 30 fills produced by an encoding far stricter
+> than the author's. Once his actual everyday rule is used, the sample grows
+> tenfold and the effect disappears. The tables in this section are kept
+> because the comparison between them is the finding, not because the numbers
+> stand.
 
 By session, with the bias filter on and a 3R target:
 
@@ -184,3 +187,73 @@ until then, treat +0.60R as a promising signal, not a measured edge.
 5. The detection is the same code the strategy uses, guarded by
    `tests/chris_pine_shared.test.js`, and agrees with `src/core/chris.js` on the
    author's own six examples via `tests/chris_pine_parity.test.js`.
+
+
+---
+
+# Run 03 — the author's own bias rule, and a longer zone life
+
+Two corrections to run 02, both from the third transcript.
+
+## Zone lifetime
+
+The author extends a breaker and leaves it "at least four weeks, maybe two
+months". Run 02 abandoned an untouched entry after 30 bars and an open one
+after 200. Raised both to 500 (~4 weeks on 15m).
+
+| | Setups | Filled | win% | exp |
+|---|---|---|---|---|
+| run 02 (30/200 bars) | 740 | 539 | 26.0% | +0.04 |
+| **run 03 (500 bars)** | 740 | **692** | 26.6% | +0.06 |
+
+**153 setups were being thrown away by a timeout the method does not have.**
+The recovered ones perform like the rest, so the timeout was not hiding an
+edge — but the sample is now complete and faithful to the source.
+
+## The daily bias, measured properly
+
+`composite` — the everyday previous-day rule with a continuation call overridden
+by deeper liquidity (docs/CHRISFX.md §5.1–5.2), which is the encoding that
+reproduces his call on 3 Jan 2025.
+
+| Bias encoding | Setups | Filled | win% | **exp** |
+|---|---|---|---|---|
+| none | 740 | 692 | 26.6% | +0.06 |
+| fractal (run 02, strict) | 51 | 30 | 40.0% | +0.60 |
+| **composite (his actual rule)** | **360** | **336** | **25.2%** | **+0.01** |
+
+**The bias filter does not produce an edge.** His rule fires on roughly half of
+all setups — 336 fills against the fractal rule's 30 — and on that sample
+expectancy is +0.01R, indistinguishable from the +0.06R of taking everything.
+
+The run 02 result was a 30-fill sample. It is now superseded: with a sample ten
+times larger and the author's own rule rather than our stricter proxy, the
+"largest effect we have measured" is not there.
+
+By session, with the composite bias on:
+
+| Session | Setups | Filled | win% | exp |
+|---|---|---|---|---|
+| Asia / overnight | 134 | 129 | 26.0% | +0.04 |
+| London | 77 | 67 | 21.2% | −0.15 |
+| New York | 149 | 140 | 26.3% | +0.05 |
+
+The bias flattens the session spread rather than creating edge: New York
+recovers from −0.11R to +0.05R, Asia falls from +0.25R to +0.04R. Filtering by
+direction stops the worst session losing; it does not make any session pay.
+
+## Where that leaves the method
+
+On MNQ 15m over eleven months, with the detection validated against the
+author's own graded examples and the bias validated against his own worked
+trade, every configuration we have measured sits between −0.01R and +0.07R per
+setup. That is the breakeven line, not an edge.
+
+What has *not* been ruled out, in rough order of promise:
+
+1. **B keeps showing up.** 42.9% and +0.71R here, +0.65R in run 02 — the only
+   class that is consistently positive, and it is the author's weakest grade.
+   Still only ~20-40 fills, but it has survived every configuration change.
+2. Other instruments and timeframes — this is one symbol.
+3. The footprint at full POC coverage (currently 32%).
+4. A news filter, which nothing here tests.

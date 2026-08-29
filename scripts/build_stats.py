@@ -58,7 +58,7 @@ bodyRatioMin  = input.float(0.6,"Impulse: body / range >=",       minval = 0, ma
 instantMax    = input.int(3,    "Reversal is instant within (bars)", minval = 1, group = gDet)
 freshMax      = input.int(12,   "A vs B: level age <= (bars)",    minval = 1, group = gDet)
 zoneMaxAge    = input.int(120,  "Zone stays valid for (bars)",    minval = 5, group = gDet)
-pendMaxBars   = input.int(30,   "Give up on an untouched entry after (bars)", minval = 1, group = gDet)
+pendMaxBars   = input.int(500,  "Give up on an untouched entry after (bars)", minval = 1, maxval = 2000, group = gDet)
 
 // grades are all measured; these exist only so detectSetup can be shared verbatim
 tradeApp = true
@@ -71,7 +71,7 @@ rrFixed       = input.float(3.0, "Fixed RR target",  minval = 0.5, step = 0.5, g
 rrMin         = input.float(2.0, "Min RR for the liquidity target (else skip)", minval = 0.5, step = 0.5, group = gMeas)
 stopModel     = input.string("Beyond zone", "Stop placement",
                  options = ["Beyond zone", "Beyond invalidation"], group = gMeas)
-maxHold       = input.int(200,  "Give up on an open setup after (bars)", minval = 10, group = gMeas)
+maxHold       = input.int(500,  "Give up on an open setup after (bars)", minval = 10, maxval = 2000, group = gMeas)
 entryMode     = input.string("Zone edge", "Entry",
                  options = ["Zone edge", "POC (footprint)"], group = gMeas)
 fpTicks       = input.int(100,  "Footprint: ticks per row", minval = 1, group = gMeas)
@@ -80,8 +80,8 @@ fpVA          = input.int(70,   "Footprint: value area %",  minval = 1, maxval =
 gBias         = "Daily bias (video: HOLISTIC APPROACH NQ)"
 useBias       = input.bool(false, "Only trade with the daily bias", group = gBias)
 useDiscount   = input.bool(false, "Only trade the discount half of the developing day", group = gBias)
-biasMode      = input.string("fractal", "Which prior low counts as the liquidity",
-                 options = ["fractal", "swing"], group = gBias)
+biasMode      = input.string("composite", "Bias rule",
+                 options = ["composite", "prevday", "fractal", "swing"], group = gBias)
 biasLookback  = input.int(20,   "Daily fractals to scan", minval = 3, maxval = 60, group = gBias)
 biasSwingLb   = input.int(10,   "Swing lookback (swing mode)", minval = 2, maxval = 60, group = gBias)
 discountPct   = input.float(0.5, "Discount threshold of the daily range", minval = 0.1, maxval = 0.9, step = 0.05, group = gBias)
@@ -105,6 +105,33 @@ dailyBias(int lb, int swingLb, string mode) =>
     // ta.* must run on every bar, so both are evaluated before any branch
     float sLo = ta.lowest(low, swingLb)[2]
     float sHi = ta.highest(high, swingLb)[2]
+
+    // The everyday rule: classify yesterday against the PREVIOUS DAY's range.
+    // "carried" implements the inside bar, where the author keeps yesterday's
+    // read rather than going flat.
+    var int carried = 0
+    bool sweptHigh   = high[1] > high[2]
+    bool sweptLow    = low[1]  < low[2]
+    bool closedAbove = close[1] > high[2]
+    bool closedBelow = close[1] < low[2]
+    int  pd   = 0
+    bool cont = false
+    if not sweptHigh and not sweptLow
+        pd := carried
+    else if closedAbove
+        pd   := 1
+        cont := true
+    else if closedBelow
+        pd   := -1
+        cont := true
+    else if sweptHigh and sweptLow
+        pd := (high[1] - high[2]) >= (low[2] - low[1]) ? -1 : 1
+    else if sweptHigh
+        pd := -1
+    else
+        pd := 1
+    carried := pd
+
     if mode == "swing"
         // looser: the extreme of the prior N days rather than an untouched
         // fractal. Fires far more often; same call on the author's own example.
@@ -115,18 +142,27 @@ dailyBias(int lb, int swingLb, string mode) =>
     float rl = 1e20
     for f = 2 to lb
         bool isFrac = low[f] < low[f + 1] and low[f] < low[f - 1]
-        if isFrac and b == 0 and mode == "fractal"
+        if isFrac and b == 0 and (mode == "fractal" or mode == "composite")
             if low[1] < low[f] and close[1] > low[f] and rl >= low[f]
                 b := 1
         rl := math.min(rl, low[f])
     float rh = -1e20
     for f = 2 to lb
         bool isFrac = high[f] > high[f + 1] and high[f] > high[f - 1]
-        if isFrac and b == 0 and mode == "fractal"
+        if isFrac and b == 0 and (mode == "fractal" or mode == "composite")
             if high[1] > high[f] and close[1] < high[f] and rh <= high[f]
                 b := -1
         rh := math.max(rh, high[f])
-    b
+
+    // composite: the everyday rule decides, except that a continuation call is
+    // overridden by the deeper resting liquidity when the fractal read fires.
+    // That is the hierarchy the two videos imply — see docs/CHRISFX.md 5.2.
+    int outBias = b
+    if mode == "prevday"
+        outBias := pd
+    else if mode == "composite"
+        outBias := (cont and b != 0) ? b : pd
+    outBias
 
 bias = request.security(syminfo.tickerid, "D", dailyBias(biasLookback, biasSwingLb, biasMode), lookahead = barmerge.lookahead_off)
 // the developing daily candle, which is what premium/discount is measured from
