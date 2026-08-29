@@ -212,6 +212,11 @@ var int   nArmed   = 0
 var int   nSkipRR  = 0
 var int   nFilled  = 0
 var int   nExpired = 0
+var int   nBlown   = 0
+var int   nTimeout = 0
+var int   nTouched = 0
+var float pEntry   = na
+var bool  pTouch   = false
 
 // state transitions before anything new is armed
 if st == 1 and strategy.position_size != 0
@@ -220,11 +225,18 @@ if st == 1 and strategy.position_size != 0
 if st == 2 and strategy.position_size == 0
     st := 0
 if st == 1
+    if not pTouch
+        bool touch = pDir > 0 ? low <= pEntry : high >= pEntry
+        if touch
+            pTouch   := true
+            nTouched += 1
     bool blown   = pDir > 0 ? low <= pInval : high >= pInval
     bool expired = bar_index - pArmBar > pendMaxBars
     if blown or expired
         strategy.cancel("CFX")
         nExpired += 1
+        nBlown   += blown ? 1 : 0
+        nTimeout += (not blown and expired) ? 1 : 0
         st := 0
 
 // ─── Detect and arm ──────────────────────────────────────────────────────────
@@ -292,6 +304,8 @@ if st == 0 and barstate.isconfirmed
                     pInval  := inval
                     pDir    := isLong ? 1 : -1
                     pArmBar := bar_index
+                    pEntry  := entry
+                    pTouch  := false
                     nArmed  += 1
                     st      := 1
 
@@ -313,8 +327,8 @@ if strategy.position_size != 0
 // Zero trades can mean "no setups", "all skipped on RR" or "armed but never
 // filled". Without this tally those look identical in the Strategy Tester.
 showDiag = input.bool(true, "Show the diagnostic tally", group = gExec)
-var table diag = table.new(position.top_right, 2, 6, border_width = 1)
-if showDiag and barstate.islast
+var table diag = table.new(position.top_right, 2, 9, border_width = 1)
+if showDiag and (barstate.islastconfirmedhistory or barstate.islast)
     table.cell(diag, 0, 0, "detected",     text_color = color.white, bgcolor = color.new(color.gray, 20))
     table.cell(diag, 1, 0, str.tostring(nDetect),  text_color = color.white, bgcolor = color.new(color.gray, 20))
     table.cell(diag, 0, 1, "armed",        text_color = color.white, bgcolor = color.new(color.gray, 40))
@@ -327,3 +341,9 @@ if showDiag and barstate.islast
     table.cell(diag, 1, 4, str.tostring(nExpired), text_color = color.white, bgcolor = color.new(color.maroon, 40))
     table.cell(diag, 0, 5, "closed trades",text_color = color.white, bgcolor = color.new(color.gray, 40))
     table.cell(diag, 1, 5, str.tostring(strategy.closedtrades), text_color = color.white, bgcolor = color.new(color.gray, 40))
+    table.cell(diag, 0, 6, "  of which blown",   text_color = color.white, bgcolor = color.new(color.maroon, 60))
+    table.cell(diag, 1, 6, str.tostring(nBlown),   text_color = color.white, bgcolor = color.new(color.maroon, 60))
+    table.cell(diag, 0, 7, "  of which timeout", text_color = color.white, bgcolor = color.new(color.maroon, 60))
+    table.cell(diag, 1, 7, str.tostring(nTimeout), text_color = color.white, bgcolor = color.new(color.maroon, 60))
+    table.cell(diag, 0, 8, "entry level touched",text_color = color.white, bgcolor = color.new(color.blue, 40))
+    table.cell(diag, 1, 8, str.tostring(nTouched), text_color = color.white, bgcolor = color.new(color.blue, 40))
