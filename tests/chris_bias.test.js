@@ -16,7 +16,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { dailyBias, CHRIS_DEFAULTS } from "../src/core/chris.js";
+import { dailyBias, prevDayBias, CHRIS_DEFAULTS } from "../src/core/chris.js";
 
 // oldest → newest
 const NQ_DAILY = [
@@ -128,5 +128,71 @@ describe("Daily bias — mechanics", () => {
       close: priorHigh - 100,
     };
     assert.equal(dailyBias(bars, CHRIS_DEFAULTS).bias, 0);
+  });
+});
+
+const withMode = (mode) => ({ ...CHRIS_DEFAULTS, bias: { ...CHRIS_DEFAULTS.bias, mode } });
+
+describe("Daily bias — the everyday rule from the second video", () => {
+  it("classifies against the PREVIOUS DAY's range, not a deep level", () => {
+    // Thursday swept Wednesday's low but closed BELOW it, so the everyday rule
+    // reads continuation — the opposite of the call the author actually made.
+    const read = prevDayBias(upTo(THURSDAY));
+    assert.equal(read.bias, -1);
+    assert.equal(read.continuation, true);
+  });
+
+  it("an inside bar carries the previous bias forward", () => {
+    const bars = upTo(THURSDAY).slice();
+    const prev = bars[bars.length - 2];
+    bars[bars.length - 1] = {
+      ...bars[bars.length - 1],
+      high: prev.high - 10,
+      low: prev.low + 10,
+      close: prev.low + 50,
+    };
+    assert.equal(prevDayBias(bars, 1).bias, 1, "carries bullish");
+    assert.equal(prevDayBias(bars, -1).bias, -1, "carries bearish");
+  });
+
+  it("sweeping the high and closing back inside is bearish", () => {
+    const bars = upTo(THURSDAY).slice();
+    const prev = bars[bars.length - 2];
+    bars[bars.length - 1] = {
+      ...bars[bars.length - 1],
+      high: prev.high + 20,
+      low: prev.low + 5,
+      close: prev.high - 30,
+    };
+    const read = prevDayBias(bars);
+    assert.equal(read.bias, -1);
+    assert.ok(!read.continuation);
+  });
+});
+
+describe("Daily bias — composite reconciles the two videos", () => {
+  it("the everyday rule alone contradicts the author on his own example", () => {
+    assert.equal(dailyBias(upTo(THURSDAY), withMode("prevday")).bias, -1);
+  });
+
+  it("composite restores his bullish call via the deeper liquidity", () => {
+    const read = dailyBias(upTo(THURSDAY), withMode("composite"));
+    assert.equal(read.bias, 1, "bullish, as he called it");
+    assert.equal(read.level, 21006.5, "off the 20 Dec low");
+    assert.match(read.reason, /overridden by deeper liquidity/);
+  });
+
+  it("composite leaves a non-continuation call alone", () => {
+    const bars = upTo(THURSDAY).slice();
+    const prev = bars[bars.length - 2];
+    bars[bars.length - 1] = {
+      ...bars[bars.length - 1],
+      high: prev.high + 20,
+      low: prev.low + 5,
+      close: prev.high - 30,
+    };
+    const read = dailyBias(bars, withMode("composite"));
+    assert.equal(read.bias, -1);
+    assert.ok(!/overridden/.test(read.reason));
   });
 });

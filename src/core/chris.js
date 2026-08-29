@@ -458,7 +458,45 @@ export function detectBreakers(bars, cfg = CHRIS_DEFAULTS) {
  * Validated against the author's own worked example, 3 January 2025 on NQ,
  * in tests/chris_bias.test.js.
  */
-export function dailyBias(bars, cfg = CHRIS_DEFAULTS) {
+/**
+ * The everyday bias rule from the second video: classify yesterday's candle
+ * against the previous day's RANGE.
+ *
+ *   swept the high, closed body back inside   → the low gets taken   (bearish)
+ *   swept the low,  closed body back inside   → the high gets taken  (bullish)
+ *   closed body beyond the range              → continuation that way
+ *   inside bar                                → "the bias is the same": carry
+ *
+ * This fires on nearly every day, which is why the author always has a bias.
+ * `prevBias` is what yesterday's read produced, used only for the inside bar.
+ */
+export function prevDayBias(bars, prevBias = 0) {
+  if (!Array.isArray(bars) || bars.length < 2) return { bias: 0, rule: "not enough bars" };
+  const prev = bars[bars.length - 2];
+  const y = bars[bars.length - 1];
+
+  const sweptHigh = y.high > prev.high;
+  const sweptLow = y.low < prev.low;
+  const closedAbove = y.close > prev.high;
+  const closedBelow = y.close < prev.low;
+
+  if (!sweptHigh && !sweptLow) return { bias: prevBias, rule: "inside bar — bias carries" };
+  if (closedAbove) return { bias: 1, rule: "closed beyond the high — continuation", continuation: true };
+  if (closedBelow) return { bias: -1, rule: "closed beyond the low — continuation", continuation: true };
+  if (sweptHigh && sweptLow) {
+    // he does not cover the outside bar that closes inside; take the side that
+    // reached further, since that is the liquidity that was actually run
+    const overHigh = y.high - prev.high;
+    const overLow = prev.low - y.low;
+    return overHigh >= overLow
+      ? { bias: -1, rule: "outside bar, ran the high further" }
+      : { bias: 1, rule: "outside bar, ran the low further" };
+  }
+  if (sweptHigh) return { bias: -1, rule: "swept the high, closed back inside" };
+  return { bias: 1, rule: "swept the low, closed back inside" };
+}
+
+export function dailyBias(bars, cfg = CHRIS_DEFAULTS, opts = {}) {
   const c = { ...CHRIS_DEFAULTS.bias, ...(cfg.bias || {}) };
   const none = { bias: 0, level: null, mode: c.mode, reason: "no sweep-and-reclaim" };
   if (!Array.isArray(bars) || bars.length < 4) {
@@ -468,6 +506,23 @@ export function dailyBias(bars, cfg = CHRIS_DEFAULTS) {
   const prior = bars.slice(0, -1);
   const y = bars[bars.length - 1];
   const last = prior.length - 1;
+
+  if (c.mode === "prevday" || c.mode === "composite") {
+    const pd = prevDayBias(bars, opts.prevBias ?? 0);
+    // The videos disagree on 3 Jan 2025 and the disagreement is the hierarchy:
+    // when the close lands OUTSIDE the previous day's range the everyday rule
+    // calls continuation, but the author instead reads the range of the older
+    // week that holds the liquidity. That deeper level is what the fractal
+    // mode finds, so in composite mode it overrides a continuation call.
+    if (c.mode === "prevday" || !pd.continuation) {
+      return { bias: pd.bias, level: null, mode: c.mode, reason: pd.rule };
+    }
+    const deep = dailyBias(bars, { ...cfg, bias: { ...c, mode: "fractal" } });
+    if (deep.bias !== 0) {
+      return { ...deep, mode: c.mode, reason: `${pd.rule}, overridden by deeper liquidity: ${deep.reason}` };
+    }
+    return { bias: pd.bias, level: null, mode: c.mode, reason: pd.rule };
+  }
 
   const check = (level, side) =>
     side === "low" ? y.low < level && y.close > level : y.high > level && y.close < level;

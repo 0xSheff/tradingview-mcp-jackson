@@ -78,6 +78,13 @@ The **whole candle including its wicks** (high → low), extended to the right.
 
 - `zone.extend_bars` = 40, `zone.max_age_bars` = 120 **[CALIBRATION]**
 
+> **These are almost certainly far too short.** The author extends a breaker to
+> the right and leaves it "for at least four weeks, maybe even two months".
+> **[SOURCE 3]** On 15m, four weeks is roughly 500 bars against our 120, and the
+> stats indicator gives up on an untouched entry after 30. Runs 01 and 02 both
+> discarded ~200 setups on that timeout, so this is a live suspect for the next
+> calibration pass, not a cosmetic detail.
+
 ### 2.5 FVG confluence — the validity gate
 
 The zone must overlap, **totally or partially**, with a Fair Value Gap.
@@ -236,27 +243,50 @@ The video reframes the method: the breaker is unchanged, but it is only traded
 **with the daily bias**, and premium/discount is measured differently. This is
 the part the deck omits entirely.
 
-### 5.1 Establishing the bias
+### 5.1 Establishing the bias — the everyday rule
 
-Yesterday's daily candle grabs the liquidity of a prior low, then closes its
-**body back inside the range** → **bullish bias for today**, expecting the
-prior high to be taken. Mirrored for bearish. **[SOURCE 2]**
+Classify yesterday's daily candle against **the previous day's range**:
 
-In the worked example the close came back inside the range of a *weekly* block
-rather than the previous day's range, and the author counts that as valid — so
-the containment reference is a higher-timeframe range, not strictly the prior
-candle.
+| Yesterday did | Expect today | Bias |
+|---|---|---|
+| swept the high, closed body back **inside** | the low gets taken | bearish |
+| swept the low, closed body back **inside** | the high gets taken | bullish |
+| closed body **beyond** the range | continuation that way | same direction |
+| inside bar | "the bias is the same" | carry yesterday's |
 
-- `bias.lookback` = 20 daily fractals; we use the nearest still-untouched daily
-  fractal as "the prior low". **[CALIBRATION]** — our rule fires on only 51 of
-  740 setups, so it is far stricter than his; he has a bias nearly every day.
+**[SOURCE 3]** This fires on nearly every day, which is why he always has one.
+He states it holds "with mathematical accuracy" but does not say by how much
+the level will be taken — only that it will be.
 
-### 5.2 Two hard rules
+### 5.2 When the everyday rule is overridden
+
+The two videos **disagree on his own example**, and the disagreement is the
+hierarchy rather than a contradiction.
+
+On 3 Jan 2025 the close landed just *below* the previous day's low (21167.50
+against 21182), so the everyday rule reads continuation — bearish. He called it
+**bullish**, and says why: it did not close inside the previous day's range,
+but it did close inside the range of the **older week** that holds the
+liquidity — the 20 Dec low at 21006.50. **[SOURCE 2]**
+
+So: when the close falls outside the previous day's range, the deeper resting
+liquidity decides. `bias.mode` implements all three readings:
+
+- `"prevday"` — the everyday rule alone
+- `"fractal"` — the deeper level alone: the nearest still-untouched daily
+  fractal, swept and reclaimed
+- `"composite"` — the everyday rule, with a continuation call overridden by the
+  fractal read when it fires. **This is the one that reproduces his call**, and
+  `tests/chris_bias.test.js` holds it to that.
+
+`bias.lookback` = 20, `bias.swing_lookback` = 10 **[CALIBRATION]**
+
+### 5.3 Two hard rules
 
 1. **No bias, no trade.**
 2. **Never trade against the bias**, whatever the setup grade. **[SOURCE 2]**
 
-### 5.3 Premium and discount — from the developing daily candle
+### 5.4 Premium and discount — from the developing daily candle
 
 Measure from the low to the high of **today's candle as printed so far**, not
 from the last swing. A breaker sitting in the discount half (for longs) is
@@ -267,14 +297,14 @@ it is usually taught. **[SOURCE 2]**
 bullish bias holds. That low is the stop reference for the second entry.
 **[SOURCE 2]**
 
-### 5.4 Layered entries, wider stops
+### 5.5 Layered entries, wider stops
 
 First entry at the POC of the 5m breaker, stop below that breaker. If it fails,
 a second entry at the 15m breaker below it, stop below the developing daily
 low. He argues at length against tiny stops — on NQ a ~190-tick stop is small
 relative to how far the instrument travels. **[SOURCE 2]**
 
-### 5.5 Sessions — explicitly no filter
+### 5.6 Sessions — explicitly no filter
 
 The author states that opportunities appear in the Asian, London and New York
 sessions alike, and tells the viewer to disregard session dogma and trade
@@ -309,6 +339,12 @@ Carry these caveats into every report:
 - **[SOURCE]** — `tmp/BREAKER BLOCKS CHRISFX (2).pdf`, "BREAKER BLOCKS AND
   TRADING PLAN". Slide numbers cited inline above. Covers the breaker
   definition, the grading and the footprint entry.
+- **[SOURCE 3]** — video transcript supplied by the user, a week-by-week walk
+  through daily bias on NQ. Source of the everyday previous-day rule in §5.1,
+  the inside-bar carry, the four-weeks-to-two-months breaker lifetime, and a
+  confirmation of the fractal-strength-1 liquidity definition and the "no FVG,
+  no breaker block" gate. Note he also describes trading 1.3–1.5R here, against
+  "at least 2R" in SOURCE 2 — the two differ.
 - **[SOURCE 2]** — video, "HOLISTIC APPROACH NQ — Case Study"
   (`youtube.com/watch?v=4EM5OuMoH-k`), worked on MNQ for 3 January 2025.
   Transcript supplied by the user; adds the daily bias, the premium/discount

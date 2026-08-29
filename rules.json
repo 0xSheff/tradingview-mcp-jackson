@@ -53,7 +53,7 @@
     },
 
     "bias": {
-      "mode": "fractal",
+      "mode": "composite",
       "lookback": 20,
       "swing_lookback": 10
     }
