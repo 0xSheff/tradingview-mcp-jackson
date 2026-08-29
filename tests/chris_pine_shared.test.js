@@ -31,14 +31,15 @@ function sharedBlock(file) {
 }
 
 describe("Pine scripts — shared detection block", () => {
-  it("the strategy and the stats indicator carry an identical copy", () => {
+  it("every script carries an identical copy", () => {
     const strat = sharedBlock("chrisfx_strategy.pine");
-    const stats = sharedBlock("chrisfx_stats.pine");
-    assert.equal(
-      stats,
-      strat,
-      "the detection block has drifted — regenerate the stats indicator instead of editing it by hand",
-    );
+    for (const file of ["chrisfx_stats.pine", "chrisfx_levels.pine"]) {
+      assert.equal(
+        sharedBlock(file),
+        strat,
+        `the detection block in ${file} has drifted — regenerate it instead of editing it by hand`,
+      );
+    }
   });
 
   it("the block actually contains the detection, not just the sentinels", () => {
@@ -55,5 +56,11 @@ describe("Pine scripts — shared detection block", () => {
     assert.ok(/^strategy\(/m.test(strategy), "chrisfx_strategy.pine should declare strategy()");
     assert.ok(/^indicator\(/m.test(stats), "chrisfx_stats.pine should declare indicator()");
     assert.ok(!/^strategy\(/m.test(stats), "the stats script must not be a strategy");
+
+    const levels = readFileSync(join(ROOT, "scripts", "chrisfx_levels.pine"), "utf8");
+    assert.ok(/^indicator\(/m.test(levels), "chrisfx_levels.pine should declare indicator()");
+    assert.ok(!/^strategy\(/m.test(levels), "the levels script must not be a strategy");
+    // a viewing tool must not silently disagree with the measured configuration
+    assert.ok(!/request\.footprint/.test(levels), "levels should not need Premium-only data to draw");
   });
 });
