@@ -39,7 +39,8 @@ atrMult       = input.float(1.3,"Impulse: body >= ATR x",         minval = 0, st
 bodyRatioMin  = input.float(0.6,"Impulse: body / range >=",       minval = 0, maxval = 1, step = 0.05, group = gDet)
 instantMax    = input.int(3,    "Reversal is instant within (bars)", minval = 1, group = gDet)
 freshMax      = input.int(12,   "A vs B: level age <= (bars)",    minval = 1, group = gDet)
-zoneMaxAge    = input.int(120,  "Cancel a pending zone after (bars)", minval = 5, group = gDet)
+zoneMaxAge    = input.int(120,  "Zone stays valid for (bars)",     minval = 5, group = gDet)
+pendMaxBars   = input.int(30,   "Cancel an unfilled entry after (bars)", minval = 1, group = gDet)
 
 // ─── Which grades to trade ───────────────────────────────────────────────────
 gGrade        = "Grades"
@@ -60,6 +61,7 @@ stopModel     = input.string("Beyond zone", "Stop placement",
 riskMode      = input.string("Constant risk", "Position sizing",
                  options = ["Constant risk", "Grade risk", "Fixed 1 contract"], group = gExec)
 riskUsd       = input.float(500, "Risk per trade (constant mode)", minval = 1, group = gExec)
+wholeQty      = input.bool(true, "Round size to whole contracts (futures)", group = gExec)
 drawZones     = input.bool(true, "Draw armed zones", group = gExec)
 
 EVAL_OFFSET = fvgSearch + 1
@@ -205,17 +207,24 @@ var float pTgt     = na
 var float pInval   = na
 var int   pDir     = 0
 var int   pArmBar  = na
+var int   nDetect  = 0
+var int   nArmed   = 0
+var int   nSkipRR  = 0
+var int   nFilled  = 0
+var int   nExpired = 0
 
 // state transitions before anything new is armed
 if st == 1 and strategy.position_size != 0
+    nFilled += 1
     st := 2
 if st == 2 and strategy.position_size == 0
     st := 0
 if st == 1
     bool blown   = pDir > 0 ? low <= pInval : high >= pInval
-    bool expired = bar_index - pArmBar > zoneMaxAge
+    bool expired = bar_index - pArmBar > pendMaxBars
     if blown or expired
         strategy.cancel("CFX")
+        nExpired += 1
         st := 0
 
 // ─── Detect and arm ──────────────────────────────────────────────────────────
@@ -244,6 +253,7 @@ if st == 0 and barstate.isconfirmed
         inval  := invS
 
     if g >= 0
+        nDetect += 1
         float risk = isLong ? entry - stop : stop - entry
         if risk > 0
             float tgt = na
@@ -261,6 +271,10 @@ if st == 0 and barstate.isconfirmed
                     if rr >= rrMin
                         tgt := liq
                         ok  := true
+                    else
+                        nSkipRR += 1
+                else
+                    nSkipRR += 1
 
             if ok
                 float qty = 1.0
@@ -268,7 +282,7 @@ if st == 0 and barstate.isconfirmed
                     qty := riskUsd / (risk * syminfo.pointvalue)
                 else if riskMode == "Grade risk"
                     qty := gradeRisk(g) / (risk * syminfo.pointvalue)
-                qty := math.max(qty, 0.0)
+                qty := wholeQty ? math.max(1.0, math.floor(qty)) : math.max(qty, 0.0)
 
                 if qty > 0
                     strategy.entry("CFX", isLong ? strategy.long : strategy.short,
@@ -278,6 +292,7 @@ if st == 0 and barstate.isconfirmed
                     pInval  := inval
                     pDir    := isLong ? 1 : -1
                     pArmBar := bar_index
+                    nArmed  += 1
                     st      := 1
 
                     if drawZones
@@ -293,3 +308,22 @@ if st == 0 and barstate.isconfirmed
 // ─── Manage the open trade ───────────────────────────────────────────────────
 if strategy.position_size != 0
     strategy.exit("CFX-X", from_entry = "CFX", stop = pStop, limit = pTgt)
+
+// ─── Diagnostics ─────────────────────────────────────────────────────────────
+// Zero trades can mean "no setups", "all skipped on RR" or "armed but never
+// filled". Without this tally those look identical in the Strategy Tester.
+showDiag = input.bool(true, "Show the diagnostic tally", group = gExec)
+var table diag = table.new(position.top_right, 2, 6, border_width = 1)
+if showDiag and barstate.islast
+    table.cell(diag, 0, 0, "detected",     text_color = color.white, bgcolor = color.new(color.gray, 20))
+    table.cell(diag, 1, 0, str.tostring(nDetect),  text_color = color.white, bgcolor = color.new(color.gray, 20))
+    table.cell(diag, 0, 1, "armed",        text_color = color.white, bgcolor = color.new(color.gray, 40))
+    table.cell(diag, 1, 1, str.tostring(nArmed),   text_color = color.white, bgcolor = color.new(color.gray, 40))
+    table.cell(diag, 0, 2, "skipped (RR)", text_color = color.white, bgcolor = color.new(color.gray, 40))
+    table.cell(diag, 1, 2, str.tostring(nSkipRR),  text_color = color.white, bgcolor = color.new(color.gray, 40))
+    table.cell(diag, 0, 3, "filled",       text_color = color.white, bgcolor = color.new(color.teal, 40))
+    table.cell(diag, 1, 3, str.tostring(nFilled),  text_color = color.white, bgcolor = color.new(color.teal, 40))
+    table.cell(diag, 0, 4, "cancelled",    text_color = color.white, bgcolor = color.new(color.maroon, 40))
+    table.cell(diag, 1, 4, str.tostring(nExpired), text_color = color.white, bgcolor = color.new(color.maroon, 40))
+    table.cell(diag, 0, 5, "closed trades",text_color = color.white, bgcolor = color.new(color.gray, 40))
+    table.cell(diag, 1, 5, str.tostring(strategy.closedtrades), text_color = color.white, bgcolor = color.new(color.gray, 40))
