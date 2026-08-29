@@ -78,6 +78,7 @@ showDiag      = input.bool(true, "Show the diagnostic tally", group = gExec)
 
 EVAL_OFFSET = fvgSearch + 1
 
+// >>> SHARED DETECTION START
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // ta.atr() keeps internal state and must run on every bar, so it is evaluated
@@ -206,11 +207,12 @@ detectSetup(int E, bool bullish) =>
                 gradeIdx := age <= freshMax ? 2 : 3
             level := fLvl
 
-    [gradeIdx, level, zoneHigh, zoneLow, inval]
+    [gradeIdx, level, zoneHigh, zoneLow, inval, bIdx]
 
 gradeName(int g) => g == 0 ? "A++" : g == 1 ? "A+" : g == 2 ? "A" : g == 3 ? "B" : "-"
 gradeAllowed(int g) => g == 0 ? tradeApp : g == 1 ? tradeAp : g == 2 ? tradeA : g == 3 ? tradeB : false
 gradeRisk(int g) => g == 0 ? 500.0 : g == 1 ? 300.0 : g == 2 ? 200.0 : 100.0
+// <<< SHARED DETECTION END
 
 // --- Pending zones -----------------------------------------------------------
 // One slot per setup. The previous single-slot machine threw away 428 of 440
@@ -265,8 +267,8 @@ if array.size(zSeq) > 0
             array.remove(zSeq,   i)
 
 // --- Detect and arm ----------------------------------------------------------
-[gL, lvlL, zhL, zlL, invL] = detectSetup(EVAL_OFFSET, true)
-[gS, lvlS, zhS, zlS, invS] = detectSetup(EVAL_OFFSET, false)
+[gL, lvlL, zhL, zlL, invL, bL] = detectSetup(EVAL_OFFSET, true)
+[gS, lvlS, zhS, zlS, invS, bS] = detectSetup(EVAL_OFFSET, false)
 
 if barstate.isconfirmed
     int   g      = -1
