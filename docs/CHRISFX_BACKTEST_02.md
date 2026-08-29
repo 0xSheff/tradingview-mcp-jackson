@@ -67,6 +67,35 @@ an edge row can protrude past the breaker candle and get rejected; the clamp
 that fixes this is in `scripts/chrisfx_stats.pine` but the measurement above
 predates it. A run at full coverage is still owed.
 
+## By session — the same fills, sliced by when the setup appeared
+
+Buckets in exchange time (America/New_York): London 03:00–08:00, New York
+08:00–17:00, Asia/overnight everything else.
+
+| Session | Setups | Filled | 3R win% | **3R exp** |
+|---|---|---|---|---|
+| **Asia / overnight** | 301 | 223 | 30.0% | **+0.20** |
+| London | 154 | 121 | 24.6% | −0.02 |
+| New York | 285 | 195 | 22.4% | **−0.10** |
+
+**Time of day matters more than the grade does** — a spread of 0.30R between
+the best and worst session, against 0.66R between the best and worst grade on
+samples an order of magnitude smaller.
+
+But the direction is the opposite of the obvious prior: **Asia is the best
+session and New York the worst.** The intuition that this method needs a time
+filter is supported; "filter out Asia" is not.
+
+A plausible mechanism, offered as a hypothesis and not as a finding: the setup
+is a mean-reversion trade on a failed breakout. In quiet overnight ranges a
+sweep tends to revert, which is exactly what the breaker needs. In New York,
+displacement is real often enough that the "trap" simply keeps going and the
+breaker fails.
+
+This tests one of three ideas about context. A news-time filter and a
+higher-timeframe daily bias are **still untested** — the NY result is weakly
+consistent with news hurting, but that is not evidence.
+
 ## Caveats
 
 1. One symbol, one timeframe, eleven months.
