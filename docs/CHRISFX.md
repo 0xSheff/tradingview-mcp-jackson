@@ -172,15 +172,27 @@ high-delta / POC cell inside the breaker zone, extends them right, and enters
 from the edge of that POC cluster: **the highest POC for longs, the lowest POC
 for shorts**. **[SOURCE, slides 20–22, 34–35, 41]**
 
-> **Data limitation.** TradingView exposes no historical order flow to this
-> project — `src/core/data.js` gives OHLCV, quotes, DOM depth and Pine output,
-> nothing else. We approximate the footprint with `scripts/chrisfx_poc.pine`:
-> `request.security_lower_tf` pulls 1-minute bars inside each execution candle,
-> builds a volume-at-price histogram plus a signed up/down-volume delta per bin,
-> and publishes the POC bins as boxes that `data_get_pine_boxes` reads back.
-> This is **not** exchange bid/ask footprint — it is lower-timeframe volume with
-> direction inferred from each sub-bar's close. Treat POC levels as approximate
-> and say so in any report.
+There are two ways to get this data, and which one you have depends on the
+TradingView plan. Both publish boxes that `data_get_pine_boxes` reads back into
+`attachPocLevels()`, so **`src/core/chris.js` is identical either way** — only
+the Pine script differs.
+
+**Real footprint — Premium / Ultimate.** Since Pine v6 (January 2026),
+`request.footprint(ticksPerRow, valueAreaPercent)` exposes genuine order flow
+to scripts: `footprint.poc()`, `.vah()`, `.val()`, `.delta()`, `.rows()`, and
+per-row `volume_row.up_price()`, `.down_price()`, `.buy_volume()`,
+`.sell_volume()`, `.delta()`, `.has_buy_imbalance()`, `.has_sell_imbalance()`.
+That covers the author's step exactly — the real POC and the real imbalance
+cells he highlights, not a reconstruction. It returns `na` on plans below
+Premium, and on bars with no footprint data.
+
+**Approximation — every plan below Premium.** `scripts/chrisfx_poc.pine` uses
+`request.security_lower_tf` to pull 1-minute bars inside each execution candle,
+builds a volume-at-price histogram plus a signed up/down-volume delta per bin,
+and publishes the POC bins as boxes. The intrabar cap is 100K on all
+non-professional plans including the free one, so this works everywhere — but
+it is **not** exchange bid/ask footprint: direction is inferred from each
+sub-bar's close. Whenever a report uses these levels, say they are approximate.
 
 - `poc.lower_tf` = "1", `poc.bins` = 24, `poc.min_delta_ratio` = 0.15
   **[CALIBRATION]**

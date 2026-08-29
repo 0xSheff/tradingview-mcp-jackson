@@ -94,7 +94,7 @@ This branch implements ChrisFX's graded breaker-block method. **On this branch, 
 - **Deep dive:** skill `skills/chris-analysis` — draw zone/FVG/invalidation on the chart, screenshot, write the plan.
 - **Config:** `chris` section in `rules.json` (tracked in git) overrides `CHRIS_DEFAULTS` in `src/core/chris.js`. Instruments come from `watchlists.json` (`chris` list).
 - **Tests:** `npm run test:chris` — the six schematics the author grades on slide 2 of his deck are fixtures asserted against his own labels. No TradingView needed.
-- **POC / footprint:** the author's execution step needs order flow, which TradingView does not expose here. `scripts/chrisfx_poc.pine` approximates it from lower-timeframe volume and publishes boxes that the scanner reads back. Whenever a POC level is used, say it is an approximation, **not** exchange bid/ask footprint.
+- **POC / footprint:** the author's execution step needs order flow. On **Premium/Ultimate** Pine v6 exposes the real thing via `request.footprint()` (`footprint.poc()/.rows()`, `volume_row.up_price()/.delta()/.has_buy_imbalance()`) — verified to compile against this account. Below Premium it returns `na`, and `scripts/chrisfx_poc.pine` approximates it from lower-timeframe volume instead. Either way the script publishes boxes that `attachPocLevels()` reads back, so `src/core/chris.js` does not change. When the approximation is the source, say the POC is approximate, **not** exchange bid/ask footprint.
 - **Targets are ours.** The source document defines entries and stops only. Label every target as our addition.
 
 ## Environment Notes
