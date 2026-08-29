@@ -44,7 +44,7 @@ HEAD = '''//@version=6
 // target or the stop came first. When one bar contains both, the stop is
 // recorded (the pessimistic reading) and the ambiguity is counted separately.
 
-indicator("ChrisFX Stats", overlay = true, max_boxes_count = 100, max_labels_count = 100)
+indicator("ChrisFX Stats", overlay = true, max_boxes_count = 100, max_labels_count = 100, max_bars_back = 1000)
 
 // --- Detection inputs (mirror rules.json -> chris) ----------------------------
 gDet          = "Detection"
@@ -72,6 +72,11 @@ rrMin         = input.float(2.0, "Min RR for the liquidity target (else skip)", 
 stopModel     = input.string("Beyond zone", "Stop placement",
                  options = ["Beyond zone", "Beyond invalidation"], group = gMeas)
 maxHold       = input.int(500,  "Give up on an open setup after (bars)", minval = 10, maxval = 2000, group = gMeas)
+
+gConf         = "Daily confluence"
+confTol       = input.float(0.25, "Tolerance, as a share of the zone height", minval = 0, maxval = 2, step = 0.05, group = gConf)
+confLb        = input.int(30,   "Daily lookback for fractals / FVGs", minval = 5, maxval = 60, group = gConf)
+minConf       = input.int(0,    "Only take setups with at least N factors", minval = 0, maxval = 4, group = gConf)
 
 gPart         = "Partial exit model"
 partialAtR    = input.float(1.0,  "Bank a partial at (R)", minval = 0.25, step = 0.25, group = gPart)
@@ -175,6 +180,60 @@ bias = request.security(syminfo.tickerid, "D", dailyBias(biasLookback, biasSwing
 dHi  = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
 dLo  = request.security(syminfo.tickerid, "D", low,  lookahead = barmerge.lookahead_off)
 
+// --- Daily confluence --------------------------------------------------------
+// The thesis under test: a breaker sitting where several daily-timeframe levels
+// already agree should perform better than one sitting on its own. Rather than
+// assume it and filter, the score is recorded per setup and the results are
+// broken down by it, so the gradient is visible.
+dFractals(int lb) =>
+    float fl = na
+    float fh = na
+    float rl = 1e20
+    float rh = -1e20
+    for f = 1 to lb
+        if na(fl) and low[f] < low[f + 1] and low[f] < low[f - 1] and rl >= low[f]
+            fl := low[f]
+        if na(fh) and high[f] > high[f + 1] and high[f] > high[f - 1] and rh <= high[f]
+            fh := high[f]
+        rl := math.min(rl, low[f])
+        rh := math.max(rh, high[f])
+    [fl, fh]
+
+dFvg(int lb) =>
+    float gt = na
+    float gb = na
+    for k = 1 to lb
+        if na(gt)
+            if low[k] > high[k + 2]
+                gt := low[k]
+                gb := high[k + 2]
+            else if high[k] < low[k + 2]
+                gt := low[k + 2]
+                gb := high[k]
+    [gt, gb]
+
+[dFl, dFh] = request.security(syminfo.tickerid, "D", dFractals(confLb), lookahead = barmerge.lookahead_off)
+[dGt, dGb] = request.security(syminfo.tickerid, "D", dFvg(confLb),      lookahead = barmerge.lookahead_off)
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead = barmerge.lookahead_off)
+pwh = request.security(syminfo.tickerid, "W", high[1], lookahead = barmerge.lookahead_off)
+pwl = request.security(syminfo.tickerid, "W", low[1],  lookahead = barmerge.lookahead_off)
+
+confScore(float zHi, float zLo) =>
+    float pad = (zHi - zLo) * confTol
+    float lo  = zLo - pad
+    float hi  = zHi + pad
+    int n = 0
+    if (not na(pdh) and pdh >= lo and pdh <= hi) or (not na(pdl) and pdl >= lo and pdl <= hi)
+        n += 1
+    if (not na(pwh) and pwh >= lo and pwh <= hi) or (not na(pwl) and pwl >= lo and pwl <= hi)
+        n += 1
+    if (not na(dFl) and dFl >= lo and dFl <= hi) or (not na(dFh) and dFh >= lo and dFh <= hi)
+        n += 1
+    if not na(dGt) and not na(dGb) and math.min(hi, dGt) - math.max(lo, dGb) > 0
+        n += 1
+    n
+
 // --- Footprint entry ---------------------------------------------------------
 // request.footprint() is the author's actual execution step: the real POC of the
 // breaker candle, not a lower-timeframe reconstruction. It needs Premium or
@@ -206,6 +265,7 @@ var array<bool>  sResF  = array.new_bool()    // fixed-RR track already scored
 var array<bool>  sResL  = array.new_bool()    // liquidity track already scored
 var array<bool>  sResP  = array.new_bool()    // partial track already scored
 var array<bool>  sPart  = array.new_bool()    // partial already banked
+var array<int>   sConf  = array.new_int()     // daily confluence score, 0-4
 
 // tallies: [grade] and [grade] x [model]
 var array<int> nSetup = array.new_int(4, 0)
@@ -218,6 +278,13 @@ var array<int> skipL  = array.new_int(4, 0)
 var array<int> winP   = array.new_int(4, 0)
 var array<int> lossP  = array.new_int(4, 0)
 var array<float> sumRP = array.new_float(4, 0.0)
+var array<int>   nSetupC = array.new_int(5, 0)
+var array<int>   nFillC  = array.new_int(5, 0)
+var array<int>   winC    = array.new_int(5, 0)
+var array<int>   lossC   = array.new_int(5, 0)
+var array<float> sumRC   = array.new_float(5, 0.0)
+var int nSkipConf = 0
+
 var int nRunner  = 0   // partial banked AND the runner target reached
 var int nScratch = 0   // partial banked, rest closed at breakeven
 var int nFullLoss = 0  // stopped before the partial
@@ -298,6 +365,7 @@ if array.size(sGrade) > 0
         bool  rl = array.get(sResL, i)
         bool  rp = array.get(sResP, i)
         bool  pk = array.get(sPart, i)
+        int   cf = array.get(sConf, i)
         float mf = array.get(sMfe, i)
         bool  stopped = false
         bool  done = false
@@ -313,6 +381,7 @@ if array.size(sGrade) > 0
                             op := true
                             bump(nFill, g)
                             bump(nFillS, sv)
+                            bump(nFillC, cf)
                     if op
                         float exc = (d > 0 ? hh - en : en - ll) / rk
                         mf := math.max(mf, exc)
@@ -324,6 +393,8 @@ if array.size(sGrade) > 0
                             addf(sumRF, g, rrFixed)
                             bump(winFS, sv)
                             addf(sumRFS, sv, rrFixed)
+                            bump(winC, cf)
+                            addf(sumRC, cf, rrFixed)
                             rf := true
                         if hl and not rl and not hs
                             bump(winL, g)
@@ -364,6 +435,8 @@ if array.size(sGrade) > 0
                                 addf(sumRF, g, -1.0)
                                 bump(lossFS, sv)
                                 addf(sumRFS, sv, -1.0)
+                                bump(lossC, cf)
+                                addf(sumRC, cf, -1.0)
                                 rf := true
                             if not rl and not na(tl)
                                 bump(lossL, g)
@@ -379,6 +452,7 @@ if array.size(sGrade) > 0
                     op := true
                     bump(nFill, g)
                     bump(nFillS, sv)
+                    bump(nFillC, cf)
             if op
                 float exc = (d > 0 ? high - en : en - low) / rk
                 mf := math.max(mf, exc)
@@ -394,11 +468,15 @@ if array.size(sGrade) > 0
                             addf(sumRF, g, -1.0)
                             bump(lossFS, sv)
                             addf(sumRFS, sv, -1.0)
+                            bump(lossC, cf)
+                            addf(sumRC, cf, -1.0)
                         else
                             bump(winF, g)
                             addf(sumRF, g, rrFixed)
                             bump(winFS, sv)
                             addf(sumRFS, sv, rrFixed)
+                            bump(winC, cf)
+                            addf(sumRC, cf, rrFixed)
                         rf := true
                 if not na(tl) and (hs or hl)
                     if not rl
@@ -475,6 +553,7 @@ if array.size(sGrade) > 0
             array.remove(sResL,  i)
             array.remove(sResP,  i)
             array.remove(sPart,  i)
+            array.remove(sConf,  i)
 
 // --- Detect and record -------------------------------------------------------
 [gL, lvlL, zhL, zlL, invL, bL] = detectSetup(EVAL_OFFSET, true)
@@ -515,8 +594,14 @@ if barstate.isconfirmed
             g := -1
             nSkipPrem += 1
 
+    int conf = g >= 0 ? confScore(zHi, zLo) : 0
+    if g >= 0 and conf < minConf
+        g := -1
+        nSkipConf += 1
+
     if g >= 0
         bump(nSetup, g)
+        bump(nSetupC, conf)
         int sess = sessionOf(time)
         bump(nSetupS, sess)
         float entry = isLong ? zHi : zLo
@@ -566,6 +651,7 @@ if barstate.isconfirmed
             array.push(sResL,  false)
             array.push(sResP,  false)
             array.push(sPart,  false)
+            array.push(sConf,  conf)
 
 // --- Results -----------------------------------------------------------------
 pct(int w, int l) => (w + l) > 0 ? str.tostring(100.0 * w / (w + l), "#.0") + "%" : "-"
@@ -574,6 +660,7 @@ expc(float sum, int w, int l) => (w + l) > 0 ? str.tostring(sum / (w + l), "#.00
 var table res  = table.new(position.bottom_right, 10, 7, border_width = 1)
 var table sess = table.new(position.middle_right, 5, 5, border_width = 1)
 var table mfe  = table.new(position.bottom_left, 9, 3, border_width = 1)
+var table conf = table.new(position.top_left, 6, 6, border_width = 1)
 cell(int c, int r, string txt, color bg) =>
     table.cell(res, c, r, txt, text_color = color.white, bgcolor = bg, text_size = size.small)
 
@@ -673,6 +760,22 @@ if barstate.islastconfirmedhistory or barstate.islast
     cell(5, 6, "still open", nte)
     cell(6, 6, str.tostring(nOpenEnd), nte)
     cell(7, 6, "", nte)
+    // does expectancy actually rise with the number of daily factors?
+    color ch = color.new(color.gray, 10)
+    table.cell(conf, 0, 0, "daily factors", text_color = color.white, bgcolor = ch, text_size = size.small)
+    table.cell(conf, 1, 0, "setups",  text_color = color.white, bgcolor = ch, text_size = size.small)
+    table.cell(conf, 2, 0, "filled",  text_color = color.white, bgcolor = ch, text_size = size.small)
+    table.cell(conf, 3, 0, "win%",    text_color = color.white, bgcolor = ch, text_size = size.small)
+    table.cell(conf, 4, 0, "exp",     text_color = color.white, bgcolor = ch, text_size = size.small)
+    table.cell(conf, 5, 0, "skipped", text_color = color.white, bgcolor = ch, text_size = size.small)
+    for k = 0 to 4
+        color cbg = color.new(color.navy, 60 - k * 10)
+        table.cell(conf, 0, k + 1, str.tostring(k), text_color = color.white, bgcolor = cbg, text_size = size.small)
+        table.cell(conf, 1, k + 1, str.tostring(array.get(nSetupC, k)), text_color = color.white, bgcolor = cbg, text_size = size.small)
+        table.cell(conf, 2, k + 1, str.tostring(array.get(nFillC, k)),  text_color = color.white, bgcolor = cbg, text_size = size.small)
+        table.cell(conf, 3, k + 1, pct(array.get(winC, k), array.get(lossC, k)), text_color = color.white, bgcolor = cbg, text_size = size.small)
+        table.cell(conf, 4, k + 1, expc(array.get(sumRC, k), array.get(winC, k), array.get(lossC, k)), text_color = color.white, bgcolor = cbg, text_size = size.small)
+        table.cell(conf, 5, k + 1, k == 0 ? str.tostring(nSkipConf) : "", text_color = color.white, bgcolor = cbg, text_size = size.small)
     cell(8, 6, "runner/scratch/loss", nte)
     cell(9, 6, str.tostring(nRunner) + "/" + str.tostring(nScratch) + "/" + str.tostring(nFullLoss), nte)
 '''

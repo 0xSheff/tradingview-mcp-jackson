@@ -372,3 +372,46 @@ line. Taking 1R quickly is what this edge, such as it is, actually looks like.
 
 That is also the closest thing to what the author describes doing: in the third
 transcript he says he mostly books 1.3–1.5R rather than chasing 2R.
+
+
+---
+
+# Run 06 — daily-level confluence
+
+The thesis: a breaker sitting where several daily-timeframe levels already agree
+should outperform one sitting on its own. Rather than assume it and filter, each
+setup is scored 0–4 and the results are broken down by score, so the gradient is
+visible or absent on its own terms.
+
+Factors, all from the daily timeframe, each counting once: the previous day's
+high or low; the previous week's high or low; the nearest still-untouched daily
+fractal; a daily FVG overlapping the zone. A factor counts when it falls inside
+the breaker zone padded by `confTol` zone-heights.
+
+| Factors | Setups | Filled | win% | exp | | Setups | Filled | win% | exp |
+|---|---|---|---|---|---|---|---|---|---|
+| | *tol 0.25* | | | | | *tol 1.00* | | | |
+| 0 | 563 | 524 | 26.7% | +0.07 | | 457 | 425 | 26.4% | +0.05 |
+| 1 | 145 | 137 | 24.1% | −0.04 | | 200 | 187 | 26.2% | +0.05 |
+| 2 | 30 | 29 | 27.6% | +0.10 | | 72 | 69 | 21.7% | −0.13 |
+| 3 | 2 | 2 | 0.0% | −1.00 | | 11 | 11 | 45.5% | +0.82 |
+| 4 | 0 | — | — | — | | 0 | — | — | — |
+
+**No gradient.** At the wider tolerance, zero factors and one factor are
+identical (+0.05R each), two factors is worse (−0.13R), and three factors looks
+excellent (+0.82R on **eleven** trades).
+
+That last cell is the whole problem. It is the third time in this project a
+large effect has appeared on a sample of 4 to 30 — A++ at +1.00R on 4 fills, the
+strict bias rule at +0.60R on 30 fills — and both earlier ones evaporated when
+the sample grew. There is no reason to treat this one differently.
+
+**The thesis is not supported, and it is also not refuted.** It lives entirely
+in the 3–4 factor bucket, which never reaches a testable size on one instrument
+over eleven months: 11 setups at the loose tolerance, 2 at the tight one, and
+zero setups ever score 4.
+
+Testing it properly needs the high-confluence bucket to reach a few hundred
+observations, which means many instruments and much more history — not a
+different filter definition. Until then, `minConf` exists in the script but
+should be left at 0.
