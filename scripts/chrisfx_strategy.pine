@@ -15,13 +15,21 @@
 //
 // Bar Magnifier is on: entry and stop often sit inside the same bar, so the
 // broker emulator must not guess the intrabar path. Requires Premium+.
+//
+// margin_long/short are set deliberately. Pine defaults them to 0, which means
+// "no leverage" — the emulator then demands the full notional of a position.
+// One MNQ contract is ~59k of notional, so on a 50k account EVERY order was
+// silently rejected and the backtest closed zero trades. 4% is roughly the
+// real CME margin for the micro index futures this is traded on.
 
 strategy("ChrisFX Breaker Blocks",
      overlay             = true,
      initial_capital     = 50000,
      default_qty_type    = strategy.fixed,
      default_qty_value   = 1,
-     pyramiding          = 0,
+     pyramiding          = 100,
+     margin_long         = 4,
+     margin_short        = 4,
      use_bar_magnifier   = true,
      calc_on_order_fills = false,
      max_bars_back       = 500,
@@ -62,7 +70,11 @@ riskMode      = input.string("Constant risk", "Position sizing",
                  options = ["Constant risk", "Grade risk", "Fixed 1 contract"], group = gExec)
 riskUsd       = input.float(500, "Risk per trade (constant mode)", minval = 1, group = gExec)
 wholeQty      = input.bool(true, "Round size to whole contracts (futures)", group = gExec)
+maxContracts  = input.int(10,   "Max contracts per trade", minval = 1, group = gExec)
+dirMode       = input.string("Both", "Directions",
+                 options = ["Both", "Longs only", "Shorts only"], group = gExec)
 drawZones     = input.bool(true, "Draw armed zones", group = gExec)
+showDiag      = input.bool(true, "Show the diagnostic tally", group = gExec)
 
 EVAL_OFFSET = fvgSearch + 1
 
@@ -200,64 +212,77 @@ gradeName(int g) => g == 0 ? "A++" : g == 1 ? "A+" : g == 2 ? "A" : g == 3 ? "B"
 gradeAllowed(int g) => g == 0 ? tradeApp : g == 1 ? tradeAp : g == 2 ? tradeA : g == 3 ? tradeB : false
 gradeRisk(int g) => g == 0 ? 500.0 : g == 1 ? 300.0 : g == 2 ? 200.0 : 100.0
 
-// ─── State ───────────────────────────────────────────────────────────────────
-var int   st       = 0        // 0 idle, 1 pending entry, 2 in trade
-var float pStop    = na
-var float pTgt     = na
-var float pInval   = na
-var int   pDir     = 0
-var int   pArmBar  = na
-var int   nDetect  = 0
-var int   nArmed   = 0
-var int   nSkipRR  = 0
-var int   nFilled  = 0
-var int   nExpired = 0
-var int   nBlown   = 0
-var int   nTimeout = 0
-var int   nTouched = 0
-var float pEntry   = na
-var bool  pTouch   = false
+// --- Pending zones -----------------------------------------------------------
+// One slot per setup. The previous single-slot machine threw away 428 of 440
+// detections, which measured the queue rather than the method.
+var array<float> zEntry = array.new_float()
+var array<float> zStop  = array.new_float()
+var array<float> zTgt   = array.new_float()
+var array<float> zInval = array.new_float()
+var array<int>   zDir   = array.new_int()
+var array<int>   zBar   = array.new_int()
+var array<int>   zSeq   = array.new_int()
 
-// state transitions before anything new is armed
-if st == 1 and strategy.position_size != 0
-    nFilled += 1
-    st := 2
-if st == 2 and strategy.position_size == 0
-    st := 0
-if st == 1
-    if not pTouch
-        bool touch = pDir > 0 ? low <= pEntry : high >= pEntry
-        if touch
-            pTouch   := true
-            nTouched += 1
-    bool blown   = pDir > 0 ? low <= pInval : high >= pInval
-    bool expired = bar_index - pArmBar > pendMaxBars
-    if blown or expired
-        strategy.cancel("CFX")
-        nExpired += 1
-        nBlown   += blown ? 1 : 0
-        nTimeout += (not blown and expired) ? 1 : 0
-        st := 0
+var int seq      = 0
+var int nDetect  = 0
+var int nArmed   = 0
+var int nSkipRR  = 0
+var int nFilled  = 0
+var int nBlown   = 0
+var int nTimeout = 0
+var int nCapped  = 0
+var int nOpposed = 0
 
-// ─── Detect and arm ──────────────────────────────────────────────────────────
+orderId(int n) => "CFX" + str.tostring(n)
+
+var table diag = table.new(position.top_right, 2, 10, border_width = 1)
+
+// --- Manage the pending zones ------------------------------------------------
+// The entry sits between price and the invalidation, so a bar that reaches the
+// invalidation must have crossed the entry first. Check the fill before the
+// kill, in that order.
+if array.size(zSeq) > 0
+    for i = array.size(zSeq) - 1 to 0
+        int   d  = array.get(zDir, i)
+        float en = array.get(zEntry, i)
+        float iv = array.get(zInval, i)
+        bool  filled  = d > 0 ? low <= en : high >= en
+        bool  blown   = d > 0 ? low <= iv : high >= iv
+        bool  expired = bar_index - array.get(zBar, i) > pendMaxBars
+        if filled or blown or expired
+            if filled
+                nFilled += 1
+            else
+                strategy.cancel(orderId(array.get(zSeq, i)))
+                nBlown   += blown ? 1 : 0
+                nTimeout += (not blown and expired) ? 1 : 0
+            array.remove(zEntry, i)
+            array.remove(zStop,  i)
+            array.remove(zTgt,   i)
+            array.remove(zInval, i)
+            array.remove(zDir,   i)
+            array.remove(zBar,   i)
+            array.remove(zSeq,   i)
+
+// --- Detect and arm ----------------------------------------------------------
 [gL, lvlL, zhL, zlL, invL] = detectSetup(EVAL_OFFSET, true)
 [gS, lvlS, zhS, zlS, invS] = detectSetup(EVAL_OFFSET, false)
 
-if st == 0 and barstate.isconfirmed
-    int   g     = -1
+if barstate.isconfirmed
+    int   g      = -1
     bool  isLong = false
-    float entry = na
-    float stop  = na
-    float inval = na
+    float entry  = na
+    float stop   = na
+    float inval  = na
 
     // a long needs price to have left the zone upward, so it can retrace into it
-    if gL >= 0 and gradeAllowed(gL) and close > zhL
+    if gL >= 0 and gradeAllowed(gL) and close > zhL and dirMode != "Shorts only"
         g      := gL
         isLong := true
         entry  := zhL
         stop   := stopModel == "Beyond zone" ? zlL : invL
         inval  := invL
-    else if gS >= 0 and gradeAllowed(gS) and close < zlS
+    else if gS >= 0 and gradeAllowed(gS) and close < zlS and dirMode != "Longs only"
         g      := gS
         isLong := false
         entry  := zlS
@@ -266,84 +291,90 @@ if st == 0 and barstate.isconfirmed
 
     if g >= 0
         nDetect += 1
-        float risk = isLong ? entry - stop : stop - entry
-        if risk > 0
-            float tgt = na
-            bool  ok  = false
+        // Pine nets positions and cannot hold a long and a short at once, so an
+        // opposite setup would silently reverse the open trade instead of
+        // standing on its own. Skip and count it rather than corrupt both.
+        bool opposed = (isLong and strategy.position_size < 0) or (not isLong and strategy.position_size > 0)
+        if opposed
+            nOpposed += 1
+        else
+            float risk = isLong ? entry - stop : stop - entry
+            if risk > 0
+                float tgt = na
+                bool  ok  = false
 
-            if exitModel == "Fixed RR"
-                tgt := isLong ? entry + risk * rrFixed : entry - risk * rrFixed
-                ok  := true
-            else
-                float liq = nearestOpposing(isLong, entry)
-                if not na(liq)
-                    float rr = (isLong ? liq - entry : entry - liq) / risk
-                    // the user's rule: too close to be worth 1:rrMin -> skip it,
-                    // do not stretch the target out to rrMin
-                    if rr >= rrMin
-                        tgt := liq
-                        ok  := true
+                if exitModel == "Fixed RR"
+                    tgt := isLong ? entry + risk * rrFixed : entry - risk * rrFixed
+                    ok  := true
+                else
+                    float liq = nearestOpposing(isLong, entry)
+                    if not na(liq)
+                        float rr = (isLong ? liq - entry : entry - liq) / risk
+                        // too close to be worth 1:rrMin -> skip the trade rather
+                        // than stretch the target out to rrMin
+                        if rr >= rrMin
+                            tgt := liq
+                            ok  := true
+                        else
+                            nSkipRR += 1
                     else
                         nSkipRR += 1
-                else
-                    nSkipRR += 1
 
-            if ok
-                float qty = 1.0
-                if riskMode == "Constant risk"
-                    qty := riskUsd / (risk * syminfo.pointvalue)
-                else if riskMode == "Grade risk"
-                    qty := gradeRisk(g) / (risk * syminfo.pointvalue)
-                qty := wholeQty ? math.max(1.0, math.floor(qty)) : math.max(qty, 0.0)
+                if ok
+                    float want = 1.0
+                    if riskMode == "Constant risk"
+                        want := riskUsd / (risk * syminfo.pointvalue)
+                    else if riskMode == "Grade risk"
+                        want := gradeRisk(g) / (risk * syminfo.pointvalue)
+                    if wholeQty
+                        want := math.floor(want)
+                    // A narrow zone asks for hundreds of contracts, which the
+                    // broker emulator drops without an error. Cap it, and count
+                    // how often the cap binds since that breaks R-normalisation.
+                    float qty = math.max(1.0, math.min(want, maxContracts))
+                    if want > maxContracts
+                        nCapped += 1
 
-                if qty > 0
-                    strategy.entry("CFX", isLong ? strategy.long : strategy.short,
-                         qty = qty, limit = entry, comment = gradeName(g))
-                    pStop   := stop
-                    pTgt    := tgt
-                    pInval  := inval
-                    pDir    := isLong ? 1 : -1
-                    pArmBar := bar_index
-                    pEntry  := entry
-                    pTouch  := false
-                    nArmed  += 1
-                    st      := 1
+                    seq += 1
+                    string oid = orderId(seq)
+                    strategy.entry(oid, isLong ? strategy.long : strategy.short, qty = qty, limit = entry, comment = gradeName(g))
+                    // the bracket attaches when the entry fills
+                    strategy.exit(oid + "x", from_entry = oid, stop = stop, limit = tgt)
+
+                    array.push(zEntry, entry)
+                    array.push(zStop,  stop)
+                    array.push(zTgt,   tgt)
+                    array.push(zInval, inval)
+                    array.push(zDir,   isLong ? 1 : -1)
+                    array.push(zBar,   bar_index)
+                    array.push(zSeq,   seq)
+                    nArmed += 1
 
                     if drawZones
-                        box.new(bar_index - EVAL_OFFSET, isLong ? zhL : zhS,
-                             bar_index + 20, isLong ? zlL : zlS,
-                             border_color = isLong ? color.teal : color.maroon,
-                             bgcolor = color.new(isLong ? color.teal : color.maroon, 85))
-                        label.new(bar_index, isLong ? zhL : zlS, gradeName(g),
-                             style = isLong ? label.style_label_up : label.style_label_down,
-                             color = color.new(color.gray, 30), textcolor = color.white,
-                             size = size.small)
+                        box.new(bar_index - EVAL_OFFSET, isLong ? zhL : zhS, bar_index + 20, isLong ? zlL : zlS, border_color = isLong ? color.teal : color.maroon, bgcolor = color.new(isLong ? color.teal : color.maroon, 85))
+                        label.new(bar_index, isLong ? zhL : zlS, gradeName(g), style = isLong ? label.style_label_up : label.style_label_down, color = color.new(color.gray, 30), textcolor = color.white, size = size.small)
 
-// ─── Manage the open trade ───────────────────────────────────────────────────
-if strategy.position_size != 0
-    strategy.exit("CFX-X", from_entry = "CFX", stop = pStop, limit = pTgt)
-
-// ─── Diagnostics ─────────────────────────────────────────────────────────────
-// Zero trades can mean "no setups", "all skipped on RR" or "armed but never
-// filled". Without this tally those look identical in the Strategy Tester.
-showDiag = input.bool(true, "Show the diagnostic tally", group = gExec)
-var table diag = table.new(position.top_right, 2, 9, border_width = 1)
+// --- Diagnostics -------------------------------------------------------------
+// Zero trades can mean "nothing detected", "all skipped on RR", "armed but
+// never filled" or "sized out". Without this tally those look identical.
 if showDiag and (barstate.islastconfirmedhistory or barstate.islast)
-    table.cell(diag, 0, 0, "detected",     text_color = color.white, bgcolor = color.new(color.gray, 20))
-    table.cell(diag, 1, 0, str.tostring(nDetect),  text_color = color.white, bgcolor = color.new(color.gray, 20))
-    table.cell(diag, 0, 1, "armed",        text_color = color.white, bgcolor = color.new(color.gray, 40))
-    table.cell(diag, 1, 1, str.tostring(nArmed),   text_color = color.white, bgcolor = color.new(color.gray, 40))
-    table.cell(diag, 0, 2, "skipped (RR)", text_color = color.white, bgcolor = color.new(color.gray, 40))
-    table.cell(diag, 1, 2, str.tostring(nSkipRR),  text_color = color.white, bgcolor = color.new(color.gray, 40))
-    table.cell(diag, 0, 3, "filled",       text_color = color.white, bgcolor = color.new(color.teal, 40))
-    table.cell(diag, 1, 3, str.tostring(nFilled),  text_color = color.white, bgcolor = color.new(color.teal, 40))
-    table.cell(diag, 0, 4, "cancelled",    text_color = color.white, bgcolor = color.new(color.maroon, 40))
-    table.cell(diag, 1, 4, str.tostring(nExpired), text_color = color.white, bgcolor = color.new(color.maroon, 40))
-    table.cell(diag, 0, 5, "closed trades",text_color = color.white, bgcolor = color.new(color.gray, 40))
-    table.cell(diag, 1, 5, str.tostring(strategy.closedtrades), text_color = color.white, bgcolor = color.new(color.gray, 40))
-    table.cell(diag, 0, 6, "  of which blown",   text_color = color.white, bgcolor = color.new(color.maroon, 60))
-    table.cell(diag, 1, 6, str.tostring(nBlown),   text_color = color.white, bgcolor = color.new(color.maroon, 60))
-    table.cell(diag, 0, 7, "  of which timeout", text_color = color.white, bgcolor = color.new(color.maroon, 60))
-    table.cell(diag, 1, 7, str.tostring(nTimeout), text_color = color.white, bgcolor = color.new(color.maroon, 60))
-    table.cell(diag, 0, 8, "entry level touched",text_color = color.white, bgcolor = color.new(color.blue, 40))
-    table.cell(diag, 1, 8, str.tostring(nTouched), text_color = color.white, bgcolor = color.new(color.blue, 40))
+    table.cell(diag, 0, 0, "detected",      text_color = color.white, bgcolor = color.new(color.gray, 20), text_size = size.small)
+    table.cell(diag, 1, 0, str.tostring(nDetect),  text_color = color.white, bgcolor = color.new(color.gray, 20), text_size = size.small)
+    table.cell(diag, 0, 1, "armed",         text_color = color.white, bgcolor = color.new(color.gray, 40), text_size = size.small)
+    table.cell(diag, 1, 1, str.tostring(nArmed),   text_color = color.white, bgcolor = color.new(color.gray, 40), text_size = size.small)
+    table.cell(diag, 0, 2, "skipped (RR)",  text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = size.small)
+    table.cell(diag, 1, 2, str.tostring(nSkipRR),  text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = size.small)
+    table.cell(diag, 0, 3, "skipped (net)", text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = size.small)
+    table.cell(diag, 1, 3, str.tostring(nOpposed), text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = size.small)
+    table.cell(diag, 0, 4, "filled",        text_color = color.white, bgcolor = color.new(color.teal, 40), text_size = size.small)
+    table.cell(diag, 1, 4, str.tostring(nFilled),  text_color = color.white, bgcolor = color.new(color.teal, 40), text_size = size.small)
+    table.cell(diag, 0, 5, "blown",         text_color = color.white, bgcolor = color.new(color.maroon, 40), text_size = size.small)
+    table.cell(diag, 1, 5, str.tostring(nBlown),   text_color = color.white, bgcolor = color.new(color.maroon, 40), text_size = size.small)
+    table.cell(diag, 0, 6, "timeout",       text_color = color.white, bgcolor = color.new(color.maroon, 60), text_size = size.small)
+    table.cell(diag, 1, 6, str.tostring(nTimeout), text_color = color.white, bgcolor = color.new(color.maroon, 60), text_size = size.small)
+    table.cell(diag, 0, 7, "size capped",   text_color = color.white, bgcolor = color.new(color.orange, 50), text_size = size.small)
+    table.cell(diag, 1, 7, str.tostring(nCapped),  text_color = color.white, bgcolor = color.new(color.orange, 50), text_size = size.small)
+    table.cell(diag, 0, 8, "closed trades", text_color = color.white, bgcolor = color.new(color.blue, 40), text_size = size.small)
+    table.cell(diag, 1, 8, str.tostring(strategy.closedtrades), text_color = color.white, bgcolor = color.new(color.blue, 40), text_size = size.small)
+    table.cell(diag, 0, 9, "open trades",   text_color = color.white, bgcolor = color.new(color.blue, 60), text_size = size.small)
+    table.cell(diag, 1, 9, str.tostring(strategy.opentrades),   text_color = color.white, bgcolor = color.new(color.blue, 60), text_size = size.small)
