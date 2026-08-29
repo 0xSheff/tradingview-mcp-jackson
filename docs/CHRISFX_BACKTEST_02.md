@@ -312,3 +312,63 @@ The liquidity exit model improves from −0.27R to −0.04R once the order of st
 and target is read rather than assumed. Its targets sit further away, so more
 bars contained both, and it was carrying most of the pessimism. The fixed-3R
 model barely moves (+0.06R to +0.05R).
+
+
+---
+
+# Run 05 — partial exits, and the target the data actually wants
+
+## The partial model
+
+Bank `partialPct` at `partialAtR`, let the rest run to `runnerR`. Measured as a
+third track on the same fills.
+
+| Exit model | exp | runner / scratch / loss |
+|---|---|---|
+| fixed 3R | +0.05 | |
+| liquidity, skip under 2R | −0.04 | |
+| partial 0.5 at 1R, runner to 10R, **stop to breakeven** | +0.01 | 22 / 372 / 297 |
+| partial 0.5 at 1R, runner to 10R, **stop stays** | +0.05 | 60 / 330 / 297 |
+
+**Moving the stop to breakeven destroys the tail.** Of the 394 setups that
+reached 1R, only 22 went on to 10R with a breakeven stop, against 60 when the
+original stop is kept — price returns to entry far more often than it completes
+the move. But keeping the stop costs the runner a full R when it fails, and the
+two effects cancel: both variants land on the same place as everything else.
+
+> A bookkeeping bug inflated the second variant to +0.29R in the first
+> measurement: the runner half was credited 0R instead of −1R when it was
+> stopped at the original stop. Fixed; the corrected figure is +0.05R.
+
+## The target the data wants
+
+Run 04's excursion curve implied smaller targets are better all the way down.
+Measured directly:
+
+| Fixed target | win rate | **expectancy** |
+|---|---|---|
+| **1R** | **57.1%** | **+0.14** |
+| 2R | — | +0.29 (run 02, bias-filtered subset) |
+| 3R | 26.2% | +0.05 |
+
+**A fixed 1R target is the best exit measured**, and it is positive on every
+class with a usable sample — A+ +0.12, A +0.15, B +0.24 — and in every session:
+Asia +0.20, London +0.11, New York +0.09. It is the first configuration that is
+positive everywhere rather than on one slice.
+
+Bracket the truth honestly: the excursion data says 68.6% of setups reach 1R,
+the measured win rate is 57.1%. The gap is the bar-level ambiguity on the 449
+setups without 1-minute data, where a bar holding both the target and the stop
+is scored a loss. The real number sits between the two, so +0.14R is a floor.
+
+## Where this leaves the exits
+
+The original question was whether a fixed 3R was too small for MNQ, given moves
+that run 15R. The answer is the opposite of the intuition: the tail is real
+(8.8% reach 10R) but far too thin to pay for the 68.6% that reach 1R and the
+43% that never do. Every attempt to capture the tail — larger fixed targets,
+liquidity targets, partials with a runner — lands on or below the breakeven
+line. Taking 1R quickly is what this edge, such as it is, actually looks like.
+
+That is also the closest thing to what the author describes doing: in the third
+transcript he says he mostly books 1.3–1.5R rather than chasing 2R.

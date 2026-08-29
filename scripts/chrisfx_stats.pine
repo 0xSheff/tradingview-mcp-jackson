@@ -44,6 +44,12 @@ rrMin         = input.float(2.0, "Min RR for the liquidity target (else skip)", 
 stopModel     = input.string("Beyond zone", "Stop placement",
                  options = ["Beyond zone", "Beyond invalidation"], group = gMeas)
 maxHold       = input.int(500,  "Give up on an open setup after (bars)", minval = 10, maxval = 2000, group = gMeas)
+
+gPart         = "Partial exit model"
+partialAtR    = input.float(1.0,  "Bank a partial at (R)", minval = 0.25, step = 0.25, group = gPart)
+partialPct    = input.float(0.5,  "Fraction banked",       minval = 0.1, maxval = 0.9, step = 0.1, group = gPart)
+runnerR       = input.float(10.0, "Runner target (R)",     minval = 1.0, step = 1.0, group = gPart)
+beAfterPart   = input.bool(true,  "Move the stop to breakeven after the partial", group = gPart)
 entryMode     = input.string("Zone edge", "Entry",
                  options = ["Zone edge", "POC (footprint)"], group = gMeas)
 fpTicks       = input.int(100,  "Footprint: ticks per row", minval = 1, group = gMeas)
@@ -303,6 +309,8 @@ var array<int>   sSess  = array.new_int()
 var array<float> sMfe   = array.new_float()   // best excursion so far, in R
 var array<bool>  sResF  = array.new_bool()    // fixed-RR track already scored
 var array<bool>  sResL  = array.new_bool()    // liquidity track already scored
+var array<bool>  sResP  = array.new_bool()    // partial track already scored
+var array<bool>  sPart  = array.new_bool()    // partial already banked
 
 // tallies: [grade] and [grade] x [model]
 var array<int> nSetup = array.new_int(4, 0)
@@ -312,6 +320,12 @@ var array<int> lossF  = array.new_int(4, 0)
 var array<int> winL   = array.new_int(4, 0)
 var array<int> lossL  = array.new_int(4, 0)
 var array<int> skipL  = array.new_int(4, 0)
+var array<int> winP   = array.new_int(4, 0)
+var array<int> lossP  = array.new_int(4, 0)
+var array<float> sumRP = array.new_float(4, 0.0)
+var int nRunner  = 0   // partial banked AND the runner target reached
+var int nScratch = 0   // partial banked, rest closed at breakeven
+var int nFullLoss = 0  // stopped before the partial
 var array<float> sumRF = array.new_float(4, 0.0)
 var array<float> sumRL = array.new_float(4, 0.0)
 var int nAmbig   = 0
@@ -387,6 +401,8 @@ if array.size(sGrade) > 0
         bool  op = array.get(sOpen, i)
         bool  rf = array.get(sResF, i)
         bool  rl = array.get(sResL, i)
+        bool  rp = array.get(sResP, i)
+        bool  pk = array.get(sPart, i)
         float mf = array.get(sMfe, i)
         bool  stopped = false
         bool  done = false
@@ -418,6 +434,35 @@ if array.size(sGrade) > 0
                             bump(winL, g)
                             addf(sumRL, g, math.abs(tl - en) / rk)
                             rl := true
+                        // partial track: bank part at partialAtR, then the
+                        // stop moves to breakeven and the rest runs
+                        if not rp
+                            float pT = d > 0 ? en + partialAtR * rk : en - partialAtR * rk
+                            float rT = d > 0 ? en + runnerR * rk : en - runnerR * rk
+                            if not pk
+                                if hs
+                                    bump(lossP, g)
+                                    addf(sumRP, g, -1.0)
+                                    nFullLoss += 1
+                                    rp := true
+                                else if (d > 0 ? hh >= pT : ll <= pT)
+                                    pk := true
+                            if pk and not rp
+                                float be = beAfterPart ? en : st
+                                if (d > 0 ? hh >= rT : ll <= rT)
+                                    bump(winP, g)
+                                    addf(sumRP, g, partialPct * partialAtR + (1 - partialPct) * runnerR)
+                                    nRunner += 1
+                                    rp := true
+                                else if (d > 0 ? ll <= be : hh >= be)
+                                    float tot2 = partialPct * partialAtR + (1 - partialPct) * (beAfterPart ? 0.0 : -1.0)
+                                    if tot2 > 0
+                                        bump(winP, g)
+                                    else
+                                        bump(lossP, g)
+                                    addf(sumRP, g, tot2)
+                                    nScratch += 1
+                                    rp := true
                         if hs
                             if not rf
                                 bump(lossF, g)
@@ -469,6 +514,33 @@ if array.size(sGrade) > 0
                             bump(winL, g)
                             addf(sumRL, g, math.abs(tl - en) / rk)
                         rl := true
+                if not rp
+                    float pT = d > 0 ? en + partialAtR * rk : en - partialAtR * rk
+                    float rT = d > 0 ? en + runnerR * rk : en - runnerR * rk
+                    if not pk
+                        if hs
+                            bump(lossP, g)
+                            addf(sumRP, g, -1.0)
+                            nFullLoss += 1
+                            rp := true
+                        else if (d > 0 ? high >= pT : low <= pT)
+                            pk := true
+                    if pk and not rp
+                        float be = beAfterPart ? en : st
+                        if (d > 0 ? high >= rT : low <= rT)
+                            bump(winP, g)
+                            addf(sumRP, g, partialPct * partialAtR + (1 - partialPct) * runnerR)
+                            nRunner += 1
+                            rp := true
+                        else if (d > 0 ? low <= be : high >= be)
+                            float tot2 = partialPct * partialAtR + (1 - partialPct) * (beAfterPart ? 0.0 : -1.0)
+                            if tot2 > 0
+                                bump(winP, g)
+                            else
+                                bump(lossP, g)
+                            addf(sumRP, g, tot2)
+                            nScratch += 1
+                            rp := true
                 if hs
                     stopped := true
                     nBarOnly += 1
@@ -489,6 +561,8 @@ if array.size(sGrade) > 0
         array.set(sOpen, i, op)
         array.set(sResF, i, rf)
         array.set(sResL, i, rl)
+        array.set(sResP, i, rp)
+        array.set(sPart, i, pk)
         array.set(sMfe,  i, mf)
 
         if done
@@ -504,6 +578,8 @@ if array.size(sGrade) > 0
             array.remove(sMfe,   i)
             array.remove(sResF,  i)
             array.remove(sResL,  i)
+            array.remove(sResP,  i)
+            array.remove(sPart,  i)
 
 // --- Detect and record -------------------------------------------------------
 [gL, lvlL, zhL, zlL, invL, bL] = detectSetup(EVAL_OFFSET, true)
@@ -593,12 +669,14 @@ if barstate.isconfirmed
             array.push(sMfe,   0.0)
             array.push(sResF,  false)
             array.push(sResL,  false)
+            array.push(sResP,  false)
+            array.push(sPart,  false)
 
 // --- Results -----------------------------------------------------------------
 pct(int w, int l) => (w + l) > 0 ? str.tostring(100.0 * w / (w + l), "#.0") + "%" : "-"
 expc(float sum, int w, int l) => (w + l) > 0 ? str.tostring(sum / (w + l), "#.00") : "-"
 
-var table res  = table.new(position.bottom_right, 8, 7, border_width = 1)
+var table res  = table.new(position.bottom_right, 10, 7, border_width = 1)
 var table sess = table.new(position.middle_right, 5, 5, border_width = 1)
 var table mfe  = table.new(position.bottom_left, 9, 3, border_width = 1)
 cell(int c, int r, string txt, color bg) =>
@@ -614,6 +692,8 @@ if barstate.islastconfirmedhistory or barstate.islast
     cell(5, 0, "liq win%",hdr)
     cell(6, 0, "liq exp", hdr)
     cell(7, 0, "liq skip",hdr)
+    cell(8, 0, "part win%", hdr)
+    cell(9, 0, "part exp",  hdr)
     for g = 0 to 3
         color bg = color.new(color.gray, 40 + g * 10)
         cell(0, g + 1, gradeName(g),                       bg)
@@ -624,6 +704,8 @@ if barstate.islastconfirmedhistory or barstate.islast
         cell(5, g + 1, pct(array.get(winL, g), array.get(lossL, g)), bg)
         cell(6, g + 1, expc(array.get(sumRL, g), array.get(winL, g), array.get(lossL, g)), bg)
         cell(7, g + 1, str.tostring(array.get(skipL, g)), bg)
+        cell(8, g + 1, pct(array.get(winP, g), array.get(lossP, g)), bg)
+        cell(9, g + 1, expc(array.get(sumRP, g), array.get(winP, g), array.get(lossP, g)), bg)
     int tw = 0
     int tl = 0
     int twl = 0
@@ -649,7 +731,16 @@ if barstate.islastconfirmedhistory or barstate.islast
     cell(4, 5, expc(trf, tw, tl), tot)
     cell(5, 5, pct(twl, tll),     tot)
     cell(6, 5, expc(trl, twl, tll), tot)
+    int twp = 0
+    int tlp = 0
+    float trp = 0.0
+    for g = 0 to 3
+        twp += array.get(winP, g)
+        tlp += array.get(lossP, g)
+        trp += array.get(sumRP, g)
     cell(7, 5, "", tot)
+    cell(8, 5, pct(twp, tlp), tot)
+    cell(9, 5, expc(trp, twp, tlp), tot)
     color nte = color.new(color.orange, 40)
     cell(0, 6, "no entry / ambig / POC used / skip bias / skip prem", nte)
     cell(1, 6, str.tostring(nNoEntry), nte)
@@ -687,3 +778,5 @@ if barstate.islastconfirmedhistory or barstate.islast
     cell(5, 6, "still open", nte)
     cell(6, 6, str.tostring(nOpenEnd), nte)
     cell(7, 6, "", nte)
+    cell(8, 6, "runner/scratch/loss", nte)
+    cell(9, 6, str.tostring(nRunner) + "/" + str.tostring(nScratch) + "/" + str.tostring(nFullLoss), nte)
