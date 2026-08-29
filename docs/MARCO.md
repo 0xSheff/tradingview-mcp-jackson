@@ -7,11 +7,12 @@ Sources — four public videos from the **Inter Equity Trading** YouTube channel
 auto-generated transcripts of:
 
 | Ref | Video ID | Title | What it contributes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **V1** | `GIYrW7FC06M` | Liquidity Inducement Entries (LIQUIDITY BLOCKS) | LB definition, creation logic, stop-loss rule, priority rule |
 | **V2** | `yIYY_jYy3sE` | The ONLY Entry Model You Need (SNIPER ENTRIES) | The 4-candle fractal entry model |
 | **V3** | `pQ4WTVQnwBc` | ADVANCED Liquidity Concepts ON GOLD | Full trade story: no-man's land, intact lows as targets, management |
 | **V4** | `hKh3-f3oAO8` | $10,000 Liquidity Inducement Trade in 4 MINUTES | Liquidity build-up, waiting for the trap, pre-framing targets |
+| **V5** | `lEsZYpeGNVQ` | The Simple Trading Strategy That Actually Works | The 10 a.m. reversal — the 06:00–10:00 ET H4 candle model |
 
 > **Two kinds of statement in this document.**
 > Lines marked **[SOURCE]** are the author's rules, restated from the
@@ -146,6 +147,32 @@ Bullish version, mirror for bearish **[SOURCE, V2]**:
 Alternative refinement: open the LB zone on a lower timeframe (15m/H1 zone →
 M1) and find the entry inside it there. **[SOURCE, V1, V3]**
 
+### 4.3 The 10 a.m. reversal (H4 candle model)
+
+The author trades the New York session only, and this model gives the
+*timing* gate for the day. **[SOURCE, V5]**:
+
+1. The H4 candle that opens 06:00 and closes 10:00 ET is the reference. At
+   10:00 a new H4 candle opens — "10 a.m. is a very, very powerful time,
+   especially in futures."
+2. Mark the previous (06–10) H4 high and low.
+3. Bullish scenario: after 10:00, **longs only become active once price
+   trades below the previous H4 low** — "we are not longing until that low
+   is taken out; it's a very strict rule." The sell-off into it is treated
+   as false (the trap). Bearish is the mirror above the H4 high.
+4. The entry itself is unchanged — a liquidity block, stop covering the LB
+   extreme ("the entries are repeatable, nothing ever changes").
+5. Systematic target: the previous H4 high (resp. low). Alternative:
+   liquidity targets — intact highs/lows beyond. **[SOURCE, V5]**
+
+The bias still comes from the liquidity story (§3); this model only times
+the entry. In V5 the bias was long because a double-tapped high fueled the
+sell-off that swept internal liquidity, leaving intact highs above as draw.
+**[SOURCE, V5]**
+
+How long the gate stays open after 10:00 is not stated; we close it at the
+next H4 open, 14:00 ET (`h4.active_until_hour`). **[CALIBRATION]**
+
 ---
 
 ## 5. Stops, targets, management
@@ -171,7 +198,7 @@ Everything below is ours to tune — the videos show it by eye only.
 **[CALIBRATION]**, mapped to Pine inputs in `scripts/marco_liquidity_blocks.pine`:
 
 | Question the videos leave open | Input | Default |
-|---|---|---|
+| --- | --- | --- |
 | What counts as a swing point | `pivotLen` | 3 |
 | Must the sweep close back above the swept level, and how fast | `confirmBars` | 3 |
 | LB zone top edge | `zoneTopMode` | swept level |
@@ -180,6 +207,13 @@ Everything below is ours to tune — the videos show it by eye only.
 | "Equal" level tolerance for build-up | `eqTolerance` (ATR mult) | 0.25 |
 | Taps needed to call a level "build-up" | `minTouches` | 2 |
 | How far back liquidity levels are tracked | `maxLevels` per side | 20 |
+| Zones thinner than this are not entry-grade | `minZoneAtr` / `min_zone_atr` | 0.25 ATR |
+| Stop offset past the zone extreme | `stopBufAtr` / `stop_buffer_atr` | 0.1 ATR |
+| A trap older than this reads as stale | `story_fresh_bars` (engine only) | 16 bars |
+
+The last three rows come from the 09:55 replay experiment (§7.1): 1-tick
+zones made R math absurd, extremes got pierced by ticks before the real move,
+and a 36-bar-old trap was quoted as a live story.
 
 The **tradeability filter** (§3) is directional context. The indicator
 approximates it: an LB is drawn *qualified* (bright) when the level it swept
@@ -189,7 +223,52 @@ no-man's land, target-side fuel) stays with the analyst. **[CALIBRATION]**
 
 ---
 
-## 7. Working agreements for this branch
+## 7. Tooling on this branch
+
+Two implementations of the same state machine — keep them in sync when
+tuning any default:
+
+- **`scripts/marco_liquidity_blocks.pine`** — the visual indicator. Saved on
+  TradingView as the user's script "Liq blocks".
+- **`src/core/marco.js`** — the analysis engine: the same levels/sweep/LB
+  replay plus the narrative layer (`storyRead`, §3), the 10 a.m. gate
+  (`h4Model`, §4.3) and an HTF second pass (`htfContext`) that runs the map
+  on `htf.timeframe` (default 240) and attaches long-lived zones, nearest
+  HTF levels and a proximity alert to every LTF read. Driven by the CLI:
+  - `node src/cli/index.js marco brief --compact` — scan the `marco` list in
+    `watchlists.json` (default TFs 15/60).
+  - `node src/cli/index.js marco scan COMEX_MINI:MGC1! --tf 15` — one symbol.
+  - Optional overrides live in `rules.json` → `marco` (gitignored, optional).
+- **`tests/marco.test.js`** (`npm run test:marco`) — fixture scenarios for
+  every §§2–4 rule: sweep+reclaim, breakdown, build-up qualification,
+  invalidation, tap, the bearish mirror, and the H4 gate.
+
+### 7.1 Replay validation against the author's own trades
+
+Both breakdown-video trades were located on `COMEX_MINI:MGC1!` and replayed
+bar-by-bar through `storyRead` (15m, defaults) on 2026-08-29:
+
+- **V4 short — Mon 2026-03-16, NY open.** By 09:00 ET the engine was already
+  in `sell_story` with targets 5122.6 / 5099.1 / 5096 (the day flushed to
+  5102.9; 5096 was Sunday's low). At 09:30 — the author's "just before stock
+  open" entry — it printed `high_swept 5165.6` → bear LB at the day high
+  (5175) → tap at 10:00, then price walked the targets. Structure reproduced
+  one-for-one; the author executed on M1 (tighter stop), which is his
+  fractality claim in practice.
+- **V3 short — Tue 2026-04-07, late NY.** The pre-day read was `sell_story`
+  with targets 4763 / 4744.4 / **4719.4**; the author's final target printed
+  at 4718.9 on Sun 2026-04-12, where the engine flipped to `buy_story` (the
+  market then rallied to 5007 within four sessions). Story, targets and exit
+  matched. The exact entry zone (the ~4981 spike top) did **not**: his LB
+  came from March-crash structure older than the 400-bar fetch window, and
+  the 4994.1 retrace high never qualifies as a pivot under our strict
+  definition. Partially addressed since: `runMarcoBrief` now runs the
+  `htfContext` second pass on 240 and alerts when price nears a long-lived
+  HTF zone. Caveat that stands: a retrace high inside a waterfall (like
+  4994.1) is not a pivot on any timeframe under the strict definition, so
+  zones anchored to such highs still go unseen.
+
+## 8. Working agreements for this branch
 
 - On this branch all analysis is Accettone-only — do not mix in ChrisFX, CLS,
   EMA/RSI or the regular morning-brief reads.

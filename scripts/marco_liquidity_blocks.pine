@@ -10,7 +10,9 @@
 //     `confirmBars`, the sweep extreme becomes an LB zone, extended right.
 //     Qualified LBs (swept a build-up level or an old level) draw bright,
 //     the rest faint — Accettone's "not every LB is an entry" filter, §3.
-//   * Tap labels + alerts when price returns into a zone.
+//   * Tap labels + alerts when price returns into a zone (strong zones only).
+//   * Zones thinner than minZoneAtr draw faint — not entry-grade (§7.1).
+//   * Dashed stop line past a strong zone's extreme (stopBufAtr).
 //   * Zone dies on close beyond its extreme (stop-loss side) or on age-out.
 //@version=6
 indicator("Marco LB — Liquidity Blocks", "Marco LB", overlay = true,
@@ -32,10 +34,14 @@ grpQ = "Qualification (LB filter)"
 eqTol       = input.float(0.25, "Equal-level tolerance (ATR mult)", step = 0.05, minval = 0.0, group = grpQ)
 minTouches  = input.int(2,   "Touches to call a level build-up", minval = 2, group = grpQ)
 minLevelAge = input.int(50,  "…or level intact for ≥ (bars)", minval = 1, group = grpQ)
+minZoneAtr  = input.float(0.25, "Min zone height (ATR mult)", step = 0.05, minval = 0.0, group = grpQ,
+     tooltip = "Thinner zones draw faint and fire no alerts — the stop would sit ticks away from the entry.")
 
 grpV = "Visuals"
 showLevels  = input.bool(true, "Show liquidity levels", group = grpV)
 showTaps    = input.bool(true, "Label zone taps", group = grpV)
+showStops   = input.bool(true, "Stop line on strong zones", group = grpV)
+stopBufAtr  = input.float(0.1, "Stop buffer (ATR mult)", step = 0.05, minval = 0.0, group = grpV)
 colBull     = input.color(#26a69a, "Bullish", group = grpV, inline = "c")
 colBear     = input.color(#ef5350, "Bearish", group = grpV, inline = "c")
 
@@ -59,10 +65,11 @@ type Pending
 
 type Block
     box   bx
+    line  st = na // buffered stop line, strong zones only
     float top
     float bot
     bool  isBull
-    bool  qualified
+    bool  qualified // "strong": build-up/age qualified AND not thin
     bool  tapped
     bool  dead
     int   born
@@ -81,22 +88,32 @@ colDead  = color.new(#787b86, 82)
 
 // --------------------------------------------------------------- helpers ---
 newBlock(bool isBull, int leftBar, float top, float bot, bool qualified) =>
+    // docs/MARCO.md §7.1: a zone thinner than minZoneAtr is not entry-grade
+    bool thin   = top - bot < minZoneAtr * atrVal
+    bool strong = qualified and not thin
     col   = isBull ? colBull : colBear
-    fillT = qualified ? 82 : 93
-    bordT = qualified ? 35 : 72
-    txtT  = qualified ? 25 : 65
+    fillT = strong ? 82 : 93
+    bordT = strong ? 35 : 72
+    txtT  = strong ? 25 : 65
     b = box.new(leftBar, top, bar_index, bot,
          border_color = color.new(col, bordT), border_width = 1,
          bgcolor = color.new(col, fillT),
-         text = qualified ? "LB" : "lb", text_size = size.tiny,
+         text = strong ? "LB" : "lb", text_size = size.tiny,
          text_color = color.new(col, txtT),
          text_halign = text.align_right,
          text_valign = isBull ? text.align_bottom : text.align_top)
-    array.push(blocks, Block.new(bx = b, top = top, bot = bot, isBull = isBull,
-         qualified = qualified, tapped = false, dead = false, born = bar_index))
+    line st = na
+    if showStops and strong
+        float stopP = isBull ? bot - stopBufAtr * atrVal : top + stopBufAtr * atrVal
+        st := line.new(leftBar, stopP, bar_index, stopP,
+             color = color.new(col, 35), width = 1, style = line.style_dashed)
+    array.push(blocks, Block.new(bx = b, st = st, top = top, bot = bot, isBull = isBull,
+         qualified = strong, tapped = false, dead = false, born = bar_index))
     if array.size(blocks) > MAX_BLOCKS
         Block old = array.shift(blocks)
         box.delete(old.bx)
+        if not na(old.st)
+            line.delete(old.st)
 
 // ------------------------------------------------- 1. maintain LB zones ----
 bool tapBull  = false
@@ -109,6 +126,8 @@ if array.size(blocks) > 0
         Block blk = array.get(blocks, i)
         if not blk.dead
             box.set_right(blk.bx, bar_index)
+            if not na(blk.st)
+                line.set_x2(blk.st, bar_index)
             bool invalid = blk.isBull ? close < blk.bot : close > blk.top
             bool expired = bar_index - blk.born > maxAgeBars
             if invalid or expired
@@ -117,8 +136,12 @@ if array.size(blocks) > 0
                     box.set_bgcolor(blk.bx, colDead)
                     box.set_border_color(blk.bx, colDead)
                     box.set_text_color(blk.bx, colDead)
+                    if not na(blk.st)
+                        line.set_color(blk.st, colDead)
                 else
                     box.delete(blk.bx)
+                    if not na(blk.st)
+                        line.delete(blk.st)
                     array.remove(blocks, i)
             else if bar_index > blk.born and not blk.tapped
                 if blk.isBull and low <= blk.top

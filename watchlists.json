@@ -1,0 +1,24 @@
+{
+  "primary": [
+    "CAPITALCOM:DXY",
+    "COMEX_MINI:MGC1!",
+    "CME_MINI:MES1!",
+    "CME_MINI:MNQ1!",
+    "CBOT_MINI:MYM1!",
+    "CME_MINI:M2K1!",
+    "CME:6J1!",
+    "CME:6E1!",
+    "CME:6C1!",
+    "CME:6S1!",
+    "CME:6A1!",
+    "CME:6N1!",
+    "CME:6B1!"
+  ],
+  "marco": [
+    "CME_MINI:MNQ1!",
+    "COMEX_MINI:MGC1!",
+    "CME:6J1!",
+    "CME:6B1!",
+    "CME:6E1!"
+  ]
+}

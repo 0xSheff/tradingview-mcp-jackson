@@ -84,6 +84,31 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
+## Marco Accettone Liquidity Blocks (branch `marco`)
+
+This branch implements Marco Accettone's (Inter Equity Trading) liquidity-block
+method. **On this branch, all analysis is Accettone-only — do not mix in
+ChrisFX, CLS, EMA/RSI or the regular morning-brief reads.**
+
+- **Methodology source of truth:** `docs/MARCO.md` (liquidity blocks, the
+  story filter, the 10 a.m. H4 model). Read it before producing any analysis.
+  Statements there are tagged **[SOURCE]** (the author's rule) or
+  **[CALIBRATION]** (a number we chose because the videos stay qualitative) —
+  never present a calibration as the author's.
+- **Scan the watchlist:** `node src/cli/index.js marco brief --compact` —
+  scans the `watchlists.json` `marco` list on 15m/60m and returns the
+  liquidity story, LB zones and the 10 a.m. gate per symbol. Render per the
+  `instruction` field. Allow a generous timeout for a live scan.
+- **Single symbol:** `node src/cli/index.js marco scan COMEX_MINI:MGC1! --tf 15`
+- **Indicator:** `scripts/marco_liquidity_blocks.pine`, saved on TradingView
+  as the user's script "Liq blocks". It mirrors the exact state machine in
+  `src/core/marco.js` — change defaults in both or neither.
+- **Config:** optional `marco` section in `rules.json` overrides
+  `MARCO_DEFAULTS` in `src/core/marco.js`. Instruments come from
+  `watchlists.json` (`marco` list).
+- **Tests:** `npm run test:marco` — fixture scenarios for each documented
+  rule. No TradingView needed.
+
 ## Environment Notes
 
 This project runs on Linux (Ubuntu). It previously ran on Windows only; the Windows
