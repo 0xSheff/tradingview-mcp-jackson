@@ -132,6 +132,39 @@ expectancy: +0.30R against +0.60R. The win rate only rises from 40.0% to 43.3%,
 nowhere near enough to pay for the smaller payoff. Winners that reach 2R
 usually carry to 3R, so his "at least 2 to 1" is a floor rather than an optimum.
 
+### Validated against the author's own example
+
+`tests/chris_bias.test.js` runs the rule over real CME_MINI:NQH2025 daily bars
+for the case study he works through on video. It reproduces his call exactly:
+bullish for Friday 3 Jan 2025, off the 21006.50 low left on 20 Dec 2024 — the
+same level he points at. His prediction also verified: Friday's high (21559.25)
+took Thursday's (21490.50).
+
+So the encoding is faithful on the one example we can check it against.
+
+### Trying to loosen it — did not work
+
+The strict rule fires on only 51 of 740 setups where the author has a bias
+nearly every day, so we tried a looser encoding: the swept level is the extreme
+of the prior 10 days rather than an untouched daily fractal.
+
+| Bias encoding | Setups | Filled | win% | exp |
+|---|---|---|---|---|
+| **fractal** (untouched daily fractal) | 51 | 30 | 40.0% | **+0.60** |
+| swing (prior 10-day extreme) | 52 | 32 | 21.9% | −0.13 |
+
+It **did not loosen anything** — 52 setups against 51 — because making a new
+10-day low and closing back above it is just as rare. It simply fires on a
+different set of days, and those days are worse.
+
+Read carefully, that is informative: what carries the edge is not "recovered
+after a new low" but "took out liquidity that had been resting untouched". The
+fractal condition is doing real work, not just being restrictive.
+
+With 30 fills against 32 the difference could still be noise. A genuinely
+looser encoding needs the author's actual containment reference — a **weekly**
+range, which he uses explicitly and we have not implemented.
+
 ### The size of the caveat
 
 51 setups and 30 fills. **This is a small sample and the effect could be

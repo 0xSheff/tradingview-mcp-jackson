@@ -52,7 +52,10 @@ fpVA          = input.int(70,   "Footprint: value area %",  minval = 1, maxval =
 gBias         = "Daily bias (video: HOLISTIC APPROACH NQ)"
 useBias       = input.bool(false, "Only trade with the daily bias", group = gBias)
 useDiscount   = input.bool(false, "Only trade the discount half of the developing day", group = gBias)
+biasMode      = input.string("fractal", "Which prior low counts as the liquidity",
+                 options = ["fractal", "swing"], group = gBias)
 biasLookback  = input.int(20,   "Daily fractals to scan", minval = 3, maxval = 60, group = gBias)
+biasSwingLb   = input.int(10,   "Swing lookback (swing mode)", minval = 2, maxval = 60, group = gBias)
 discountPct   = input.float(0.5, "Discount threshold of the daily range", minval = 0.1, maxval = 0.9, step = 0.05, group = gBias)
 
 EVAL_OFFSET = fvgSearch + 1
@@ -202,25 +205,35 @@ gradeRisk(int g) => g == 0 ? 500.0 : g == 1 ? 300.0 : g == 2 ? 200.0 : 100.0
 // [SOURCE] the shape. [CALIBRATION] which prior low counts: the video points at
 // a weekly order block, we use the nearest still-untouched daily fractal, which
 // is the same "last liquidity" idea the breaker rule already uses.
-dailyBias(int lb) =>
-    int   b  = 0
+dailyBias(int lb, int swingLb, string mode) =>
+    int b = 0
+    // ta.* must run on every bar, so both are evaluated before any branch
+    float sLo = ta.lowest(low, swingLb)[2]
+    float sHi = ta.highest(high, swingLb)[2]
+    if mode == "swing"
+        // looser: the extreme of the prior N days rather than an untouched
+        // fractal. Fires far more often; same call on the author's own example.
+        if low[1] < sLo and close[1] > sLo
+            b := 1
+        else if high[1] > sHi and close[1] < sHi
+            b := -1
     float rl = 1e20
     for f = 2 to lb
         bool isFrac = low[f] < low[f + 1] and low[f] < low[f - 1]
-        if isFrac and b == 0
+        if isFrac and b == 0 and mode == "fractal"
             if low[1] < low[f] and close[1] > low[f] and rl >= low[f]
                 b := 1
         rl := math.min(rl, low[f])
     float rh = -1e20
     for f = 2 to lb
         bool isFrac = high[f] > high[f + 1] and high[f] > high[f - 1]
-        if isFrac and b == 0
+        if isFrac and b == 0 and mode == "fractal"
             if high[1] > high[f] and close[1] < high[f] and rh <= high[f]
                 b := -1
         rh := math.max(rh, high[f])
     b
 
-bias = request.security(syminfo.tickerid, "D", dailyBias(biasLookback), lookahead = barmerge.lookahead_off)
+bias = request.security(syminfo.tickerid, "D", dailyBias(biasLookback, biasSwingLb, biasMode), lookahead = barmerge.lookahead_off)
 // the developing daily candle, which is what premium/discount is measured from
 dHi  = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
 dLo  = request.security(syminfo.tickerid, "D", low,  lookahead = barmerge.lookahead_off)

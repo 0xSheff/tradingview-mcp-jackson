@@ -50,6 +50,12 @@
     "targets": {
       "rr_levels": [2, 3],
       "use_opposing_liquidity": true
+    },
+
+    "bias": {
+      "mode": "fractal",
+      "lookback": 20,
+      "swing_lookback": 10
     }
   },
 

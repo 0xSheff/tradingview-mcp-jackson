@@ -53,6 +53,11 @@ export const CHRIS_DEFAULTS = {
     rr_levels: [2, 3],
     use_opposing_liquidity: true,
   },
+  bias: {
+    mode: "fractal", // "fractal" (strict) | "swing" (looser)
+    lookback: 20,
+    swing_lookback: 10,
+  },
 };
 
 /** Grade ladder, strongest first. Downgrades walk one step to the right. */
@@ -438,6 +443,72 @@ export function detectBreakers(bars, cfg = CHRIS_DEFAULTS) {
     .map(({ _sort, ...s }) => s);
 }
 
+/**
+ * Daily bias — docs/CHRISFX.md §5, from the video source.
+ *
+ * `bars` are daily bars oldest → newest, and the LAST one is the completed
+ * candle that sets the next day's bias. Returns 1 bullish, -1 bearish, 0 none.
+ *
+ * The rule: that candle grabs the liquidity of a prior low and closes its body
+ * back inside the range → bullish, expecting the prior high to be taken.
+ * Two encodings of "a prior low", both [CALIBRATION]:
+ *   "fractal" — the nearest still-untouched daily fractal (strict)
+ *   "swing"   — the extreme of the prior `swing_lookback` days (looser)
+ *
+ * Validated against the author's own worked example, 3 January 2025 on NQ,
+ * in tests/chris_bias.test.js.
+ */
+export function dailyBias(bars, cfg = CHRIS_DEFAULTS) {
+  const c = { ...CHRIS_DEFAULTS.bias, ...(cfg.bias || {}) };
+  const none = { bias: 0, level: null, mode: c.mode, reason: "no sweep-and-reclaim" };
+  if (!Array.isArray(bars) || bars.length < 4) {
+    return { ...none, reason: "not enough daily bars" };
+  }
+
+  const prior = bars.slice(0, -1);
+  const y = bars[bars.length - 1];
+  const last = prior.length - 1;
+
+  const check = (level, side) =>
+    side === "low" ? y.low < level && y.close > level : y.high > level && y.close < level;
+
+  if (c.mode === "swing") {
+    const win = prior.slice(Math.max(0, prior.length - c.swing_lookback));
+    if (!win.length) return none;
+    const lo = Math.min(...win.map((b) => b.low));
+    const hi = Math.max(...win.map((b) => b.high));
+    if (check(lo, "low")) return { bias: 1, level: round(lo), mode: c.mode, reason: "swept the swing low and closed back above" };
+    if (check(hi, "high")) return { bias: -1, level: round(hi), mode: c.mode, reason: "swept the swing high and closed back below" };
+    return none;
+  }
+
+  // "fractal": walk back from the most recent bar, nearest qualifying level wins.
+  // The signal candle acts as the right-hand neighbour for the bar just before
+  // it, mirroring how the Pine port scans. A consequence worth knowing: a level
+  // swept by the very next candle can never qualify, because that candle is
+  // then its right neighbour and exceeds it. The level has to have been sitting
+  // there for at least two bars — which is what "liquidity" means here anyway.
+  const rightOf = (i) => (i + 1 < prior.length ? prior[i + 1] : y);
+  let runLow = Infinity;
+  let runHigh = -Infinity;
+  for (let i = last; i >= Math.max(1, last - c.lookback); i--) {
+    if (i > 0) {
+      const isLow = prior[i].low < prior[i - 1].low && prior[i].low < rightOf(i).low;
+      const isHigh = prior[i].high > prior[i - 1].high && prior[i].high > rightOf(i).high;
+      // "untouched" = nothing between this fractal and yesterday traded past it
+      if (isLow && runLow >= prior[i].low && check(prior[i].low, "low")) {
+        return { bias: 1, level: round(prior[i].low), mode: c.mode, reason: "swept an untouched daily low and closed back above" };
+      }
+      if (isHigh && runHigh <= prior[i].high && check(prior[i].high, "high")) {
+        return { bias: -1, level: round(prior[i].high), mode: c.mode, reason: "swept an untouched daily high and closed back below" };
+      }
+    }
+    runLow = Math.min(runLow, prior[i].low);
+    runHigh = Math.max(runHigh, prior[i].high);
+  }
+  return none;
+}
+
 /** One timeframe's read: setups plus the liquidity map around current price. */
 export function analyzeTimeframe(bars, cfg = CHRIS_DEFAULTS) {
   if (!Array.isArray(bars) || bars.length < 20) {
@@ -477,7 +548,7 @@ async function sleep(ms) {
 function mergeConfig(rules) {
   const c = rules.chris || {};
   const out = { ...CHRIS_DEFAULTS, ...c };
-  for (const key of ["liquidity", "grab", "reversal", "fvg", "zone", "grading", "poc", "targets"]) {
+  for (const key of ["liquidity", "grab", "reversal", "fvg", "zone", "grading", "poc", "targets", "bias"]) {
     out[key] = { ...CHRIS_DEFAULTS[key], ...(c[key] || {}) };
   }
   return out;
