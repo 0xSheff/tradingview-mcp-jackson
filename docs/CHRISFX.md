@@ -211,31 +211,93 @@ out" — the choice belongs to the trader, so the scanner reports all three.
 
 ### 4.3 Targets
 
-**The source document defines no targets at all.** It covers entries and stops
-only, and mentions partials in passing without rules. Everything below is ours:
+**The deck defines no targets.** The video does: **at least 2R**, and the prior
+day's high (the level the daily bias expects to be taken) as the structural
+target. He books partials and re-adds on a retracement, taking ~2.1R in the
+worked example. **[SOURCE 2]**
+
+Ours, on top of that:
 
 - `targets.rr_levels` = [2, 3] — R-multiples off the chosen stop
 - `targets.use_opposing_liquidity` = true — nearest unswept fractal on the
-  opposite side, reported as the structural target
+  opposite side **[CALIBRATION]**
 
-**[CALIBRATION]** — flag these as our addition whenever they are reported.
+Measured (docs/CHRISFX_BACKTEST_02.md): a fixed 3R target beats a fixed 2R one
+(+0.60R vs +0.30R with the bias filter on), because winners that reach 2R
+usually carry to 3R. His 2R minimum is a floor, not an optimum.
 
 ---
 
-## 5. What the source does not specify
+---
+
+## 5. Daily bias — the second source
+
+The video reframes the method: the breaker is unchanged, but it is only traded
+**with the daily bias**, and premium/discount is measured differently. This is
+the part the deck omits entirely.
+
+### 5.1 Establishing the bias
+
+Yesterday's daily candle grabs the liquidity of a prior low, then closes its
+**body back inside the range** → **bullish bias for today**, expecting the
+prior high to be taken. Mirrored for bearish. **[SOURCE 2]**
+
+In the worked example the close came back inside the range of a *weekly* block
+rather than the previous day's range, and the author counts that as valid — so
+the containment reference is a higher-timeframe range, not strictly the prior
+candle.
+
+- `bias.lookback` = 20 daily fractals; we use the nearest still-untouched daily
+  fractal as "the prior low". **[CALIBRATION]** — our rule fires on only 51 of
+  740 setups, so it is far stricter than his; he has a bias nearly every day.
+
+### 5.2 Two hard rules
+
+1. **No bias, no trade.**
+2. **Never trade against the bias**, whatever the setup grade. **[SOURCE 2]**
+
+### 5.3 Premium and discount — from the developing daily candle
+
+Measure from the low to the high of **today's candle as printed so far**, not
+from the last swing. A breaker sitting in the discount half (for longs) is
+higher probability. The author is explicit that this is the correction to how
+it is usually taught. **[SOURCE 2]**
+
+**Price must never go below the low of the developing daily candle** while the
+bullish bias holds. That low is the stop reference for the second entry.
+**[SOURCE 2]**
+
+### 5.4 Layered entries, wider stops
+
+First entry at the POC of the 5m breaker, stop below that breaker. If it fails,
+a second entry at the 15m breaker below it, stop below the developing daily
+low. He argues at length against tiny stops — on NQ a ~190-tick stop is small
+relative to how far the instrument travels. **[SOURCE 2]**
+
+### 5.5 Sessions — explicitly no filter
+
+The author states that opportunities appear in the Asian, London and New York
+sessions alike, and tells the viewer to disregard session dogma and trade
+whenever they are at the screen. **[SOURCE 2]**
+
+Our measurement agrees that no session should be excluded, though for a
+different reason — see docs/CHRISFX_BACKTEST_02.md.
+
+---
+
+## 6. What neither source specifies
 
 Carry these caveats into every report:
 
-1. No HTF bias filter — the author claims the setup works on all timeframes at
-   any time of day, with no directional context requirement.
-2. No target/exit framework (see §4.3).
-3. No maximum trades per day, no news filter, no correlation rules.
-4. No guidance on what invalidates a *pending* zone other than the point of
+1. No news filter. The author mentions no calendar rule at all.
+2. No maximum trades per day and no correlation rules.
+3. No guidance on what invalidates a *pending* zone other than the point of
    invalidation being breached.
+4. How the bias is decided when yesterday swept **both** sides, or neither.
 
 ---
 
-## 6. Instruments
+## 7. Instruments
 
 `watchlists.json` → `chris`: MNQ, MGC, 6J, 6B, 6E. Execution timeframes 5m and
 15m per `rules.json` → `chris.timeframes`.
@@ -244,4 +306,11 @@ Carry these caveats into every report:
 
 ## Sources
 
-`tmp/BREAKER BLOCKS CHRISFX (2).pdf` — slide numbers cited inline above.
+- **[SOURCE]** — `tmp/BREAKER BLOCKS CHRISFX (2).pdf`, "BREAKER BLOCKS AND
+  TRADING PLAN". Slide numbers cited inline above. Covers the breaker
+  definition, the grading and the footprint entry.
+- **[SOURCE 2]** — video, "HOLISTIC APPROACH NQ — Case Study"
+  (`youtube.com/watch?v=4EM5OuMoH-k`), worked on MNQ for 3 January 2025.
+  Transcript supplied by the user; adds the daily bias, the premium/discount
+  rule, the layered entries and the 2R minimum. Where the two disagree, the
+  video is the later word.

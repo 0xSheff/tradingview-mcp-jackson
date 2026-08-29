@@ -49,6 +49,12 @@ entryMode     = input.string("Zone edge", "Entry",
 fpTicks       = input.int(100,  "Footprint: ticks per row", minval = 1, group = gMeas)
 fpVA          = input.int(70,   "Footprint: value area %",  minval = 1, maxval = 100, group = gMeas)
 
+gBias         = "Daily bias (video: HOLISTIC APPROACH NQ)"
+useBias       = input.bool(false, "Only trade with the daily bias", group = gBias)
+useDiscount   = input.bool(false, "Only trade the discount half of the developing day", group = gBias)
+biasLookback  = input.int(20,   "Daily fractals to scan", minval = 3, maxval = 60, group = gBias)
+discountPct   = input.float(0.5, "Discount threshold of the daily range", minval = 0.1, maxval = 0.9, step = 0.05, group = gBias)
+
 EVAL_OFFSET = fvgSearch + 1
 
 // >>> SHARED DETECTION START
@@ -187,6 +193,38 @@ gradeAllowed(int g) => g == 0 ? tradeApp : g == 1 ? tradeAp : g == 2 ? tradeA : 
 gradeRisk(int g) => g == 0 ? 500.0 : g == 1 ? 300.0 : g == 2 ? 200.0 : 100.0
 // <<< SHARED DETECTION END
 
+// --- Daily bias --------------------------------------------------------------
+// From the video: yesterday's daily candle grabs the liquidity of a prior low
+// and closes its BODY back inside the range -> bullish for today, expecting the
+// prior high to be taken. Mirrored for bearish. No bias means no trade, and a
+// trade against the bias is never taken.
+//
+// [SOURCE] the shape. [CALIBRATION] which prior low counts: the video points at
+// a weekly order block, we use the nearest still-untouched daily fractal, which
+// is the same "last liquidity" idea the breaker rule already uses.
+dailyBias(int lb) =>
+    int   b  = 0
+    float rl = 1e20
+    for f = 2 to lb
+        bool isFrac = low[f] < low[f + 1] and low[f] < low[f - 1]
+        if isFrac and b == 0
+            if low[1] < low[f] and close[1] > low[f] and rl >= low[f]
+                b := 1
+        rl := math.min(rl, low[f])
+    float rh = -1e20
+    for f = 2 to lb
+        bool isFrac = high[f] > high[f + 1] and high[f] > high[f - 1]
+        if isFrac and b == 0
+            if high[1] > high[f] and close[1] < high[f] and rh <= high[f]
+                b := -1
+        rh := math.max(rh, high[f])
+    b
+
+bias = request.security(syminfo.tickerid, "D", dailyBias(biasLookback), lookahead = barmerge.lookahead_off)
+// the developing daily candle, which is what premium/discount is measured from
+dHi  = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
+dLo  = request.security(syminfo.tickerid, "D", low,  lookahead = barmerge.lookahead_off)
+
 // --- Footprint entry ---------------------------------------------------------
 // request.footprint() is the author's actual execution step: the real POC of the
 // breaker candle, not a lower-timeframe reconstruction. It needs Premium or
@@ -227,8 +265,10 @@ var array<float> sumRL = array.new_float(4, 0.0)
 var int nAmbig   = 0
 var int nNoEntry = 0
 var int nOpenEnd = 0
-var int nPocUsed = 0
-var int nPocMiss = 0
+var int nPocUsed  = 0
+var int nPocMiss  = 0
+var int nSkipBias = 0
+var int nSkipPrem = 0
 
 // Sessions in exchange time. The claim under test is that a method with no
 // time filter leaks its edge in the illiquid overnight hours.
@@ -339,6 +379,19 @@ if barstate.isconfirmed
         inval  := invS
         bOff   := bS
 
+    // the video's two context filters, applied before anything is recorded
+    if g >= 0 and useBias
+        if (isLong and bias != 1) or (not isLong and bias != -1)
+            g := -1
+            nSkipBias += 1
+    if g >= 0 and useDiscount and not na(dHi) and not na(dLo) and dHi > dLo
+        float mid = (zHi + zLo) / 2
+        float pos = (mid - dLo) / (dHi - dLo)
+        // longs want the discount half, shorts the premium half
+        if (isLong and pos > discountPct) or (not isLong and pos < 1 - discountPct)
+            g := -1
+            nSkipPrem += 1
+
     if g >= 0
         bump(nSetup, g)
         int sess = sessionOf(time)
@@ -442,11 +495,11 @@ if barstate.islastconfirmedhistory or barstate.islast
     cell(6, 5, expc(trl, twl, tll), tot)
     cell(7, 5, "", tot)
     color nte = color.new(color.orange, 40)
-    cell(0, 6, "no entry / ambiguous / POC used / POC miss", nte)
+    cell(0, 6, "no entry / ambig / POC used / skip bias / skip prem", nte)
     cell(1, 6, str.tostring(nNoEntry), nte)
     cell(2, 6, str.tostring(nAmbig),   nte)
     cell(3, 6, str.tostring(nPocUsed), nte)
-    cell(4, 6, str.tostring(nPocMiss), nte)
+    cell(4, 6, str.tostring(nSkipBias) + " / " + str.tostring(nSkipPrem), nte)
     // session breakdown - the same fills, sliced by when the setup appeared
     color shdr = color.new(color.gray, 10)
     table.cell(sess, 0, 0, "session",  text_color = color.white, bgcolor = shdr, text_size = size.small)

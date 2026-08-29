@@ -96,6 +96,50 @@ This tests one of three ideas about context. A news-time filter and a
 higher-timeframe daily bias are **still untested** — the NY result is weakly
 consistent with news hurting, but that is not evidence.
 
+## With the daily bias filter (SOURCE 2)
+
+The video's rule: trade only in the direction of the daily bias, never against
+it. Encoded per docs/CHRISFX.md §5.1 and applied to the same 740 setups.
+
+| | Setups | Filled | win% | **exp** |
+|---|---|---|---|---|
+| no filter, 3R | 740 | 539 | 26.0% | +0.04 |
+| **bias filter, 3R** | **51** | **30** | **40.0%** | **+0.60** |
+| bias filter, 2R | 51 | 30 | 43.3% | +0.30 |
+
+**The daily bias is the largest single effect we have measured** — a 15×
+improvement in expectancy, and the only change that moved the method off the
+breakeven line. It is also the one filter the author added *after* the deck,
+which is consistent with him having found the same problem.
+
+By session, with the bias filter on and a 3R target:
+
+| Session | Setups | Filled | win% | exp |
+|---|---|---|---|---|
+| Asia / overnight | 14 | 8 | 37.5% | +0.50 |
+| London | 18 | 11 | 27.3% | +0.09 |
+| **New York** | 19 | 11 | **54.5%** | **+1.18** |
+
+**New York flips from worst to best.** Without a bias it was −0.10R; with one
+it is +1.18R. That reframes the session finding above: New York was not a bad
+session, it was the session where trading without direction was punished
+hardest — which is what you would expect where displacement is most real.
+
+### 2R vs 3R
+
+Cutting the target to 2R, closer to the author's stated minimum, **lowers**
+expectancy: +0.30R against +0.60R. The win rate only rises from 40.0% to 43.3%,
+nowhere near enough to pay for the smaller payoff. Winners that reach 2R
+usually carry to 3R, so his "at least 2 to 1" is a floor rather than an optimum.
+
+### The size of the caveat
+
+51 setups and 30 fills. **This is a small sample and the effect could be
+noise.** Our bias rule is also far stricter than the author's — it fires on 51
+of 740 setups, while he describes having a bias almost every day. A looser
+encoding closer to his would both grow the sample and test the rule properly;
+until then, treat +0.60R as a promising signal, not a measured edge.
+
 ## Caveats
 
 1. One symbol, one timeframe, eleven months.
