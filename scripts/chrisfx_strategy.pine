@@ -1,0 +1,295 @@
+//@version=6
+// ChrisFX Breaker Blocks — backtest strategy.
+//
+// Port of the detection in src/core/chris.js (spec: docs/CHRISFX.md) to a Pine
+// strategy, so the grading and the exit models can be tested over deep history.
+//
+// Detection is evaluated EVAL_OFFSET bars after a candidate grab, which is late
+// enough for the FVG to have formed and keeps the logic stateless per bar.
+//
+// Exit models (the point of this script):
+//   "Fixed RR"            — target = entry +/- risk * rr_fixed
+//   "Liquidity, else skip" — target = nearest untaken opposing liquidity; if
+//                            that is worth less than rr_min, the trade is
+//                            SKIPPED rather than stretched to rr_min
+//
+// Bar Magnifier is on: entry and stop often sit inside the same bar, so the
+// broker emulator must not guess the intrabar path. Requires Premium+.
+
+strategy("ChrisFX Breaker Blocks",
+     overlay             = true,
+     initial_capital     = 50000,
+     default_qty_type    = strategy.fixed,
+     default_qty_value   = 1,
+     pyramiding          = 0,
+     use_bar_magnifier   = true,
+     calc_on_order_fills = false,
+     max_bars_back       = 500,
+     max_boxes_count     = 300,
+     max_labels_count    = 300)
+
+// ─── Detection inputs (mirror rules.json -> chris) ────────────────────────────
+gDet          = "Detection"
+liqLookback   = input.int(60,   "Liquidity lookback (bars)",      minval = 5, maxval = 100, group = gDet)
+legLookback   = input.int(10,   "Leg window for characteristic 2", minval = 2, maxval = 50,  group = gDet)
+fvgSearch     = input.int(5,    "FVG search after grab (bars)",   minval = 1, maxval = 20,  group = gDet)
+fvgRequired   = input.bool(true,"Require an FVG over the zone",   group = gDet)
+atrLen        = input.int(14,   "ATR length",                     minval = 2, group = gDet)
+atrMult       = input.float(1.3,"Impulse: body >= ATR x",         minval = 0, step = 0.1, group = gDet)
+bodyRatioMin  = input.float(0.6,"Impulse: body / range >=",       minval = 0, maxval = 1, step = 0.05, group = gDet)
+instantMax    = input.int(3,    "Reversal is instant within (bars)", minval = 1, group = gDet)
+freshMax      = input.int(12,   "A vs B: level age <= (bars)",    minval = 1, group = gDet)
+zoneMaxAge    = input.int(120,  "Cancel a pending zone after (bars)", minval = 5, group = gDet)
+
+// ─── Which grades to trade ───────────────────────────────────────────────────
+gGrade        = "Grades"
+tradeApp      = input.bool(true, "Trade A++", group = gGrade)
+tradeAp       = input.bool(true, "Trade A+",  group = gGrade)
+tradeA        = input.bool(true, "Trade A",   group = gGrade)
+tradeB        = input.bool(true, "Trade B",   group = gGrade)
+
+// ─── Execution ───────────────────────────────────────────────────────────────
+gExec         = "Execution"
+exitModel     = input.string("Fixed RR", "Exit model",
+                 options = ["Fixed RR", "Liquidity, else skip"], group = gExec)
+rrFixed       = input.float(3.0, "Fixed RR target",  minval = 0.5, step = 0.5, group = gExec)
+rrMin         = input.float(2.0, "Min RR for the liquidity target (else skip)",
+                 minval = 0.5, step = 0.5, group = gExec)
+stopModel     = input.string("Beyond zone", "Stop placement",
+                 options = ["Beyond zone", "Beyond invalidation"], group = gExec)
+riskMode      = input.string("Constant risk", "Position sizing",
+                 options = ["Constant risk", "Grade risk", "Fixed 1 contract"], group = gExec)
+riskUsd       = input.float(500, "Risk per trade (constant mode)", minval = 1, group = gExec)
+drawZones     = input.bool(true, "Draw armed zones", group = gExec)
+
+EVAL_OFFSET = fvgSearch + 1
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// ta.atr() keeps internal state and must run on every bar, so it is evaluated
+// here at global scope and only indexed inside detectSetup().
+atrG = ta.atr(atrLen)
+
+
+// Nearest untaken liquidity on the far side of the trade, scanning back from
+// the current bar. Mirrors opposingLiquidity() in src/core/chris.js.
+nearestOpposing(bool bullish, float fromPrice) =>
+    float best    = na
+    float running = bullish ? high[0] : low[0]
+    for f = 1 to liqLookback
+        bool isFrac = bullish
+             ? (high[f] > high[f + 1] and high[f] > high[f - 1])
+             : (low[f]  < low[f + 1]  and low[f]  < low[f - 1])
+        if isFrac and na(best)
+            float p       = bullish ? high[f] : low[f]
+            bool  untaken = bullish ? (p > running) : (p < running)
+            bool  beyond  = bullish ? (p > fromPrice) : (p < fromPrice)
+            if untaken and beyond
+                best := p
+        running := bullish ? math.max(running, high[f]) : math.min(running, low[f])
+    best
+
+// The whole ChrisFX read for a candidate grab sitting `E` bars back.
+// Returns grade as 0 = A++, 1 = A+, 2 = A, 3 = B, -1 = no valid setup.
+detectSetup(int E, bool bullish) =>
+    int   gradeIdx = -1
+    float level    = na
+    float zoneHigh = na
+    float zoneLow  = na
+    float inval    = na
+
+    // 1. the liquidity level this bar took — the nearest fractal that was still
+    //    untouched when the grab happened (docs/CHRISFX.md 2.1 / 2.2)
+    float grabExtreme = bullish ? low[E] : high[E]
+    int   fIdx        = -1
+    float fLvl        = na
+    float running     = bullish ? 1e20 : -1e20
+    for f = E + 1 to E + liqLookback
+        bool isFrac = bullish
+             ? (low[f]  < low[f + 1]  and low[f]  < low[f - 1])
+             : (high[f] > high[f + 1] and high[f] > high[f - 1])
+        if isFrac and fIdx == -1
+            float p       = bullish ? low[f] : high[f]
+            bool  untaken = bullish ? (running >= p) : (running <= p)
+            bool  taken   = bullish ? (grabExtreme < p) : (grabExtreme > p)
+            if untaken and taken
+                fIdx := f
+                fLvl := p
+        running := bullish ? math.min(running, low[f]) : math.max(running, high[f])
+
+    // 2. the breaker candle — most recent opposite-colour candle before the move
+    int bIdx = -1
+    if fIdx > 0
+        for b = E + 1 to E + legLookback * 2
+            if bIdx == -1
+                bool rightColour = bullish ? (close[b] > open[b]) : (close[b] < open[b])
+                if rightColour
+                    bIdx := b
+
+    if bIdx > 0
+        zoneHigh := high[bIdx]
+        zoneLow  := low[bIdx]
+
+        // 3. characteristic 2 — is the breaker the extreme of the leg?
+        bool legExtreme = true
+        for i = E + 1 to E + legLookback
+            if i != bIdx
+                bool beats = bullish ? (high[i] > high[bIdx]) : (low[i] < low[bIdx])
+                if beats
+                    legExtreme := false
+
+        // 4. characteristic 1 — body close beyond the level, and was it impulsive
+        bool  bodyGrab = bullish ? (close[E] < fLvl) : (close[E] > fLvl)
+        float bodyLen  = math.abs(close[E] - open[E])
+        float rng      = high[E] - low[E]
+        float bodyRat  = rng > 0 ? bodyLen / rng : 0.0
+        float atrV     = atrG[E]
+        bool  impulsive = bodyRat >= bodyRatioMin and
+                          (na(atrV) or atrV <= 0 or bodyLen >= atrMult * atrV)
+
+        // 5. how quickly the level was reclaimed
+        int rIdx = -1
+        for r = E - 1 to 0
+            if rIdx == -1
+                bool back = bullish ? (close[r] > fLvl) : (close[r] < fLvl)
+                if back
+                    rIdx := r
+
+        // 6. point of invalidation — the extreme reached during the grab
+        int invEnd = rIdx >= 0 ? rIdx : 0
+        inval := bullish ? low[E] : high[E]
+        for i = invEnd to E
+            inval := bullish ? math.min(inval, low[i]) : math.max(inval, high[i])
+
+        // 7. the FVG gate
+        bool hasFvg = false
+        int  mLo    = math.max(1, E - fvgSearch)
+        for m = E + 1 to mLo
+            float gLow  = na
+            float gHigh = na
+            if bullish
+                if low[m - 1] > high[m + 1]
+                    gLow  := high[m + 1]
+                    gHigh := low[m - 1]
+            else
+                if high[m - 1] < low[m + 1]
+                    gLow  := high[m - 1]
+                    gHigh := low[m + 1]
+            if not na(gLow)
+                float ov = math.min(zoneHigh, gHigh) - math.max(zoneLow, gLow)
+                if ov > 0
+                    hasFvg := true
+
+        // 8. grade (docs/CHRISFX.md 3) — a body grab is clamped at A+
+        if hasFvg or not fvgRequired
+            if bodyGrab
+                gradeIdx := legExtreme ? 0 : 1
+                bool delayed = rIdx == -1 or (E - rIdx) > instantMax
+                if (not impulsive or delayed) and gradeIdx == 0
+                    gradeIdx := 1
+            else
+                int age = fIdx - E
+                gradeIdx := age <= freshMax ? 2 : 3
+            level := fLvl
+
+    [gradeIdx, level, zoneHigh, zoneLow, inval]
+
+gradeName(int g) => g == 0 ? "A++" : g == 1 ? "A+" : g == 2 ? "A" : g == 3 ? "B" : "-"
+gradeAllowed(int g) => g == 0 ? tradeApp : g == 1 ? tradeAp : g == 2 ? tradeA : g == 3 ? tradeB : false
+gradeRisk(int g) => g == 0 ? 500.0 : g == 1 ? 300.0 : g == 2 ? 200.0 : 100.0
+
+// ─── State ───────────────────────────────────────────────────────────────────
+var int   st       = 0        // 0 idle, 1 pending entry, 2 in trade
+var float pStop    = na
+var float pTgt     = na
+var float pInval   = na
+var int   pDir     = 0
+var int   pArmBar  = na
+
+// state transitions before anything new is armed
+if st == 1 and strategy.position_size != 0
+    st := 2
+if st == 2 and strategy.position_size == 0
+    st := 0
+if st == 1
+    bool blown   = pDir > 0 ? low <= pInval : high >= pInval
+    bool expired = bar_index - pArmBar > zoneMaxAge
+    if blown or expired
+        strategy.cancel("CFX")
+        st := 0
+
+// ─── Detect and arm ──────────────────────────────────────────────────────────
+[gL, lvlL, zhL, zlL, invL] = detectSetup(EVAL_OFFSET, true)
+[gS, lvlS, zhS, zlS, invS] = detectSetup(EVAL_OFFSET, false)
+
+if st == 0 and barstate.isconfirmed
+    int   g     = -1
+    bool  isLong = false
+    float entry = na
+    float stop  = na
+    float inval = na
+
+    // a long needs price to have left the zone upward, so it can retrace into it
+    if gL >= 0 and gradeAllowed(gL) and close > zhL
+        g      := gL
+        isLong := true
+        entry  := zhL
+        stop   := stopModel == "Beyond zone" ? zlL : invL
+        inval  := invL
+    else if gS >= 0 and gradeAllowed(gS) and close < zlS
+        g      := gS
+        isLong := false
+        entry  := zlS
+        stop   := stopModel == "Beyond zone" ? zhS : invS
+        inval  := invS
+
+    if g >= 0
+        float risk = isLong ? entry - stop : stop - entry
+        if risk > 0
+            float tgt = na
+            bool  ok  = false
+
+            if exitModel == "Fixed RR"
+                tgt := isLong ? entry + risk * rrFixed : entry - risk * rrFixed
+                ok  := true
+            else
+                float liq = nearestOpposing(isLong, entry)
+                if not na(liq)
+                    float rr = (isLong ? liq - entry : entry - liq) / risk
+                    // the user's rule: too close to be worth 1:rrMin -> skip it,
+                    // do not stretch the target out to rrMin
+                    if rr >= rrMin
+                        tgt := liq
+                        ok  := true
+
+            if ok
+                float qty = 1.0
+                if riskMode == "Constant risk"
+                    qty := riskUsd / (risk * syminfo.pointvalue)
+                else if riskMode == "Grade risk"
+                    qty := gradeRisk(g) / (risk * syminfo.pointvalue)
+                qty := math.max(qty, 0.0)
+
+                if qty > 0
+                    strategy.entry("CFX", isLong ? strategy.long : strategy.short,
+                         qty = qty, limit = entry, comment = gradeName(g))
+                    pStop   := stop
+                    pTgt    := tgt
+                    pInval  := inval
+                    pDir    := isLong ? 1 : -1
+                    pArmBar := bar_index
+                    st      := 1
+
+                    if drawZones
+                        box.new(bar_index - EVAL_OFFSET, isLong ? zhL : zhS,
+                             bar_index + 20, isLong ? zlL : zlS,
+                             border_color = isLong ? color.teal : color.maroon,
+                             bgcolor = color.new(isLong ? color.teal : color.maroon, 85))
+                        label.new(bar_index, isLong ? zhL : zlS, gradeName(g),
+                             style = isLong ? label.style_label_up : label.style_label_down,
+                             color = color.new(color.gray, 30), textcolor = color.white,
+                             size = size.small)
+
+// ─── Manage the open trade ───────────────────────────────────────────────────
+if strategy.position_size != 0
+    strategy.exit("CFX-X", from_entry = "CFX", stop = pStop, limit = pTgt)

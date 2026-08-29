@@ -23,98 +23,18 @@ import {
   compactChrisBrief,
 } from "../src/core/chris.js";
 
-let clock = 0;
-const mk = (open, high, low, close) => ({
-  time: (clock += 300),
-  open,
-  high,
-  low,
-  close,
-  volume: 100,
-});
-
-/** Flat, strictly equal bars: no fractal can form inside them. */
-function padding(n, { open, high, low, close }) {
-  return Array.from({ length: n }, () => mk(open, high, low, close));
-}
-
-const FLAT = { open: 100, high: 100.4, low: 99.6, close: 100.05 };
-
-/** Example 2 — A++ bullish: impulsive body grab, breaker is the leg extreme. */
-function example2() {
-  clock = 0;
-  return [
-    ...padding(16, FLAT),
-    mk(100, 101, 99, 100.5), //     16
-    mk(100.5, 101, 98, 98.5), //    17  valid low @ 98 — the liquidity
-    mk(98.5, 99.5, 98.2, 99.2), //  18
-    mk(99.2, 100.2, 99.0, 100.0), //19
-    mk(100.0, 101.5, 99.8, 101.2), //20 BREAKER — highest of the leg
-    mk(101.2, 101.3, 97.0, 97.2), //21 grab: full body close below 98, impulsive
-    mk(97.2, 99.5, 97.1, 99.4), //  22 reversal on the very next bar
-    mk(99.4, 102.5, 101.6, 102.3), //23 leaves a bullish FVG over the zone
-    mk(102.3, 102.8, 102.0, 102.6), //24
-    mk(102.6, 102.9, 102.4, 102.7), //25 developing
-  ];
-}
-
-/** Example 5 — A++ bearish: the mirror of example 2. */
-function example5() {
-  clock = 0;
-  return [
-    ...padding(16, { open: 100, high: 100.4, low: 99.6, close: 99.95 }),
-    mk(100, 101, 99, 99.5), //       16
-    mk(99.5, 102, 99, 101.5), //     17  valid high @ 102 — the liquidity
-    mk(101.5, 101.8, 100.8, 100.8), //18
-    mk(100.8, 101.0, 99.8, 100.0), //19
-    mk(100.0, 100.2, 98.5, 98.8), // 20 BREAKER — lowest of the leg
-    mk(98.8, 103.0, 98.7, 102.8), // 21 grab: full body close above 102, impulsive
-    mk(102.8, 102.9, 100.5, 100.6), //22 reversal on the very next bar
-    mk(98.2, 98.3, 97.5, 97.6), //   23 leaves a bearish FVG over the zone
-    mk(97.6, 97.8, 96.8, 97.0), //   24
-    mk(97.0, 97.2, 96.6, 96.9), //   25 developing
-  ];
-}
-
-/** Example 6 — A+ bullish: same as 2, but an earlier candle tops the breaker. */
-function example6() {
-  const bars = example2();
-  bars[19] = { ...bars[19], high: 102.0 }; // now higher than the breaker's 101.5
-  return bars;
-}
-
-/** Example 3 — A+ bearish: same as 5, but an earlier candle undercuts the breaker. */
-function example3() {
-  const bars = example5();
-  bars[19] = { ...bars[19], low: 98.0 }; // now lower than the breaker's 98.5
-  return bars;
-}
-
-/** Example 4 — A bullish: the level is taken by a wick, and it was fresh. */
-function example4() {
-  const bars = example2();
-  bars[21] = { ...bars[21], close: 99.0 }; // closes back above 98 → pinbar grab
-  bars[22] = { ...bars[22], open: 99.0 };
-  return bars;
-}
-
-/** Example 1 — B bullish: same pinbar grab, but the level had been sitting there. */
-function example1() {
-  clock = 0;
-  return [
-    ...padding(16, FLAT),
-    mk(100, 101, 99, 100.5), //     16
-    mk(100.5, 101, 98, 98.5), //    17  valid low @ 98
-    mk(98.5, 99.5, 98.2, 99.2), //  18
-    ...padding(14, { open: 99.5, high: 100.0, low: 99.2, close: 99.6 }), // 19..32
-    mk(99.6, 101.5, 99.4, 101.2), //33 BREAKER
-    mk(101.2, 101.3, 97.0, 99.0), //34 grab: wick below 98, closes back above
-    mk(99.0, 99.5, 98.5, 99.4), //  35
-    mk(99.4, 102.5, 101.6, 102.3), //36 bullish FVG over the zone
-    mk(102.3, 102.8, 102.0, 102.6), //37
-    mk(102.6, 102.9, 102.4, 102.7), //38 developing
-  ];
-}
+import {
+  resetClock,
+  mk,
+  padding,
+  FLAT,
+  example1,
+  example2,
+  example3,
+  example4,
+  example5,
+  example6,
+} from "./fixtures/chris_examples.js";
 
 const onlySetup = (bars) => {
   const setups = detectBreakers(bars, CHRIS_DEFAULTS);
@@ -256,7 +176,7 @@ describe("ChrisFX — the FVG gate", () => {
 
 describe("ChrisFX — primitives", () => {
   it("findLiquidityPoints marks a low below both neighbours (slide 18)", () => {
-    clock = 0;
+    resetClock();
     const bars = [mk(10, 11, 9, 10), mk(10, 11, 8, 9), mk(9, 10, 8.5, 9.5)];
     const { lows } = findLiquidityPoints(bars, 1);
     assert.equal(lows.length, 1);
@@ -265,20 +185,20 @@ describe("ChrisFX — primitives", () => {
   });
 
   it("findLiquidityPoints ignores equal lows — strict comparison only", () => {
-    clock = 0;
+    resetClock();
     const bars = [mk(10, 11, 9, 10), mk(10, 11, 9, 10), mk(10, 11, 9, 10)];
     assert.equal(findLiquidityPoints(bars, 1).lows.length, 0);
   });
 
   it("findFvgs finds both directions of a 3-candle imbalance", () => {
-    clock = 0;
+    resetClock();
     const bull = [mk(10, 11, 9, 10.5), mk(10.5, 13, 10.4, 12.8), mk(12.8, 14, 12, 13.5)];
     const [g] = findFvgs(bull);
     assert.equal(g.direction, "bull");
     assert.equal(g.low, 11);
     assert.equal(g.high, 12);
 
-    clock = 0;
+    resetClock();
     const bear = [mk(14, 15, 13, 13.5), mk(13.5, 13.6, 10.5, 10.8), mk(10.8, 11, 9, 9.5)];
     const [b] = findFvgs(bear);
     assert.equal(b.direction, "bear");
@@ -294,7 +214,7 @@ describe("ChrisFX — primitives", () => {
   });
 
   it("classifyGrab separates a body close from a pinbar", () => {
-    clock = 0;
+    resetClock();
     const body = mk(101, 101.2, 97, 97.2);
     const wick = mk(101, 101.2, 97, 99.5);
     assert.equal(classifyGrab(body, 98, "low", 0.8).type, "body");
@@ -305,7 +225,7 @@ describe("ChrisFX — primitives", () => {
   });
 
   it("findBreakerIndex takes the most recent candle of the opposite colour", () => {
-    clock = 0;
+    resetClock();
     const bars = [
       mk(100, 101, 99, 101), // bullish
       mk(101, 101, 99, 99.5), // bearish
@@ -317,7 +237,7 @@ describe("ChrisFX — primitives", () => {
   });
 
   it("isLegExtreme implements characteristic 2 in both directions", () => {
-    clock = 0;
+    resetClock();
     const bars = [
       mk(100, 100.5, 99, 100), //   0
       mk(100, 101.5, 99.8, 101.2), //1 highest
@@ -329,7 +249,7 @@ describe("ChrisFX — primitives", () => {
   });
 
   it("atrAt returns null without enough history and a positive value with it", () => {
-    clock = 0;
+    resetClock();
     const bars = padding(20, FLAT);
     assert.equal(atrAt(bars, 3, 14), null);
     assert.ok(atrAt(bars, 19, 14) > 0);
@@ -347,7 +267,7 @@ describe("ChrisFX — timeframe read and reporting", () => {
   });
 
   it("analyzeTimeframe refuses to guess on too little data", () => {
-    clock = 0;
+    resetClock();
     const read = analyzeTimeframe(padding(5, FLAT), CHRIS_DEFAULTS);
     assert.equal(read.error, "not enough bars");
   });
