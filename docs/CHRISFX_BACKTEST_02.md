@@ -415,3 +415,62 @@ Testing it properly needs the high-confluence bucket to reach a few hundred
 observations, which means many instruments and much more history — not a
 different filter definition. Until then, `minConf` exists in the script but
 should be left at 0.
+
+
+---
+
+# Run 07 — the whole watchlist
+
+Every earlier run measured one instrument. This one applies the best
+configuration from run 05 — fixed 1R target, stop beyond the zone, no bias or
+confluence filter — to all five symbols in `watchlists.json` → `chris`, on 15m,
+over each chart's available history.
+
+| Symbol | Setups | Filled | win% | **exp** |
+|---|---|---|---|---|
+| CME_MINI:MNQ1! | 740 | 692 | 57.1% | +0.14R |
+| COMEX_MINI:MGC1! | 704 | 674 | 56.8% | +0.14R |
+| CME:6E1! | 544 | 512 | 63.9% | **+0.28R** |
+| CME:6J1! | 417 | 384 | 59.6% | +0.19R |
+| CME:6B1! | 493 | 454 | 63.4% | **+0.27R** |
+| **ALL** | **2,898** | **2,716** | **59.7%** | **+0.195R** |
+
+**The result holds out of sample.** Every instrument is positive, the range is
+narrow (+0.14R to +0.28R), and the aggregate sits at +0.195R across 2,716
+resolved trades — a fourfold increase over the sample that produced +0.14R on
+MNQ alone.
+
+This is the first finding in the project that has survived a sample expansion.
+A++ (+1.00R on 4 fills), the strict bias rule (+0.60R on 30) and 3-factor
+confluence (+0.82R on 11) all evaporated or remain untestable. This one did not.
+
+## FX outperforms
+
+| Group | Fills | exp |
+|---|---|---|
+| Currency futures (6E, 6J, 6B) | 1,350 | **+0.251R** |
+| Index and metal (MNQ, MGC) | 1,366 | +0.140R |
+
+Both positive, but the currencies are close to double. Consistent with the
+mechanism the method depends on: it is a mean-reversion trade on a failed
+breakout, and FX futures range more and displace less than the Nasdaq.
+
+## What this does not establish
+
+1. **The five samples are not independent.** They cover the same eleven months,
+   and the three currency futures are all crosses against the dollar, so a
+   single regime is being counted more than once.
+2. **Bar-level pessimism persists.** Only 83–209 setups per symbol resolve with
+   1-minute data; the rest score a bar holding both target and stop as a loss.
+   That biases the numbers down, so +0.195R remains a floor.
+3. **Fills are assumed at the exact limit touch**, with no queue position and no
+   slippage. At a 1R target the trade count is high, so execution quality
+   matters proportionally more than it would with distant targets.
+4. **A++ is still unmeasurable** — 21 setups across all five instruments.
+5. One timeframe, and a period that does not include a genuine bear market.
+
+The honest summary: on this data the graded-breaker method, entered at the zone
+edge with a 1R target and no context filter, produces about +0.2R per trade
+across five futures. That is a real number on a real sample, and it is also the
+opposite of what the source teaches — his grading does not sort, and his
+targets are further out than the data supports.
