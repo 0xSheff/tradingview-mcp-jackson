@@ -1,0 +1,275 @@
+// Marco LB — Liquidity Blocks (Inter Equity Trading / Marco Accettone)
+// Methodology source of truth: docs/MARCO.md. Every numeric input here is a
+// [CALIBRATION] — the videos state the rules qualitatively. Defaults mirror
+// the table in docs/MARCO.md §6.
+//
+// What it draws:
+//   * Intact levels of liquidity (swing lows/highs, merged when "equal").
+//     A level that accumulates touches becomes build-up (thicker line).
+//   * Liquidity blocks: when a level is swept and price reclaims it within
+//     `confirmBars`, the sweep extreme becomes an LB zone, extended right.
+//     Qualified LBs (swept a build-up level or an old level) draw bright,
+//     the rest faint — Accettone's "not every LB is an entry" filter, §3.
+//   * Tap labels + alerts when price returns into a zone.
+//   * Zone dies on close beyond its extreme (stop-loss side) or on age-out.
+//@version=6
+indicator("Marco LB — Liquidity Blocks", "Marco LB", overlay = true,
+     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ---------------------------------------------------------------- inputs ---
+grpD = "Detection"
+pivotLen    = input.int(3,   "Pivot length (bars each side)", minval = 1, group = grpD)
+confirmBars = input.int(3,   "Reclaim swept level within (bars)", minval = 1, group = grpD,
+     tooltip = "After a sweep, a close back beyond the swept level within this many bars confirms the LB. Otherwise it is a breakdown, not a trap.")
+maxLevels   = input.int(20,  "Max tracked levels per side", minval = 2, group = grpD)
+
+grpZ = "Zones"
+zoneModeS   = input.string("Swept level", "Zone inner edge", options = ["Swept level", "Sweep candle body"], group = grpZ)
+maxAgeBars  = input.int(300, "Zone max age (bars)", minval = 10, group = grpZ)
+keepDead    = input.bool(false, "Keep invalidated zones (grey)", group = grpZ)
+
+grpQ = "Qualification (LB filter)"
+eqTol       = input.float(0.25, "Equal-level tolerance (ATR mult)", step = 0.05, minval = 0.0, group = grpQ)
+minTouches  = input.int(2,   "Touches to call a level build-up", minval = 2, group = grpQ)
+minLevelAge = input.int(50,  "…or level intact for ≥ (bars)", minval = 1, group = grpQ)
+
+grpV = "Visuals"
+showLevels  = input.bool(true, "Show liquidity levels", group = grpV)
+showTaps    = input.bool(true, "Label zone taps", group = grpV)
+colBull     = input.color(#26a69a, "Bullish", group = grpV, inline = "c")
+colBear     = input.color(#ef5350, "Bearish", group = grpV, inline = "c")
+
+int MAX_BLOCKS = 80
+
+// ----------------------------------------------------------------- types ---
+type LqLevel
+    float price
+    int   born
+    int   touches
+    line  ln
+
+type Pending
+    float lvl     = na // nearest swept level (reclaim target / zone inner edge)
+    int   touches = 0  // best touch count among swept levels
+    int   age     = 0  // oldest swept level's age at sweep, bars
+    float ext     = na // excursion extreme (zone outer edge)
+    int   extBar  = na
+    float extBody = na // body edge of the excursion-extreme candle
+    int   miss    = 0  // consecutive closes that failed to reclaim
+
+type Block
+    box   bx
+    float top
+    float bot
+    bool  isBull
+    bool  qualified
+    bool  tapped
+    bool  dead
+    int   born
+
+// ----------------------------------------------------------------- state ---
+var array<LqLevel> lowLvls  = array.new<LqLevel>()
+var array<LqLevel> highLvls = array.new<LqLevel>()
+var array<Block>   blocks   = array.new<Block>()
+var Pending pendBull = Pending.new()
+var Pending pendBear = Pending.new()
+
+atrVal   = ta.atr(14)
+bodyLo   = math.min(open, close)
+bodyHi   = math.max(open, close)
+colDead  = color.new(#787b86, 82)
+
+// --------------------------------------------------------------- helpers ---
+newBlock(bool isBull, int leftBar, float top, float bot, bool qualified) =>
+    col   = isBull ? colBull : colBear
+    fillT = qualified ? 82 : 93
+    bordT = qualified ? 35 : 72
+    txtT  = qualified ? 25 : 65
+    b = box.new(leftBar, top, bar_index, bot,
+         border_color = color.new(col, bordT), border_width = 1,
+         bgcolor = color.new(col, fillT),
+         text = qualified ? "LB" : "lb", text_size = size.tiny,
+         text_color = color.new(col, txtT),
+         text_halign = text.align_right,
+         text_valign = isBull ? text.align_bottom : text.align_top)
+    array.push(blocks, Block.new(bx = b, top = top, bot = bot, isBull = isBull,
+         qualified = qualified, tapped = false, dead = false, born = bar_index))
+    if array.size(blocks) > MAX_BLOCKS
+        Block old = array.shift(blocks)
+        box.delete(old.bx)
+
+// ------------------------------------------------- 1. maintain LB zones ----
+bool tapBull  = false
+bool tapBear  = false
+bool tapBullQ = false
+bool tapBearQ = false
+
+if array.size(blocks) > 0
+    for i = array.size(blocks) - 1 to 0
+        Block blk = array.get(blocks, i)
+        if not blk.dead
+            box.set_right(blk.bx, bar_index)
+            bool invalid = blk.isBull ? close < blk.bot : close > blk.top
+            bool expired = bar_index - blk.born > maxAgeBars
+            if invalid or expired
+                blk.dead := true
+                if keepDead
+                    box.set_bgcolor(blk.bx, colDead)
+                    box.set_border_color(blk.bx, colDead)
+                    box.set_text_color(blk.bx, colDead)
+                else
+                    box.delete(blk.bx)
+                    array.remove(blocks, i)
+            else if bar_index > blk.born and not blk.tapped
+                if blk.isBull and low <= blk.top
+                    blk.tapped := true
+                    tapBull  := true
+                    tapBullQ := tapBullQ or blk.qualified
+                    if showTaps
+                        label.new(bar_index, blk.top, "tap", style = label.style_label_up,
+                             color = color.new(colBull, 55), textcolor = color.white, size = size.tiny)
+                if not blk.isBull and high >= blk.bot
+                    blk.tapped := true
+                    tapBear  := true
+                    tapBearQ := tapBearQ or blk.qualified
+                    if showTaps
+                        label.new(bar_index, blk.bot, "tap", style = label.style_label_down,
+                             color = color.new(colBear, 55), textcolor = color.white, size = size.tiny)
+
+// ------------------------------------------- 2. extend intact level lines --
+if array.size(lowLvls) > 0
+    for lv in lowLvls
+        if not na(lv.ln)
+            line.set_x2(lv.ln, bar_index)
+if array.size(highLvls) > 0
+    for lv in highLvls
+        if not na(lv.ln)
+            line.set_x2(lv.ln, bar_index)
+
+// --------------------------------------- 3. sweep scan: consume levels -----
+if array.size(lowLvls) > 0
+    for i = array.size(lowLvls) - 1 to 0
+        LqLevel lv = array.get(lowLvls, i)
+        if low < lv.price
+            if na(pendBull.lvl)
+                pendBull.lvl     := lv.price
+                pendBull.touches := lv.touches
+                pendBull.age     := bar_index - lv.born
+                pendBull.ext     := low
+                pendBull.extBar  := bar_index
+                pendBull.extBody := bodyLo
+                pendBull.miss    := 0
+            else
+                pendBull.lvl     := math.min(pendBull.lvl, lv.price)
+                pendBull.touches := math.max(pendBull.touches, lv.touches)
+                pendBull.age     := math.max(pendBull.age, bar_index - lv.born)
+            if not na(lv.ln)
+                line.delete(lv.ln)
+            array.remove(lowLvls, i)
+
+if array.size(highLvls) > 0
+    for i = array.size(highLvls) - 1 to 0
+        LqLevel lv = array.get(highLvls, i)
+        if high > lv.price
+            if na(pendBear.lvl)
+                pendBear.lvl     := lv.price
+                pendBear.touches := lv.touches
+                pendBear.age     := bar_index - lv.born
+                pendBear.ext     := high
+                pendBear.extBar  := bar_index
+                pendBear.extBody := bodyHi
+                pendBear.miss    := 0
+            else
+                pendBear.lvl     := math.max(pendBear.lvl, lv.price)
+                pendBear.touches := math.max(pendBear.touches, lv.touches)
+                pendBear.age     := math.max(pendBear.age, bar_index - lv.born)
+            if not na(lv.ln)
+                line.delete(lv.ln)
+            array.remove(highLvls, i)
+
+// ------------------------------- 4. pending sweeps: reclaim or abandon -----
+if not na(pendBull.lvl)
+    if low < pendBull.ext
+        pendBull.ext     := low
+        pendBull.extBar  := bar_index
+        pendBull.extBody := bodyLo
+    if close > pendBull.lvl
+        float zTop = zoneModeS == "Swept level" ? pendBull.lvl :
+             math.min(pendBull.lvl, math.max(pendBull.extBody, pendBull.ext + syminfo.mintick))
+        bool qual = pendBull.touches >= minTouches or pendBull.age >= minLevelAge
+        newBlock(true, pendBull.extBar, zTop, pendBull.ext, qual)
+        pendBull := Pending.new()
+    else
+        pendBull.miss += 1
+        if pendBull.miss > confirmBars
+            pendBull := Pending.new()
+
+if not na(pendBear.lvl)
+    if high > pendBear.ext
+        pendBear.ext     := high
+        pendBear.extBar  := bar_index
+        pendBear.extBody := bodyHi
+    if close < pendBear.lvl
+        float zBot = zoneModeS == "Swept level" ? pendBear.lvl :
+             math.max(pendBear.lvl, math.min(pendBear.extBody, pendBear.ext - syminfo.mintick))
+        bool qual = pendBear.touches >= minTouches or pendBear.age >= minLevelAge
+        newBlock(false, pendBear.extBar, pendBear.ext, zBot, qual)
+        pendBear := Pending.new()
+    else
+        pendBear.miss += 1
+        if pendBear.miss > confirmBars
+            pendBear := Pending.new()
+
+// ------------------------------------ 5. register new liquidity levels -----
+registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice) =>
+    bool merged = false
+    if array.size(lvls) > 0
+        for lv in lvls
+            if math.abs(lv.price - pPrice) <= eqTol * atrVal
+                lv.touches += 1
+                lv.price := isLow ? math.min(lv.price, pPrice) : math.max(lv.price, pPrice)
+                if not na(lv.ln)
+                    line.set_y1(lv.ln, lv.price)
+                    line.set_y2(lv.ln, lv.price)
+                    if lv.touches >= minTouches
+                        line.set_width(lv.ln, 2)
+                        line.set_color(lv.ln, color.new(isLow ? colBull : colBear, 30))
+                merged := true
+                break
+    if not merged
+        line lin = showLevels ?
+             line.new(pBar, pPrice, bar_index, pPrice,
+                 color = color.new(isLow ? colBull : colBear, 65),
+                 width = 1, style = line.style_dotted) : na
+        array.push(lvls, LqLevel.new(price = pPrice, born = pBar, touches = 1, ln = lin))
+        if array.size(lvls) > maxLevels
+            LqLevel old = array.shift(lvls)
+            if not na(old.ln)
+                line.delete(old.ln)
+
+insideAliveZone(bool isBull, float p) =>
+    bool inside = false
+    if array.size(blocks) > 0
+        for blk in blocks
+            if not blk.dead and blk.isBull == isBull and p <= blk.top and p >= blk.bot
+                inside := true
+                break
+    inside
+
+float pl = ta.pivotlow(pivotLen, pivotLen)
+float ph = ta.pivothigh(pivotLen, pivotLen)
+
+if not na(pl)
+    // the sweep extreme itself holds no liquidity (docs/MARCO.md §2.3) —
+    // skip lows born inside a live bullish zone or during an unresolved sweep
+    if na(pendBull.lvl) and not insideAliveZone(true, pl)
+        registerLevel(lowLvls, true, bar_index - pivotLen, pl)
+
+if not na(ph)
+    if na(pendBear.lvl) and not insideAliveZone(false, ph)
+        registerLevel(highLvls, false, bar_index - pivotLen, ph)
+
+// ---------------------------------------------------------------- alerts ---
+alertcondition(tapBullQ, "Tap — qualified bullish LB", "Price tapped a QUALIFIED bullish liquidity block")
+alertcondition(tapBearQ, "Tap — qualified bearish LB", "Price tapped a QUALIFIED bearish liquidity block")
+alertcondition(tapBull or tapBear, "Tap — any LB", "Price tapped a liquidity block")
