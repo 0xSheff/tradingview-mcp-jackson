@@ -6,9 +6,15 @@
  * change both files. Pure functions first (testable without TradingView),
  * chart-driving brief at the bottom (same shape the chris/CLS branches use).
  */
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
 import { loadRules, loadWatchlist } from "./config.js";
+
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../");
+const WEEKLY_DIR = join(PROJECT_ROOT, "briefs", "weekly");
 
 export const MARCO_DEFAULTS = {
   timeframes: ["15", "60"],
@@ -30,6 +36,10 @@ export const MARCO_DEFAULTS = {
   min_zone_atr: 0.25, // thinner zones are flagged `thin`: not entry-grade
   stop_buffer_atr: 0.1, // reported stop sits this far past the extreme
   story_fresh_bars: 16, // a trap older than this reads as stale
+
+  // V6 (docs/MARCO.md §4.4): "low respecting low" — a later low that holds
+  // this far above a level counts as a confirming touch, not a new level
+  respect_tolerance_atr: 0.75,
 
   // the 10 a.m. reversal model, docs/MARCO.md §4.3 [SOURCE V5]
   h4: {
@@ -101,6 +111,23 @@ function registerLevel(lvls, side, born, price, atrNow, cfg, events, bar) {
       return;
     }
   }
+  // "low respecting low": a later low that holds above an existing level (by
+  // less than respect_tolerance_atr) confirms the liquidity below it —
+  // docs/MARCO.md §4.4. The level keeps the original (further) price.
+  const respectTol = (atrNow ?? 0) * cfg.respect_tolerance_atr;
+  let best = null;
+  for (const lv of lvls) {
+    const gap = side === "low" ? price - lv.price : lv.price - price;
+    if (gap > 0 && gap <= respectTol && (!best || gap < best.gap)) best = { lv, gap };
+  }
+  if (best) {
+    best.lv.touches += 1;
+    best.lv.lastTouch = born;
+    if (best.lv.touches === cfg.min_touches) {
+      events.push({ bar, type: `${side}_buildup`, level: best.lv.price, touches: best.lv.touches, respect: true });
+    }
+    return;
+  }
   lvls.push({ price, born, touches: 1, lastTouch: born });
   if (lvls.length > cfg.max_levels) lvls.shift();
 }
@@ -145,6 +172,26 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
         blk.death = invalid ? "invalidated" : "expired";
         if (invalid) {
           events.push({ bar: i, type: `${blk.side}_lb_invalidated`, zone: [blk.bot, blk.top] });
+          // the buyers/sellers who leaned on this zone are now trapped: its
+          // extreme is swept liquidity, and a reclaim makes the new extreme an
+          // LB (docs/MARCO.md §7.1 — the Oct-2023 NQ bottom)
+          if (blk.side === "bull") {
+            if (!pendBull) {
+              pendBull = { lvl: blk.bot, touches: 1, age: i - blk.extBar, ext: b.low, extBar: i, miss: 0 };
+            } else {
+              pendBull.lvl = Math.min(pendBull.lvl, blk.bot);
+              pendBull.age = Math.max(pendBull.age, i - blk.extBar);
+            }
+            events.push({ bar: i, type: "low_swept", level: blk.bot, touches: 1, from_lb: true });
+          } else {
+            if (!pendBear) {
+              pendBear = { lvl: blk.top, touches: 1, age: i - blk.extBar, ext: b.high, extBar: i, miss: 0 };
+            } else {
+              pendBear.lvl = Math.max(pendBear.lvl, blk.top);
+              pendBear.age = Math.max(pendBear.age, i - blk.extBar);
+            }
+            events.push({ bar: i, type: "high_swept", level: blk.top, touches: 1, from_lb: true });
+          }
         }
         continue;
       }
@@ -203,6 +250,11 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
         const qualified =
           pendBull.touches >= cfg.min_touches || pendBull.age >= cfg.min_level_age;
         const thin = atr[i] ? pendBull.lvl - pendBull.ext < cfg.min_zone_atr * atr[i] : false;
+        // docs/MARCO.md §3 (V1 diagram): an unqualified LB born against a
+        // live qualified one is inducement — the crowd read the break of an
+        // internal point as a BOS. A by-the-book LB (pullback origin), but it
+        // never flips the story.
+        const inducement = !qualified && blocks.some((o) => !o.dead && o.qualified && o.side === "bear");
         blocks.push({
           side: "bull",
           top: pendBull.lvl,
@@ -213,13 +265,15 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
           sweptAge: pendBull.age,
           qualified,
           thin,
+          inducement,
           tapped: false,
           dead: false,
         });
-        events.push({ bar: i, type: "bull_lb_created", zone: [pendBull.ext, pendBull.lvl], qualified });
+        events.push({ bar: i, type: "bull_lb_created", zone: [pendBull.ext, pendBull.lvl], qualified, inducement });
         pendBull = null;
       } else if (++pendBull.miss > cfg.confirm_bars) {
-        events.push({ bar: i, type: "low_breakdown", level: pendBull.lvl });
+        const qualified = pendBull.touches >= cfg.min_touches || pendBull.age >= cfg.min_level_age;
+        events.push({ bar: i, type: "low_breakdown", level: pendBull.lvl, qualified });
         pendBull = null;
       }
     }
@@ -232,6 +286,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
         const qualified =
           pendBear.touches >= cfg.min_touches || pendBear.age >= cfg.min_level_age;
         const thin = atr[i] ? pendBear.ext - pendBear.lvl < cfg.min_zone_atr * atr[i] : false;
+        const inducement = !qualified && blocks.some((o) => !o.dead && o.qualified && o.side === "bull");
         blocks.push({
           side: "bear",
           top: pendBear.ext,
@@ -242,13 +297,15 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
           sweptAge: pendBear.age,
           qualified,
           thin,
+          inducement,
           tapped: false,
           dead: false,
         });
-        events.push({ bar: i, type: "bear_lb_created", zone: [pendBear.lvl, pendBear.ext], qualified });
+        events.push({ bar: i, type: "bear_lb_created", zone: [pendBear.lvl, pendBear.ext], qualified, inducement });
         pendBear = null;
       } else if (++pendBear.miss > cfg.confirm_bars) {
-        events.push({ bar: i, type: "high_breakdown", level: pendBear.lvl });
+        const qualified = pendBear.touches >= cfg.min_touches || pendBear.age >= cfg.min_level_age;
+        events.push({ bar: i, type: "high_breakdown", level: pendBear.lvl, qualified });
         pendBear = null;
       }
     }
@@ -256,13 +313,17 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
     // 4. register the pivot confirmed at this bar (if any) as a new level.
     // The sweep extreme itself holds no liquidity (docs/MARCO.md §2.3):
     // skip pivots born during an unresolved sweep or inside a live zone.
+    // A pending sweep only hides pivots inside its own excursion (beyond the
+    // swept level); liquidity forming elsewhere while it resolves still counts.
     const j = i - p;
     if (j >= p) {
-      if (!pendBull && isPivot(j, "low") && !insideZone(blocks, "bull", bars[j].low)) {
-        registerLevel(lowLvls, "low", j, bars[j].low, atr[i], cfg, events, i);
+      const lo = bars[j].low;
+      const hi = bars[j].high;
+      if (!(pendBull && lo <= pendBull.lvl) && isPivot(j, "low") && !insideZone(blocks, "bull", lo)) {
+        registerLevel(lowLvls, "low", j, lo, atr[i], cfg, events, i);
       }
-      if (!pendBear && isPivot(j, "high") && !insideZone(blocks, "bear", bars[j].high)) {
-        registerLevel(highLvls, "high", j, bars[j].high, atr[i], cfg, events, i);
+      if (!(pendBear && hi >= pendBear.lvl) && isPivot(j, "high") && !insideZone(blocks, "bear", hi)) {
+        registerLevel(highLvls, "high", j, hi, atr[i], cfg, events, i);
       }
     }
   }
@@ -293,14 +354,62 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
     .sort((a, b) => b.price - a.price)
     .map(lvl);
 
+  // targets = intact levels plus alive opposite-side LB zones beyond price —
+  // "all the way back at the highs" (V6) is a tap into the top's bearish LB
+  const zoneTargets = (side, dir) =>
+    map.blocks
+      .filter((b) => !b.dead && b.side === side && (dir > 0 ? b.bot > price : b.top < price))
+      .map((b) => ({
+        price: round(dir > 0 ? b.bot : b.top),
+        touches: b.sweptTouches ?? 1,
+        buildup: b.qualified,
+        bars_ago: n - 1 - b.born,
+        kind: "lb",
+        zone: [round(b.bot), round(b.top)],
+      }));
+  const targetsAbove = [...above.map((l) => ({ ...l, kind: "level" })), ...zoneTargets("bear", 1)].sort(
+    (a, b) => a.price - b.price,
+  );
+  const targetsBelow = [...below.map((l) => ({ ...l, kind: "level" })), ...zoneTargets("bull", -1)].sort(
+    (a, b) => b.price - a.price,
+  );
+  const tgtTxt = (arr) => arr.slice(0, 3).map((t) => (t.kind === "lb" ? `${t.price} (LB)` : `${t.price}`)).join(", ");
+
   const recent = map.events.filter((e) => n - 1 - e.bar <= cfg.story_lookback);
   const lastOf = (...types) => [...recent].reverse().find((e) => types.includes(e.type)) ?? null;
-  const lastLb = lastOf("bull_lb_created", "bear_lb_created");
-  const lastBreak = lastOf("low_breakdown", "high_breakdown");
+  let lastLb = lastOf("bull_lb_created", "bear_lb_created");
+  let lastBreak = lastOf("low_breakdown", "high_breakdown");
   const ago = (bar) => {
     const b = n - 1 - bar;
     return b === 1 ? "1 bar ago" : `${b} bars ago`;
   };
+
+  // The story anchor (docs/MARCO.md §3): the most recent alive LB that ran a
+  // confirmed side of the range (build-up / age qualified). An LB never sets
+  // the story by itself — liquidity does — so unqualified events after the
+  // anchor on the other side (an internal point run and reclaimed, or
+  // consumed) are inducement: marked, expected to give a false reaction,
+  // never a flip. The anchor holds until it is invalidated or expires, even
+  // when it is older than story_lookback (the V1 blue LB was 68 bars old at
+  // its counterpart's tap).
+  const anchor = map.blocks.filter((b) => !b.dead && b.qualified).sort((a, b) => b.born - a.born)[0] ?? null;
+  const dirOf = (e) => (e.type === "bull_lb_created" || e.type === "high_breakdown" ? 1 : -1);
+  let inducedLb = null;
+  let inducedBreak = null;
+  if (anchor) {
+    const anchorDir = anchor.side === "bull" ? 1 : -1;
+    if (lastLb && lastLb.bar > anchor.born && !lastLb.qualified && dirOf(lastLb) !== anchorDir) {
+      inducedLb = lastLb;
+      lastLb = null;
+    }
+    if (lastBreak && lastBreak.bar > anchor.born && !lastBreak.qualified && dirOf(lastBreak) !== anchorDir) {
+      inducedBreak = lastBreak;
+      lastBreak = null;
+    }
+    if (!lastLb || lastLb.bar < anchor.born) {
+      lastLb = map.events.find((e) => e.bar === anchor.born && e.type === `${anchor.side}_lb_created`) ?? lastLb;
+    }
+  }
 
   let mode;
   let read;
@@ -321,17 +430,17 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
       read =
         `highs were run and reclaimed ${ago(lastLb.bar)} (trap) — ` +
         `look for shorts at the bearish LB ${round(lastLb.zone[0])}–${round(lastLb.zone[1])}` +
-        (below.length
-          ? `; targets: intact lows ${below.slice(0, 3).map((l) => l.price).join(", ")}`
-          : "; warning: no intact lows left to target");
+        (targetsBelow.length
+          ? `; targets: ${tgtTxt(targetsBelow)}`
+          : "; warning: no liquidity left below to target");
     } else {
       mode = "buy_story";
       read =
         `lows were run and reclaimed ${ago(lastLb.bar)} (trap) — ` +
         `look for longs at the bullish LB ${round(lastLb.zone[0])}–${round(lastLb.zone[1])}` +
-        (above.length
-          ? `; targets: intact highs ${above.slice(0, 3).map((l) => l.price).join(", ")}`
-          : "; warning: no intact highs left to target");
+        (targetsAbove.length
+          ? `; targets: ${tgtTxt(targetsAbove)}`
+          : "; warning: no liquidity left above to target");
     }
   } else if (lastBreak) {
     mode = lastBreak.type === "low_breakdown" ? "down_continuation" : "up_continuation";
@@ -361,16 +470,129 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
     if (lbBlock?.tapped) notes.push("LB already tapped once");
     if (notes.length) read += ` [${notes.join("; ")}]`;
   }
+  const inducedBlock = inducedLb
+    ? map.blocks.find((b) => b.born === inducedLb.bar && inducedLb.type.startsWith(b.side)) ?? null
+    : null;
+  const inducedAlive = !!(inducedBlock && !inducedBlock.dead);
+  if (inducedLb) {
+    const bear = inducedLb.type === "bear_lb_created";
+    read +=
+      ` — the ${bear ? "bearish" : "bullish"} LB ${round(inducedLb.zone[0])}–${round(inducedLb.zone[1])} ` +
+      `created ${ago(inducedLb.bar)} ${inducedAlive ? "is" : "was"} inducement (an internal ${bear ? "high" : "low"} run inside the leg): ` +
+      (inducedAlive ? "a pullback origin, not a flip" : "already run through, the story never flipped");
+  }
+  if (inducedBreak) {
+    read +=
+      ` — the ${inducedBreak.type === "low_breakdown" ? "low" : "high"} ${round(inducedBreak.level)} consumed ` +
+      `${ago(inducedBreak.bar)} was an internal point: inducement while the LB holds, not a flip`;
+  }
+
+  const direction =
+    mode === "buy_story" || mode === "up_continuation"
+      ? 1
+      : mode === "sell_story" || mode === "down_continuation"
+        ? -1
+        : 0;
+  const lb =
+    lastLb && (mode === "buy_story" || mode === "sell_story")
+      ? {
+          zone: [round(lastLb.zone[0]), round(lastLb.zone[1])],
+          alive: !!(lbBlock && !lbBlock.dead),
+          thin: lbBlock?.thin === true,
+        }
+      : null;
 
   return {
     price: round(price),
     mode,
+    direction,
     fresh,
+    lb,
+    inducement: inducedLb
+      ? {
+          side: inducedLb.type === "bear_lb_created" ? "bear" : "bull",
+          zone: [round(inducedLb.zone[0]), round(inducedLb.zone[1])],
+          alive: inducedAlive,
+        }
+      : null,
     read,
     nearest: { high: above[0] ?? null, low: below[0] ?? null },
     intact_above: above.slice(0, 6),
     intact_below: below.slice(0, 6),
+    targets_above: targetsAbove.slice(0, 6),
+    targets_below: targetsBelow.slice(0, 6),
   };
+}
+
+/**
+ * Sweep-trigger setups (docs/MARCO.md §4.4): in the bias direction, each
+ * confirmed level of liquidity that price would have to run, paired with the
+ * nearest alive LB beyond it (the stop anchor) and the target. Nearest
+ * trigger first — that is the next one the market can hand us.
+ */
+export function triggerSetups(map, bars, cfg = MARCO_DEFAULTS, { direction = 0, target = null, max = 3 } = {}) {
+  if (!direction || !bars?.length) return [];
+  const n = bars.length;
+  const price = bars[n - 1].close;
+  const atr = atrSeries(bars, cfg.atr_length);
+  const buf = cfg.stop_buffer_atr * (atr[n - 1] ?? 0);
+  const long = direction > 0;
+  const levels = (long ? map.levels.lows : map.levels.highs)
+    .filter((l) => (long ? l.price < price : l.price > price))
+    .sort((a, b) => (long ? b.price - a.price : a.price - b.price));
+  const anchors = map.blocks.filter((b) => !b.dead && b.side === (long ? "bull" : "bear"));
+  const candidates = [
+    ...(long ? map.levels.highs : map.levels.lows)
+      .filter((l) => (long ? l.price > price : l.price < price))
+      .map((l) => l.price),
+    ...map.blocks
+      .filter((b) => !b.dead && b.side === (long ? "bear" : "bull") && (long ? b.bot > price : b.top < price))
+      .map((b) => (long ? b.bot : b.top)),
+  ];
+  const tgt = target ?? (candidates.length ? (long ? Math.min(...candidates) : Math.max(...candidates)) : null);
+
+  const setup = (kind, entry, anchor, extra) => {
+    const stop = anchor ? (long ? anchor.bot - buf : anchor.top + buf) : null;
+    const risk = stop === null ? null : Math.abs(entry - stop);
+    const rr = tgt !== null && risk ? Math.abs(tgt - entry) / risk : null;
+    return {
+      kind,
+      side: long ? "long" : "short",
+      trigger: round(entry),
+      distance: round(Math.abs(price - entry)),
+      stop_anchor: anchor ? [round(anchor.bot), round(anchor.top)] : null,
+      stop: stop === null ? null : round(stop),
+      target: tgt === null ? null : round(tgt),
+      rr: rr === null ? null : round(rr),
+      ...extra,
+    };
+  };
+
+  // sweep triggers: a level to be run, stop under/over the nearest LB beyond it
+  const sweeps = levels.map((l) => {
+    const anchor = anchors
+      .filter((b) => (long ? b.top < l.price : b.bot > l.price))
+      .sort((a, b) => (long ? b.top - a.top : a.bot - b.bot))[0] ?? null;
+    return setup("sweep", l.price, anchor, {
+      confirmed: l.touches >= cfg.min_touches,
+      touches: l.touches,
+      note: anchor ? null : "no LB beyond the trigger — no stop anchor; wait for one or refine on a lower TF",
+    });
+  });
+  // zone taps: an alive LB in the bias direction, entry at its inner edge,
+  // stop past its extreme (the V1 entry; V6 entries 1, 4 and 5)
+  const taps = anchors
+    .filter((b) => (long ? b.top < price : b.bot > price))
+    .map((b) =>
+      setup("tap", long ? b.top : b.bot, b, {
+        confirmed: b.qualified,
+        touches: b.sweptTouches ?? 1,
+        tapped: b.tapped,
+        note: b.thin ? "thin zone — refine the entry on a lower TF" : null,
+      }),
+    );
+
+  return [...sweeps, ...taps].sort((a, b) => a.distance - b.distance).slice(0, max);
 }
 
 function tzParts(unixSec, timeZone) {
@@ -531,8 +753,33 @@ export function htfContext(htfBars, price, cfg = MARCO_DEFAULTS) {
   };
 }
 
+/**
+ * Zones against the bias are pullback origins, never entries (V1 5:27–6:02:
+ * "still by-the-book liquidity blocks, but not ones we would use for entry
+ * — you can anticipate this false reaction, this pullback"). Nearest first.
+ */
+export function falseReactions(map, price, direction, { max = 3 } = {}) {
+  if (!direction) return [];
+  const long = direction > 0;
+  return map.blocks
+    .filter((b) => !b.dead && b.side === (long ? "bear" : "bull") && (long ? b.bot > price : b.top < price))
+    .map((b) => ({
+      side: b.side,
+      zone: [round(b.bot), round(b.top)],
+      qualified: b.qualified,
+      inducement: b.inducement === true,
+      tapped: b.tapped,
+      distance: round(long ? b.bot - price : price - b.top),
+      note:
+        `expect a false ${long ? "bearish" : "bullish"} reaction here — a pullback toward the next ${long ? "long" : "short"} setup, not an entry` +
+        (b.inducement ? " (inducement: an internal point run inside the leg)" : ""),
+    }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, max);
+}
+
 /** One timeframe's full read: story + zones + levels + the 10 a.m. gate. */
-export function analyzeMarco(bars, cfg = MARCO_DEFAULTS) {
+export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null } = {}) {
   if (!Array.isArray(bars) || bars.length < cfg.pivot_len * 2 + 10) {
     return { error: "not enough bars", bars: bars?.length ?? 0 };
   }
@@ -541,14 +788,19 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS) {
   const story = storyRead(map, bars, cfg);
   const atr = atrSeries(bars, cfg.atr_length);
   const buf = cfg.stop_buffer_atr * (atr[n - 1] ?? 0);
+  // the higher-timeframe bias leads when known; otherwise this TF's own story
+  const dir = bias || story.direction;
+  const roleOf = (b) => (!dir ? null : b.side === (dir > 0 ? "bull" : "bear") ? "entry" : "pullback_origin");
 
   const blocks = map.blocks
     .filter((b) => !b.dead)
     .map((b) => ({
       side: b.side,
+      role: roleOf(b),
       zone: [round(b.bot), round(b.top)],
       qualified: b.qualified,
       thin: b.thin === true,
+      inducement: b.inducement === true,
       tapped: b.tapped,
       age_bars: n - 1 - b.born,
       stop_beyond: b.side === "bull" ? round(b.bot - buf) : round(b.top + buf),
@@ -564,14 +816,309 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS) {
   return {
     bars_analyzed: n,
     last_price: story.price,
-    story: { mode: story.mode, read: story.read },
+    story: { mode: story.mode, direction: story.direction, read: story.read, lb: story.lb },
+    bias_used: dir,
     blocks,
+    triggers: triggerSetups(map, bars, cfg, { direction: dir }),
+    false_reactions: falseReactions(map, story.price, dir),
     liquidity: {
       intact_above: story.intact_above,
       intact_below: story.intact_below,
     },
     h4_model: h4Model(bars, cfg),
   };
+}
+
+// ------------------------------------------------------------ weekly bias --
+
+/**
+ * Weekly vs daily story → one bias for the week. The divergence rule is the
+ * user's [CALIBRATION]: when the daily disagrees with the weekly, trade the
+ * daily consciously as counter-trend with targets at the nearest levels
+ * only; when they agree, target the higher-timeframe liquidity (V6 §3.1).
+ */
+export function resolveBias(w, d) {
+  // a "story" is a confirmed trap (buy/sell_story); a "lean" also counts the
+  // continuation states — continuation alone never makes a counter-trend case
+  const story = (s) => (s?.mode === "buy_story" ? 1 : s?.mode === "sell_story" ? -1 : 0);
+  const lean = (s) => s?.direction ?? 0;
+  const sW = story(w);
+  const sD = story(d);
+  const lW = lean(w);
+  const lD = lean(d);
+  const far = (s, dir) =>
+    (dir > 0 ? (s?.targets_above ?? s?.intact_above) : (s?.targets_below ?? s?.intact_below)) ?? [];
+  const preferBuildup = (levels) => levels.find((l) => l.buildup) ?? levels[0] ?? null;
+  const leanWord = (v) => (v > 0 ? "up" : v < 0 ? "down" : "flat");
+
+  // a weekly story is "live" while its trap is fresh and it still has a
+  // target; a daily trap against a live weekly story is inducement (V6), and
+  // only a stale weekly story yields to the daily as counter-trend [user]
+  const weeklyLive = !!sW && w?.fresh !== false && far(w, sW).length > 0;
+
+  let bias = 0;
+  let regime = "no_bias";
+  let targets = [];
+  let primary = null;
+  let note = `no trap on either timeframe (weekly leans ${leanWord(lW)}, daily leans ${leanWord(lD)}) — no bias, wait for a run`;
+  if (lW && lD === lW && (sW || sD)) {
+    bias = lW;
+    regime = "aligned";
+    targets = far(w, lW).slice(0, 3);
+    primary = preferBuildup(targets);
+    note = "weekly and daily agree — every move against the bias is false; target the weekly liquidity";
+  } else if (sW && sD && weeklyLive) {
+    bias = sW;
+    regime = "pullback";
+    targets = far(w, sW).slice(0, 3);
+    primary = preferBuildup(targets);
+    note =
+      `daily ${sD > 0 ? "bullish" : "bearish"} trap against a live weekly ${sW > 0 ? "buy" : "sell"} story — inducement, ` +
+      "not a new story; the move against the bias is false, use it to enter with the weekly (trigger below/above the daily trap's run)";
+  } else if (sW && sD) {
+    bias = sD;
+    regime = "counter_trend";
+    targets = far(d, sD).slice(0, 2);
+    primary = targets[0] ?? null;
+    note = "daily trap against a stale weekly story — trade the daily consciously as counter-trend, targets at the nearest levels only";
+  } else if (sW && lD === -sW) {
+    bias = sW;
+    regime = "pullback";
+    targets = far(w, sW).slice(0, 3);
+    primary = preferBuildup(targets);
+    note = "daily is running against the weekly without a trap — a pullback; wait for the daily to print its own trap in the bias direction before triggering";
+  } else if (sD) {
+    bias = sD;
+    regime = "daily_only";
+    targets = far(d, sD).slice(0, 2);
+    primary = targets[0] ?? null;
+    note =
+      lW === -sD
+        ? "weekly leans the other way without a trap — treat as counter-trend, nearest targets only"
+        : "weekly has no story — the daily leads, nearest targets";
+  } else if (sW) {
+    bias = sW;
+    regime = "weekly_only";
+    targets = far(w, sW).slice(0, 3);
+    primary = preferBuildup(targets);
+    note = "daily has no story — the weekly leads";
+  }
+
+  const weeklyLeads = regime === "aligned" || regime === "weekly_only" || regime === "pullback";
+  const lead = weeklyLeads ? w : d;
+  const leadLb = lead?.lb?.alive ? lead.lb : (regime === "aligned" && d?.lb?.alive ? d.lb : null);
+  const invalidation =
+    bias && leadLb
+      ? { level: bias > 0 ? leadLb.zone[0] : leadLb.zone[1], rule: `${weeklyLeads ? "weekly" : "daily"} close ${bias > 0 ? "below" : "above"}` }
+      : null;
+
+  return {
+    bias,
+    bias_word: bias > 0 ? "long" : bias < 0 ? "short" : "none",
+    regime,
+    weekly: { mode: w?.mode ?? null, read: w?.read ?? null },
+    daily: { mode: d?.mode ?? null, read: d?.read ?? null },
+    targets,
+    primary_target: primary?.price ?? null,
+    invalidation,
+    note,
+  };
+}
+
+function isoWeek(date = new Date()) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  // a brief written on the weekend is for the week ahead
+  if (d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 2);
+  else if (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1);
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/** Latest weekly brief on disk (by file name), or null. */
+export function loadLatestWeekly(dir = WEEKLY_DIR) {
+  if (!existsSync(dir)) return null;
+  const files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+  if (!files.length) return null;
+  try {
+    return JSON.parse(readFileSync(join(dir, files[files.length - 1]), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function fmtLevel(l) {
+  if (!l) return "—";
+  const kind = l.kind === "lb" ? ` (LB ${l.zone[0]}–${l.zone[1]})` : "";
+  return `${l.price}${kind}${l.touches > 1 ? ` (x${l.touches})` : ""}`;
+}
+
+function fmtTrigger(t) {
+  const base =
+    t.kind === "tap"
+      ? `${t.side} tap LB ${t.stop_anchor[0]}–${t.stop_anchor[1]} at ${t.trigger}${t.confirmed ? " (qualified)" : ""}${t.tapped ? " (tapped before)" : ""}`
+      : `${t.side} sweep ${t.side === "long" ? "below" : "above"} ${t.trigger}${t.confirmed ? ` (confirmed x${t.touches})` : " (unconfirmed)"}`;
+  if (!t.stop_anchor) return `${base} — ${t.note}`;
+  return `${base} → stop ${t.stop}${t.kind === "sweep" ? ` (LB ${t.stop_anchor[0]}–${t.stop_anchor[1]})` : ""} → target ${t.target ?? "—"}${t.rr !== null ? ` → RR ${t.rr}` : ""}${t.note ? ` — ${t.note}` : ""}`;
+}
+
+export function renderWeeklyMarkdown(result) {
+  const lines = [
+    `# Marco weekly brief — ${result.week}`,
+    "",
+    `Generated ${result.generated_at}. Methodology: docs/MARCO.md §3.1 (weekly bias), §4.4 (sweep triggers).`,
+    "Rules: every move against the bias is false (use it to enter with the bias);",
+    "when the daily disagrees with the weekly we trade the daily as counter-trend with nearest targets only [user calibration].",
+    "All thresholds are [CALIBRATION].",
+    "",
+  ];
+  for (const r of result.symbols) {
+    if (r.error) {
+      lines.push(`## ${r.symbol}`, "", `error: ${r.error}`, "");
+      continue;
+    }
+    const b = r.bias;
+    lines.push(`## ${r.symbol} — ${b.bias_word.toUpperCase()} (${b.regime})`, "");
+    lines.push(`- Price: ${r.price}`);
+    lines.push(`- Weekly: ${b.weekly.mode} — ${b.weekly.read}`);
+    lines.push(`- Daily: ${b.daily.mode} — ${b.daily.read}`);
+    lines.push(`- Verdict: ${b.note}`);
+    lines.push(`- Targets: ${b.targets.length ? b.targets.map(fmtLevel).join(", ") : "—"}${b.primary_target !== null ? ` — primary ${b.primary_target}` : ""}`);
+    lines.push(`- Invalidation: ${b.invalidation ? `${b.invalidation.rule} ${b.invalidation.level}` : "—"}`);
+    for (const [tf, trig] of Object.entries(r.triggers)) {
+      lines.push(`- Triggers (${tf}): ${trig.length ? "" : "none"}`);
+      for (const t of trig) lines.push(`  - ${fmtTrigger(t)}`);
+    }
+    for (const [tf, fr] of Object.entries(r.false_reactions ?? {})) {
+      if (!fr.length) continue;
+      lines.push(
+        `- False reactions (${tf}), not entries: ${fr.map((z) => `${z.side} LB ${z.zone[0]}–${z.zone[1]}${z.qualified ? " Q" : ""}`).join("; ")} — expect the pullback to start there and look for the ${r.bias.bias_word} setup after it`,
+      );
+    }
+    if (r.htf_zones.length) {
+      lines.push(`- HTF zones: ${r.htf_zones.map((z) => `${z.tf} ${z.side} ${z.zone[0]}–${z.zone[1]}${z.qualified ? " Q" : ""}${z.tapped ? " tapped" : ""}`).join("; ")}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
+  let rules = {};
+  try {
+    rules = loadRules(rules_path).rules;
+  } catch {
+    /* optional */
+  }
+  const cfg = mergeConfig(rules);
+  const watchlist = symbols?.length ? symbols : loadWatchlist(cfg.watchlist_section).watchlist;
+  const execTf = cfg.htf?.timeframe ?? "240";
+
+  let originalSymbol;
+  let originalTimeframe;
+  try {
+    const state = await chart.getState();
+    originalSymbol = state.symbol;
+    originalTimeframe = state.resolution;
+  } catch {
+    /* nicety */
+  }
+
+  const results = [];
+  for (const symbol of watchlist) {
+    try {
+      await chart.setSymbol({ symbol });
+      await sleep(900);
+      const reads = {};
+      for (const tf of ["W", "D", execTf]) {
+        await chart.setTimeframe({ timeframe: tf });
+        await sleep(900);
+        const { bars } = await data.getOhlcv({ count: 500 });
+        const map = buildLiquidityMap(bars, cfg);
+        reads[tf] = { bars, map, story: storyRead(map, bars, cfg) };
+      }
+      const bias = resolveBias(reads.W.story, reads.D.story);
+      const triggers = {};
+      const false_reactions = {};
+      for (const tf of [execTf, "D"]) {
+        triggers[tf] = triggerSetups(reads[tf].map, reads[tf].bars, cfg, {
+          direction: bias.bias,
+          target: bias.primary_target,
+        });
+        false_reactions[tf] = falseReactions(reads[tf].map, reads[tf].story.price, bias.bias);
+      }
+      const price = reads.D.story.price;
+      const htf_zones = ["W", "D"]
+        .flatMap((tf) =>
+          reads[tf].map.blocks
+            .filter((b) => !b.dead)
+            .map((b) => ({
+              tf,
+              side: b.side,
+              zone: [round(b.bot), round(b.top)],
+              qualified: b.qualified,
+              tapped: b.tapped,
+              distance: round(price > b.top ? price - b.top : price < b.bot ? b.bot - price : 0),
+            })),
+        )
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, 4);
+      results.push({ symbol, price, bias, triggers, false_reactions, htf_zones });
+    } catch (err) {
+      results.push({ symbol, error: err.message });
+    }
+  }
+
+  try {
+    if (originalSymbol) {
+      await chart.setSymbol({ symbol: originalSymbol });
+      await sleep(600);
+    }
+    if (originalTimeframe) await chart.setTimeframe({ timeframe: originalTimeframe });
+  } catch {
+    /* best effort */
+  }
+
+  const result = {
+    week: isoWeek(),
+    generated_at: new Date().toISOString(),
+    methodology: "docs/MARCO.md §3.1 / §4.4",
+    symbols: results,
+  };
+  const dir = out_dir ? resolve(out_dir) : WEEKLY_DIR;
+  mkdirSync(dir, { recursive: true });
+  const jsonPath = join(dir, `${result.week}.json`);
+  const mdPath = join(dir, `${result.week}.md`);
+  writeFileSync(jsonPath, JSON.stringify(result, null, 2));
+  writeFileSync(mdPath, renderWeeklyMarkdown(result));
+  return { ...result, files: { json: jsonPath, markdown: mdPath } };
+}
+
+export function compactMarcoWeekly(result) {
+  return {
+    week: result.week,
+    files: result.files,
+    symbols: result.symbols.map((r) =>
+      r.error
+        ? { symbol: r.symbol, error: r.error }
+        : {
+            symbol: r.symbol,
+            bias: `${r.bias.bias_word} (${r.bias.regime})`,
+            primary_target: r.bias.primary_target,
+            invalidation: r.bias.invalidation,
+            next_trigger: Object.fromEntries(
+              Object.entries(r.triggers).map(([tf, t]) => [tf, t[0] ? fmtTrigger(t[0]) : "none"]),
+            ),
+          },
+    ),
+  };
+}
+
+function alignmentOf(storyDirection, bias) {
+  if (!bias || !storyDirection) return "none";
+  return storyDirection === bias ? "aligned" : "against";
 }
 
 async function sleep(ms) {
@@ -616,6 +1163,9 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes } = {}) {
     /* chart state is a nicety, not a requirement */
   }
 
+  const weekly = loadLatestWeekly();
+  const weeklyFor = (symbol) => weekly?.symbols?.find((s) => s.symbol === symbol && !s.error) ?? null;
+
   const results = [];
   for (const symbol of watchlist) {
     try {
@@ -634,16 +1184,32 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes } = {}) {
       }
 
       const perTf = {};
+      const wk = weeklyFor(symbol);
       for (const tf of tfs) {
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
         const { bars } = await data.getOhlcv({ count: cfg.bars_to_fetch });
-        const read = analyzeMarco(bars, cfg);
+        const read = analyzeMarco(bars, cfg, { bias: wk?.bias?.bias || null });
         if (!read.error && htfBars) read.htf = htfContext(htfBars, read.last_price, cfg);
+        if (!read.error && wk) {
+          read.alignment = alignmentOf(read.story.direction, wk.bias.bias);
+          if (read.alignment === "against") {
+            read.story.read += ` [AGAINST the weekly ${wk.bias.bias_word} bias — a false move, use it to enter with the bias]`;
+          } else if (read.alignment === "aligned") {
+            read.story.read += ` [aligned with the weekly ${wk.bias.bias_word} bias${wk.bias.primary_target !== null ? `, HTF target ${wk.bias.primary_target}` : ""}]`;
+          }
+        }
         perTf[tf] = read;
       }
       const quote = await data.getQuote({});
-      results.push({ symbol, quote, timeframes: perTf });
+      results.push({
+        symbol,
+        quote,
+        weekly: wk
+          ? { week: weekly.week, bias: wk.bias.bias_word, regime: wk.bias.regime, primary_target: wk.bias.primary_target, invalidation: wk.bias.invalidation }
+          : null,
+        timeframes: perTf,
+      });
     } catch (err) {
       results.push({ symbol, error: err.message });
     }
@@ -672,8 +1238,8 @@ export function compactMarcoBrief(brief) {
   return {
     instruction:
       "Render one compact block per symbol/timeframe: the story line first " +
-      "(mode + read — liquidity is the priority), then LB rows (side, zone, " +
-      "qualified, tapped, stop_beyond), then intact liquidity with touch " +
+      "(mode + read — liquidity is the priority), then LB rows (side, role, zone, " +
+      "qualified, inducement, tapped, stop_beyond), then intact liquidity with touch " +
       "counts, then the 10 a.m. H4 line when available. All thresholds are " +
       "[CALIBRATION] (docs/MARCO.md §6) — never present them as Accettone's.",
     generated_at: brief.generated_at,
@@ -683,6 +1249,7 @@ export function compactMarcoBrief(brief) {
         : {
             symbol: r.symbol,
             price: r.quote?.last ?? null,
+            weekly: r.weekly ?? null,
             timeframes: Object.fromEntries(
               Object.entries(r.timeframes).map(([tf, t]) => [
                 tf,
@@ -690,6 +1257,10 @@ export function compactMarcoBrief(brief) {
                   ? { error: t.error }
                   : {
                       story: `${t.story.mode}: ${t.story.read}`,
+                      alignment: t.alignment ?? null,
+                      bias_used: t.bias_used,
+                      triggers: t.triggers,
+                      false_reactions: t.false_reactions,
                       blocks: t.blocks,
                       intact_above: t.liquidity.intact_above.slice(0, 4),
                       intact_below: t.liquidity.intact_below.slice(0, 4),

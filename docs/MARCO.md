@@ -2,7 +2,7 @@
 
 This file is the single source of truth for the `marco` branch.
 
-Sources — four public videos from the **Inter Equity Trading** YouTube channel
+Sources — six public videos from the **Inter Equity Trading** YouTube channel
 (@InterEquity, Marco Accettone). Rules below are distilled from the full
 auto-generated transcripts of:
 
@@ -13,6 +13,7 @@ auto-generated transcripts of:
 | **V3** | `pQ4WTVQnwBc` | ADVANCED Liquidity Concepts ON GOLD | Full trade story: no-man's land, intact lows as targets, management |
 | **V4** | `hKh3-f3oAO8` | $10,000 Liquidity Inducement Trade in 4 MINUTES | Liquidity build-up, waiting for the trap, pre-framing targets |
 | **V5** | `lEsZYpeGNVQ` | The Simple Trading Strategy That Actually Works | The 10 a.m. reversal — the 06:00–10:00 ET H4 candle model |
+| **V6** | `aKoGbAe-xTE` | 10,000 Hours of Liquidity Trading in a 16 Minute Video | Weekly/daily bias, trend-line liquidity, the HTF→LTF entry chain |
 
 > **Two kinds of statement in this document.**
 > Lines marked **[SOURCE]** are the author's rules, restated from the
@@ -58,6 +59,10 @@ A swing high/low left behind by price. Sub-types the author marks on charts:
   respecting high tells me sellers in the market below these highs"; "we are
   building a tremendous amount of liquidity here"). The more taps, the more
   fuel. **[SOURCE, V3, V4]**
+- **Trend-line liquidity** — a chain of rising lows (or falling highs) that
+  each tap the same sloped line. The line is where trend-line traders' stops
+  rest; a move whose "purpose" is to clear it runs through the whole chain in
+  one go, then finds the LB below. **[SOURCE, V6]**
 
 ### 2.2 Inducement (the trap)
 
@@ -117,10 +122,97 @@ An LB entry is qualified when the full sequence is present:
    **[SOURCE, V3, V4]**
 
 LBs that appear *against* the story are still marked — they forecast where
-false pullback reactions will come from — but are never entered.
-**[SOURCE, V1, V3]**
+false pullback reactions will come from — but are never entered: "all these
+bearish ones are still by-the-book liquidity blocks, but not liquidity blocks
+we would use for entry … you can anticipate this false reaction here, this
+pullback, and if there's a bullish opportunity you buy back up" (V1
+5:27–6:02, 7:32). The false reaction runs from the counter-bias zone to the
+next bias-side setup. **[SOURCE, V1, V3]**
+
+**Inducement, as the author draws it (V1 diagram, 1:20–2:40).** Uptrend →
+"grabbing a low here, inducing sellers — they are going to view this to be a
+BOS, this level is going to be a trap for them" (red box) → "then we stab out
+the liquidity, and boom, that is where the liquidity block is created" (at
+the high). Inducement is the run of a *minor* level that the crowd reads as
+a break of structure; the real LB is the later sweep of the true liquidity.
+Mirror for the bullish case. This is the answer to the "BOS looks like an
+LB" confusion: the LB left by the inducement break is real, and it is on the
+wrong side of the story. **[SOURCE, V1]**
+
+**Worked example (V1 4:24–6:04, Gold 15m OANDA, 24–26 Feb 2026, ET).** Lows
+~5 130 tested twice (Tue 09:00, 12:00 — build-up) are run Tue ~18:00 to
+~5 128 and reclaimed → bullish LB 5 128–5 136 ("price has sold off taking
+this internal low, printing what could be a liquidity block"). The rally
+leaves a single-touch high ~5 194 (Tue ~21:00); a spike Wed ~01:00 runs it
+to ~5 210 and closes back → bearish LB 5 201–5 210, by the book. Wed ~11:00
+price taps that zone and gives the false reaction to ~5 173 ("you can
+anticipate this false reaction here, this pullback"), then runs through it
+to ~5 217 ("if there's a bullish opportunity you buy back up" — the author
+draws the arc over the zone before it happens). Thu ~10:00 a spike to
+~5 127 taps the bullish LB and the real reaction follows. The author's only
+stated reason is "pair it with liquidity": the video explicitly excludes
+bias ("I don't want to talk about direction … this is purely on liquidity
+blocks", 3:20), and the entry-side LB itself took an "internal low".
+**[SOURCE, V1]**
+
+**Rule (engine and indicator).** An LB never sets the story by itself —
+liquidity does. The story *anchor* is the most recent alive LB that ran a
+confirmed side of the range (build-up or age qualified, §6); it holds until
+invalidated or expired, even past `story_lookback` (the V1 bullish LB was
+68 bars old at its counterpart's tap). Unqualified events after the anchor
+on the other side — an internal point run and reclaimed (an `inducement`
+LB) or consumed without reclaim — never flip it: they are marked, expected
+to give a false reaction, and listed under `false_reactions`. A *qualified*
+LB on the other side (a build-up level run) does flip the story — that is
+step 2 above. The boundary "which sweeps count as a side being run" is the
+existing qualification threshold (`min_touches` / `min_level_age`); the
+author sets it by eye. **[CALIBRATION]** In the engine every zone carries a
+`role` (`entry` / `pullback_origin`) once a bias is known plus an
+`inducement` flag, `storyRead` names the inducement zone in its read, and
+the indicator's `Bias` input (Auto / Long / Short / Off) draws counter-bias
+zones dashed with the label `false` and mutes their alerts; Auto follows the
+last qualified LB and is not moved by inducement zones.
 
 ---
+
+### 3.1 Higher-timeframe bias (weekly → daily)
+
+The same story read, run on the weekly first. The author's NQ walkthrough
+(top → 7-week sell-off → April-2025 bottom → recovery) **[SOURCE, V6]**:
+
+1. **Mark the liquidity the market communicated.** Equal highs ("this high
+   respecting this high") — "I'm not predicting, the market has literally
+   communicated it." Same for the chain of lows / trend-line liquidity below.
+2. **Ask why the move happened.** A multi-week sell-off exists to clear the
+   liquidity built below (the chain, the build-up box) — and to induce
+   sellers, who now want to keep selling.
+3. **The extreme lands in an HTF liquidity block.** Buyers above the swept
+   lows are trapped; the tap into the old LB is where the bottom is found;
+   confirmation = the bullish weekly closes out of it.
+4. **Bias = back to the untaken side.** "Your eyes should be back to these
+   highs — the only logical liquidity point left." Target = the equal highs.
+5. **Every move against the bias is false.** "Any bearish moves, deem them
+   false, use them to find a buy back up." Entries come from the 4h/1h: a
+   low that built liquidity ("low respecting low") gets run → buy with the
+   stop below an LB, target the HTF highs. "Just because we took the low
+   does not mean buy right away — that is pattern trading": wait for the
+   reaction structure.
+6. **Management:** once a left-side high is taken, liquidity is taken — move
+   to BE or tuck the stop below the last low. If the LB is too big, refine
+   the stop on a lower timeframe LB. HTF-only entries in the walkthrough
+   ran 1:6, 1:7, 1:19, 1:14, 1:3.6.
+
+**Divergence rule [CALIBRATION, user]:** a daily trap against a *live*
+weekly story (trap fresh, target still open) is inducement — the weekly
+leads, the daily move is false, enter with the weekly once the daily's run
+is in (regime `pullback`). Only against a *stale* weekly story does the
+daily take over, traded consciously as counter-trend with targets at the
+nearest levels only (`counter_trend`). Continuation states never make a
+counter-trend case: a daily continuation against a weekly trap is a
+pullback, two continuations without a trap are no bias. Chosen after the
+§7.2 replay showed the plain "daily wins" version inverting two of the
+author's winning longs. Implemented in `resolveBias` (`aligned` /
+`counter_trend` / `pullback` / `daily_only` / `weekly_only` / `no_bias`).
 
 ## 4. Entry models
 
@@ -175,6 +267,29 @@ next H4 open, 14:00 ET (`h4.active_until_hour`). **[CALIBRATION]**
 
 ---
 
+### 4.4 Sweep-trigger entry (the HTF chain)
+
+Used once the higher-timeframe bias is set (§3.1). The entry is *not* a tap
+into the zone the run creates — it is the run itself **[SOURCE, V6, V4]**:
+
+1. **Trigger** = a level of liquidity on the bias side that the market has
+   confirmed ("low respecting low", build-up). "Wait for price to come below
+   this low — as soon as price stabs it out, anywhere below is a valid buy."
+2. **Stop** = beyond the nearest *pre-existing* LB in the trade direction —
+   "we're not just buying below lows, we need a liquidity block: it provides
+   the level for the stop." If that LB is too big, use a refined (lower-TF)
+   LB nested inside it and shrink the stop.
+3. **Target** = the higher-timeframe liquidity (the weekly equal highs), not
+   the next intraday level; intraday levels are partial/management points.
+4. **Management** = once a left-side high is taken, move to BE; the next
+   trigger is the next confirmed low on the way up. Position size is fixed
+   dollar risk (the author's position tool shows a constant "Amount").
+
+"Low respecting low" is a *confirmation touch*, not an equal level — the
+second low holds above the first (on the 1h walkthrough ~77 points above,
+beyond any equal-level tolerance). It counts as build-up through a separate
+"respect" tolerance, `respect_tolerance_atr` = 0.75 ATR. **[CALIBRATION]**
+
 ## 5. Stops, targets, management
 
 - **Stop loss:** always beyond the LB extreme. Systematic and repeatable — "I
@@ -210,16 +325,23 @@ Everything below is ours to tune — the videos show it by eye only.
 | Zones thinner than this are not entry-grade | `minZoneAtr` / `min_zone_atr` | 0.25 ATR |
 | Stop offset past the zone extreme | `stopBufAtr` / `stop_buffer_atr` | 0.1 ATR |
 | A trap older than this reads as stale | `story_fresh_bars` (engine only) | 16 bars |
+| A later low holding this far above a level is a confirming touch ("low respecting low") | `respectTol` / `respect_tolerance_atr` | 0.75 ATR |
+| Which sweeps count as a side of the range being run (the story anchor, §3) — the rest is inducement | `minTouches` / `minLevelAge` (reused) | 2 touches / 50 bars |
 
-The last three rows come from the 09:55 replay experiment (§7.1): 1-tick
-zones made R math absurd, extremes got pierced by ticks before the real move,
-and a 36-bar-old trap was quoted as a live story.
+The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
+09:55 replay experiment (§7.1): 1-tick zones made R math absurd, extremes
+got pierced by ticks before the real move, and a 36-bar-old trap was quoted
+as a live story. The anchor row comes from the V1 review (§3): with "last LB
+wins" the engine inverted the author's own example — the inducement zone
+became the entry and the entry zone the pullback origin.
 
 The **tradeability filter** (§3) is directional context. The indicator
 approximates it: an LB is drawn *qualified* (bright) when the level it swept
 had build-up (≥ `minTouches` within `eqTolerance`) or stood intact for ≥
-`minLevelAge` bars; otherwise it is drawn faint. Full story-reading (bias,
-no-man's land, target-side fuel) stays with the analyst. **[CALIBRATION]**
+`minLevelAge` bars; otherwise it is drawn faint. Under `Bias = Auto` the
+last qualified LB sets the side and unqualified zones against it draw as
+`false` (inducement). Full story-reading (bias, no-man's land, target-side
+fuel) stays with the analyst. **[CALIBRATION]**
 
 ---
 
@@ -231,17 +353,26 @@ tuning any default:
 - **`scripts/marco_liquidity_blocks.pine`** — the visual indicator. Saved on
   TradingView as the user's script "Liq blocks".
 - **`src/core/marco.js`** — the analysis engine: the same levels/sweep/LB
-  replay plus the narrative layer (`storyRead`, §3), the 10 a.m. gate
+  replay plus the narrative layer (`storyRead`, §3 — anchored on the last
+  live qualified LB; inducement zones are flagged, never a flip), setups in the bias
+  direction (`triggerSetups`, §4.4 — sweep triggers and zone taps, nearest
+  first, each with stop anchor, target and RR), the 10 a.m. gate
   (`h4Model`, §4.3) and an HTF second pass (`htfContext`) that runs the map
   on `htf.timeframe` (default 240) and attaches long-lived zones, nearest
   HTF levels and a proximity alert to every LTF read. Driven by the CLI:
   - `node src/cli/index.js marco brief --compact` — scan the `marco` list in
     `watchlists.json` (default TFs 15/60).
   - `node src/cli/index.js marco scan COMEX_MINI:MGC1! --tf 15` — one symbol.
+  - `node src/cli/index.js marco weekly --compact` — the weekly bias brief
+    (§3.1 + §4.4): W and D stories → `resolveBias` → targets, invalidation,
+    sweep triggers on 240 and D. Writes `briefs/weekly/<ISO week>.md` and
+    `.json`; `marco brief`/`scan` read the latest `.json` and stamp every
+    intraday story `aligned` / `against` the weekly bias.
   - Optional overrides live in `rules.json` → `marco` (gitignored, optional).
 - **`tests/marco.test.js`** (`npm run test:marco`) — fixture scenarios for
   every §§2–4 rule: sweep+reclaim, breakdown, build-up qualification,
-  invalidation, tap, the bearish mirror, and the H4 gate.
+  invalidation, tap, the bearish mirror, the H4 gate, and the V1 inducement
+  sequence (build-up run → single-touch high run → story holds).
 
 ### 7.1 Replay validation against the author's own trades
 
@@ -267,6 +398,54 @@ bar-by-bar through `storyRead` (15m, defaults) on 2026-08-29:
   HTF zone. Caveat that stands: a retrace high inside a waterfall (like
   4994.1) is not a pivot on any timeframe under the strict definition, so
   zones anchored to such highs still go unseen.
+
+**V6 check (NQ weekly as of 2025-05-25, engine defaults):** `buy_story` —
+lows run and reclaimed 5 bars ago, bullish LB 17675.75–20292, target = the
+intact high 23872.5 with 2 touches (the equal highs). That is the author's
+weekly read verbatim. Miss: the Oct-2023 weekly LB he uses for the bottom
+never exists in our map — the Sep-2023 LB got invalidated on 2023-10-22 and
+its extreme is not re-registered as liquidity, so the real low (16810.75,
+reclaimed the next week) opens no pending sweep. **Rule (implemented):** an invalidated LB's
+extreme is swept liquidity — a pending opens on the invalidating bar and a
+reclaim makes the new extreme an LB (test: "an invalidated LB's extreme is
+swept liquidity"). **[CALIBRATION]**
+
+### 7.2 V6 entry chain — validation targets
+
+The author's five NQ longs (1h/4h, target = weekly highs 23,363), read off
+the position-tool labels at 16:01 of V6. Prices are his back-adjusted NQ1!:
+
+| # | Date (2025) | Entry | Stop | RR | Mechanic |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Apr 30 | ~19,9xx | 19,295.25 | 1:6 | tap into the Apr-24 LB after the flush |
+| 2 | May 7 | 20,446.50 | 20,042.00 | 1:7 | sweep of the range low, stop under the refined Apr-30 LB |
+| 3 | May 23 | 20,767.50 | 20,632.25 | 1:19 | sweep of a confirmed low, stop under a 15m LB |
+| 4 | May 30 | 21,522.75 | 21,396.00 | 1:14 | same |
+| 5 | Jun 3 | 21,849.00 | 21,432.25 | 1:3.6 | same, wider stop |
+
+Replay result (2026-08-30, 1h map at each day's open; our NQ1! prints
+~+500 above his back-adjusted chart, so compare structure): the map held all
+five trades — entry 1 = nearest bull LB below price with the stop under the
+next LB down (his 19,295 ↔ our 19,810 − 500); entries 2 and 4 = his entry
+levels appear as bull LB zones (20,446 ↔ 20,955–21,075; 21,522 ↔
+21,942–22,017) with the stop anchors he used; entry 3 = the trigger's stop
+anchor LB 21,273–21,296 is his entry zone; entry 5 = his entry sits inside
+our qualified LB 22,287–22,357 and his stop equals the lower LB's buffered
+bottom (21,432 ↔ 21,935 − 500). Bias: the weekly read was `buy_story` on
+every date. **But on May 7 and May 30 the daily printed a bearish trap
+(`sell_story`) against it, and the divergence rule turned the bias short —
+the author bought those dips (1:7 and 1:14).** In his framing a daily trap
+against a live weekly story is inducement, not a new story. Resolved: `counter_trend` is
+reserved for a stale weekly story; a live one turns the daily trap into
+`pullback` (§3.1). With `triggerSetups` listing zone taps next to sweep
+triggers (nearest first), the five entries read off the 1h map as: Apr 30 →
+tap LB 20,473–20,608; May 7 → tap LB 20,954–21,047 (his 20,446 + 500) with
+the Apr-30 LB as the deeper anchor; May 23 → sweep 22,033 with the stop under
+LB 21,273–21,296 (his entry zone); May 30 → tap LB 21,942–22,017 (his
+21,522 + 500, stop 21,396 ↔ 21,933 − 500); Jun 3 → tap LB 22,287–22,357
+(qualified), RR 9 to the top zone's bottom edge. Targets now
+include alive opposite-side LB zones (the top's bearish LB is "the highs"):
+primary = zone bottom, final = zone top.
 
 ## 8. Working agreements for this branch
 

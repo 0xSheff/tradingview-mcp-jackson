@@ -36,6 +36,25 @@ register("marco", {
       },
     ],
     [
+      "weekly",
+      {
+        description:
+          'Weekly bias brief (W + D story → bias, targets, triggers) for the "marco" list; writes briefs/weekly/<week>.md + .json',
+        options: {
+          ...commonOptions,
+          out: { type: "string", description: "Output directory (default: briefs/weekly)" },
+        },
+        handler: async ({ rules, out, compact }, positionals) => {
+          const result = await core.runMarcoWeekly({
+            rules_path: rules,
+            out_dir: out,
+            symbols: positionals?.length ? positionals : undefined,
+          });
+          return compact ? core.compactMarcoWeekly(result) : result;
+        },
+      },
+    ],
+    [
       "scan",
       {
         description: "Accettone read of a single symbol: tv marco scan COMEX_MINI:MGC1!",

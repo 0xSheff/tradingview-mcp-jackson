@@ -12,6 +12,8 @@ import {
   h4Model,
   htfContext,
   analyzeMarco,
+  triggerSetups,
+  resolveBias,
 } from "../src/core/marco.js";
 
 const CFG = {
@@ -238,6 +240,145 @@ test("analyzeMarco reports the stop buffered past the zone extreme", () => {
   assert.ok(bull.stop_beyond < bull.zone[0]);
 });
 
+test("an invalidated LB's extreme is swept liquidity: reclaim → new LB", () => {
+  const rows = [
+    ...SWEEP_RECLAIM,
+    [101.9, 102, 98.9, 99.2], // close below 99.5 → invalidated, pending opens
+    [99.2, 100.5, 98.8, 100.2], // reclaim above 99.5 → LB at the new extreme
+  ];
+  const map = buildLiquidityMap(mkBars(rows), CFG);
+  assert.equal(map.blocks.length, 2);
+  const nb = map.blocks[1];
+  assert.equal(nb.side, "bull");
+  assert.equal(nb.top, 99.5);
+  assert.equal(nb.bot, 98.8);
+  assert.equal(nb.born, 7);
+  assert.ok(map.events.some((e) => e.type === "low_swept" && e.from_lb));
+});
+
+test("low respecting low: a higher low within respect tolerance is a touch", () => {
+  const rows = [
+    [101, 102, 100.9, 101.5],
+    [101.5, 101.8, 100.0, 101.2], // pivot low 100.0
+    [101.2, 102.5, 101.3, 102.2],
+    [102.2, 102.6, 100.9, 101.8], // pivot low 100.9 — beyond equal tol, inside respect tol
+    [101.8, 102.8, 101.4, 102.5],
+    [102.5, 103, 99.6, 102.0], // sweep + reclaim → qualified by the respect touch
+  ];
+  const map = buildLiquidityMap(mkBars(rows), CFG);
+  assert.ok(map.events.some((e) => e.type === "low_buildup" && e.respect === true && e.level === 100.0));
+  assert.equal(map.blocks.length, 1);
+  assert.equal(map.blocks[0].qualified, true);
+  assert.equal(map.blocks[0].top, 100.0);
+});
+
+test("a higher low beyond respect tolerance is its own level", () => {
+  const rows = [
+    [101, 102, 100.9, 101.5],
+    [101.5, 101.8, 100.0, 101.2], // pivot low 100.0
+    [101.2, 103.5, 102.6, 103.2],
+    [103.2, 103.6, 102.0, 103.0], // pivot low 102.0 — two points above, too far to "respect"
+    [103.0, 104.0, 102.8, 103.8],
+  ];
+  const map = buildLiquidityMap(mkBars(rows), CFG);
+  assert.equal(map.levels.lows.length, 2);
+  assert.ok(map.levels.lows.every((l) => l.touches === 1));
+});
+
+test("triggers: confirmed low → stop under the nearest LB → target → RR", () => {
+  const rows = [
+    ...SWEEP_RECLAIM, // bull LB 99.5–100 alive
+    [101.9, 102.2, 100.2, 101.6], // pivot low 100.2 above the zone
+    [101.6, 103.4, 101.0, 103.1], // level 100.2 registered; pivot high 103.4 (stays intact)
+    [103.1, 103.2, 102.5, 103.0],
+  ];
+  const bars = mkBars(rows);
+  const map = buildLiquidityMap(bars, CFG);
+  const trig = triggerSetups(map, bars, CFG, { direction: 1 });
+  assert.equal(trig.length, 2); // the sweep trigger and the zone tap, nearest first
+  assert.equal(trig[0].kind, "sweep");
+  assert.equal(trig[0].side, "long");
+  assert.equal(trig[0].trigger, 100.2);
+  assert.deepEqual(trig[0].stop_anchor, [99.5, 100]);
+  assert.ok(trig[0].stop < 99.5);
+  assert.equal(trig[1].kind, "tap");
+  assert.equal(trig[1].trigger, 100); // entry at the zone's inner edge
+  assert.ok(trig[1].stop < 99.5);
+  // 103.4 "respects" the earlier 103.6 high → one level with two touches
+  assert.equal(trig[0].target, 103.6);
+  assert.equal(map.levels.highs[0].touches, 2);
+  assert.ok(trig[0].rr > 1);
+  assert.equal(trig[0].confirmed, false);
+
+  const far = triggerSetups(map, bars, CFG, { direction: 1, target: 110 });
+  assert.equal(far[0].target, 110);
+  assert.deepEqual(triggerSetups(map, bars, CFG, { direction: 0 }), []);
+});
+
+test("resolveBias: aligned targets the weekly build-up; divergence trades the daily counter-trend", () => {
+  const w = {
+    direction: 1, mode: "buy_story", read: "w",
+    intact_above: [{ price: 120, touches: 1, buildup: false }, { price: 130, touches: 2, buildup: true }],
+    intact_below: [], lb: { zone: [90, 95], alive: true },
+  };
+  const dAligned = { direction: 1, mode: "up_continuation", read: "d", intact_above: [{ price: 105, touches: 1, buildup: false }], intact_below: [], lb: null };
+  const a = resolveBias(w, dAligned);
+  assert.equal(a.regime, "aligned");
+  assert.equal(a.bias, 1);
+  assert.equal(a.primary_target, 130);
+  assert.deepEqual(a.invalidation, { level: 90, rule: "weekly close below" });
+
+  const dAgainst = {
+    direction: -1, mode: "sell_story", read: "d", intact_above: [],
+    intact_below: [{ price: 98, touches: 1, buildup: false }, { price: 92, touches: 1, buildup: false }, { price: 80, touches: 1, buildup: false }],
+    lb: { zone: [104, 106], alive: true },
+  };
+  // a daily trap against a LIVE weekly story is inducement → pullback, weekly leads
+  const live = resolveBias({ ...w, fresh: true }, dAgainst);
+  assert.equal(live.regime, "pullback");
+  assert.equal(live.bias, 1);
+  assert.equal(live.primary_target, 130);
+
+  // only a stale weekly story yields to the daily as counter-trend
+  const c = resolveBias({ ...w, fresh: false }, dAgainst);
+  assert.equal(c.regime, "counter_trend");
+  assert.equal(c.bias, -1);
+  assert.equal(c.primary_target, 98);
+  assert.equal(c.targets.length, 2);
+  assert.deepEqual(c.invalidation, { level: 106, rule: "daily close above" });
+
+  const wNone = { ...w, direction: 0, mode: "no_mans_land", lb: null };
+  assert.equal(resolveBias(wNone, dAgainst).regime, "daily_only");
+  assert.equal(resolveBias(wNone, { ...dAligned, direction: 0, mode: "no_mans_land" }).regime, "no_bias");
+
+  // daily continuation against a weekly trap = pullback, weekly still leads
+  const dPull = { ...dAligned, direction: -1, mode: "down_continuation" };
+  const p = resolveBias(w, dPull);
+  assert.equal(p.regime, "pullback");
+  assert.equal(p.bias, 1);
+  assert.equal(p.primary_target, 130);
+
+  // two continuations without a trap never make a counter-trend case
+  const wCont = { ...w, direction: -1, mode: "down_continuation", lb: null };
+  const dCont = { ...dAligned, direction: 1, mode: "up_continuation" };
+  assert.equal(resolveBias(wCont, dCont).regime, "no_bias");
+});
+
+test("a known bias sorts zones into entries and false-reaction origins", () => {
+  const bars = mkBars(SWEEP_RECLAIM.concat(SWEEP_RECLAIM)); // one alive bull LB below price
+  const withBias = analyzeMarco(bars, CFG, { bias: 1 });
+  assert.equal(withBias.bias_used, 1);
+  assert.equal(withBias.blocks[0].role, "entry");
+  assert.deepEqual(withBias.false_reactions, []);
+
+  const against = analyzeMarco(bars, CFG, { bias: -1 });
+  assert.equal(against.blocks[0].role, "pullback_origin");
+  assert.equal(against.false_reactions.length, 1);
+  assert.equal(against.false_reactions[0].side, "bull");
+  assert.match(against.false_reactions[0].note, /false bullish reaction/);
+  assert.ok(against.triggers.every((t) => t.side === "short"));
+});
+
 test("htfContext alerts near an HTF zone and stays quiet far away", () => {
   const htfBars = mkBars(SWEEP_RECLAIM.concat(SWEEP_RECLAIM), { step: 14400 });
   const near = htfContext(htfBars, 100.2, CFG);
@@ -260,4 +401,118 @@ test("analyzeMarco wires story, blocks, levels and the gate together", () => {
   assert.ok(full.story.mode);
   assert.ok(Array.isArray(full.blocks));
   assert.ok(full.h4_model);
+});
+
+// --- inducement: an LB never sets the story by itself (docs/MARCO.md §3) ---
+
+// V1 (GIYrW7FC06M 4:24–6:04) on Gold 15m: build-up lows run and reclaimed
+// (qualified bull LB), then the rally leaves a single-touch high that a spike
+// runs and reclaims — a by-the-book bearish LB on the wrong side of the story.
+const V1_BUILDUP_THEN_RALLY = [
+  [101, 102, 100.9, 101.5],
+  [101.5, 101.8, 100.0, 101.2], // pivot low 100.0
+  [101.2, 102.5, 100.6, 102.2],
+  [102.2, 102.6, 100.05, 101.8], // pivot low 100.05 → equal → build-up
+  [101.8, 102.8, 100.7, 102.5],
+  [102.5, 103, 99.0, 102.0], // sweep + reclaim → qualified bull LB 99–100 (bar 5)
+  [102.0, 104.0, 101.8, 103.8],
+  [103.8, 105.0, 103.5, 104.6], // pivot high 105.0 — an internal point of the leg
+  [104.6, 104.8, 103.9, 104.2],
+  [104.2, 104.5, 103.6, 104.0], // pivot low 103.6 — internal point
+];
+const V1_INDUCEMENT = [
+  ...V1_BUILDUP_THEN_RALLY,
+  [104.0, 106.0, 103.8, 104.4], // spike runs 105.0 and closes back → bear LB 105–106 (bar 10), single touch
+  [104.4, 104.9, 103.7, 103.9], // the false reaction
+];
+
+test("inducement: an unqualified LB against a live qualified one is flagged and does not flip the story", () => {
+  const bars = mkBars(V1_INDUCEMENT);
+  const map = buildLiquidityMap(bars, CFG);
+  assert.equal(map.blocks.length, 2);
+  const [bull, bear] = map.blocks;
+  assert.equal(bull.qualified, true);
+  assert.equal(bull.inducement, false);
+  assert.equal(bear.side, "bear");
+  assert.equal(bear.qualified, false);
+  assert.equal(bear.inducement, true);
+  assert.ok(map.events.some((e) => e.type === "bear_lb_created" && e.inducement));
+
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "buy_story");
+  assert.equal(story.direction, 1);
+  assert.deepEqual(story.lb.zone, [99, 100]);
+  assert.deepEqual(story.inducement, { side: "bear", zone: [105, 106], alive: true });
+  assert.match(story.read, /bearish LB 105–106 created 1 bar ago is inducement/);
+
+  const read = analyzeMarco(bars, CFG);
+  assert.equal(read.bias_used, 1);
+  assert.equal(read.blocks.find((b) => b.side === "bull").role, "entry");
+  const falseZone = read.blocks.find((b) => b.side === "bear");
+  assert.equal(falseZone.role, "pullback_origin");
+  assert.equal(falseZone.inducement, true);
+  assert.equal(read.false_reactions.length, 1);
+  assert.equal(read.false_reactions[0].inducement, true);
+  assert.match(read.false_reactions[0].note, /inducement/);
+});
+
+test("an inducement zone that gets run through reads as spent, and the story still holds", () => {
+  const bars = mkBars([
+    ...V1_INDUCEMENT,
+    [103.9, 106.5, 103.8, 106.2], // closes above the bear zone top → invalidated ("buy back up")
+  ]);
+  const map = buildLiquidityMap(bars, CFG);
+  assert.equal(map.blocks.find((b) => b.side === "bear").dead, true);
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "buy_story");
+  assert.equal(story.inducement.alive, false);
+  assert.match(story.read, /was inducement .* already run through, the story never flipped/);
+});
+
+test("a qualified LB on the other side (build-up run) still flips the story", () => {
+  const rows = [
+    ...V1_BUILDUP_THEN_RALLY.slice(0, 9),
+    [104.2, 104.95, 103.8, 104.5], // pivot high 104.95 → equal to 105.0 → build-up
+    [104.5, 104.7, 103.9, 104.3],
+    [104.3, 106.0, 104.1, 104.4], // runs the build-up and closes back → qualified bear LB
+  ];
+  const bars = mkBars(rows);
+  const map = buildLiquidityMap(bars, CFG);
+  const bear = map.blocks.find((b) => b.side === "bear");
+  assert.equal(bear.qualified, true);
+  assert.equal(bear.inducement, false);
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "sell_story");
+  assert.equal(story.direction, -1);
+  assert.equal(story.inducement, null);
+});
+
+test("an internal low consumed while the qualified LB holds is inducement, not continuation", () => {
+  const rows = [
+    ...V1_INDUCEMENT.slice(0, 11), // through the bear inducement LB (bar 10)
+    [104.4, 104.9, 103.2, 103.4], // runs the internal low 103.6, no reclaim
+    [103.4, 103.8, 103.0, 103.3],
+    [103.3, 103.7, 102.9, 103.2], // miss 3 > confirm_bars → low_breakdown, unqualified
+  ];
+  const bars = mkBars(rows);
+  const map = buildLiquidityMap(bars, CFG);
+  const brk = map.events.find((e) => e.type === "low_breakdown");
+  assert.ok(brk);
+  assert.equal(brk.qualified, false);
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "buy_story");
+  assert.match(story.read, /low 103\.6 consumed .* was an internal point: inducement/);
+});
+
+test("a live qualified LB anchors the story past story_lookback (V1: 68 bars at the tap)", () => {
+  const quiet = Array.from({ length: 12 }, () => [102, 103, 101.5, 102.5]);
+  const bars = mkBars([...V1_BUILDUP_THEN_RALLY.slice(0, 6), ...quiet]);
+  const cfg = { ...CFG, story_lookback: 8 };
+  const map = buildLiquidityMap(bars, cfg);
+  const story = storyRead(map, bars, cfg);
+  assert.equal(story.mode, "buy_story");
+  assert.match(story.read, /longs at the bullish LB 99–100/);
+  // an unqualified LB alone does not anchor: the plain sweep fixture goes quiet into no-man's land
+  const plain = mkBars([...SWEEP_RECLAIM, ...quiet]);
+  assert.equal(storyRead(buildLiquidityMap(plain, cfg), plain, cfg).mode, "no_mans_land");
 });
