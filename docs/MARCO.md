@@ -202,6 +202,18 @@ The same story read, run on the weekly first. The author's NQ walkthrough
    the stop on a lower timeframe LB. HTF-only entries in the walkthrough
    ran 1:6, 1:7, 1:19, 1:14, 1:3.6.
 
+**Bias is a reaction, not a forecast.** There is *always* liquidity marked
+on both sides — that state is no-man's land (2.5) and its bias is "none":
+"mark out the lows, mark out the highs, wait for one of them to get taken,
+and react accordingly" (V3); "we're trying to short — therefore we're not
+going to short with the sellers, we want to wait for the sellers to get
+taken out" (V4). The bias appears only after one side is run and reclaimed:
+the run side is spent ("holds no liquidity — no reason to trade below it
+again"), so the untaken side becomes "the only logical liquidity point
+left" (V6). The only forward-looking part is build-up asymmetry — the side
+with more taps is where the crowd's stops rest, hence the likelier first
+run — but it is waited for, never front-run. **[SOURCE, V3, V4, V6]**
+
 **Divergence rule [CALIBRATION, user]:** a daily trap against a *live*
 weekly story (trap fresh, target still open) is inducement — the weekly
 leads, the daily move is false, enter with the weekly once the daily's run
