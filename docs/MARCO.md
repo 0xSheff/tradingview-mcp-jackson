@@ -58,7 +58,18 @@ A swing high/low left behind by price. Sub-types the author marks on charts:
 - **Build-up / equal levels** — repeated taps on the same level ("high
   respecting high tells me sellers in the market below these highs"; "we are
   building a tremendous amount of liquidity here"). The more taps, the more
-  fuel. **[SOURCE, V3, V4]**
+  fuel. **[SOURCE, V3, V4]** The author boxes the equal extremes and drags
+  the box right; it is the *local target* of the story, and its run is the
+  trap that flips it (MNQ 1h, 31 Aug–1 Sep 2026: equal highs 29538–29543.5
+  tapped four times, run at 08:00 Athens, price fell 300 points). Tooling:
+  the engine keeps a `buildups` record per level (side, equal-extreme range,
+  taps, `intact`/`swept`, the LB the run created) that outlives the sweep,
+  and the story read names it ("the x4 build-up at 29543.5 was the local
+  target, now taken"); the indicator draws a box across the equal extremes
+  (`xN`) once a level has `minTouches` taps, and keeps it grey as `swept xN`
+  until it ages out when *Keep swept build-up boxes* is on. A later "equal"
+  extreme that pokes beyond the first counts as a sweep, not a tap.
+  **[CALIBRATION]**
 - **Trend-line liquidity** — a chain of rising lows (or falling highs) that
   each tap the same sloped line. The line is where trend-line traders' stops
   rest; a move whose "purpose" is to clear it runs through the whole chain in
@@ -172,6 +183,34 @@ author sets it by eye. **[CALIBRATION]** In the engine every zone carries a
 the indicator's `Bias` input (Auto / Long / Short / Off) draws counter-bias
 zones dashed with the label `false` and mutes their alerts; Auto follows the
 last qualified LB and is not moved by inducement zones.
+
+**Bias source [CALIBRATION].** The author's bias is a liquidity read, never
+the block: the *draw* (where liquidity built — "the only logical liquidity
+point left") is the lean, and the *trap* (the run of the other side) is the
+trigger; the LB is the trap's by-product that supplies entry and stop. The
+tooling therefore offers three sources for a timeframe's own direction —
+`bias_source` in the engine, `--bias` on the CLI, the `Bias` input on the
+indicator:
+
+- **trap** (default) — the last qualified LB, i.e. the last confirmed side
+  that was run and reclaimed. This is the trigger read: it reproduces the
+  author's trades in §7, but it fires on any level that qualifies by
+  build-up *or age*, so a qualified-by-age internal level run inside a
+  bigger story yields an LTF story that the HTF frame calls a pullback (6B
+  1h, 31 Aug 2026).
+- **draw** — the side holding more intact build-up taps (fuel = Σ taps of
+  intact levels with ≥ `min_touches` on each side of price). This is the
+  order in which the author *thinks*: fuel first, trigger second. The
+  engine also reports whether the last trap sits on the other side —
+  `draw.activated` — which is what turns the lean into a story; the
+  indicator marks by the lean alone.
+- **off** — no automatic bias; the analyst sets Long/Short by hand (from
+  the weekly brief). An explicit bias (weekly brief, `--bias long|short`,
+  or `--bias off` for none) always overrides the source.
+
+Because every source is read per timeframe, the indicator on `Auto` is a
+pure LTF story without HTF or draw — useful precisely to see the local bias
+flip back into the higher-timeframe one.
 
 ---
 
@@ -339,6 +378,7 @@ Everything below is ours to tune — the videos show it by eye only.
 | A trap older than this reads as stale | `story_fresh_bars` (engine only) | 16 bars |
 | A later low holding this far above a level is a confirming touch ("low respecting low") | `respectTol` / `respect_tolerance_atr` | 0.75 ATR |
 | Which sweeps count as a side of the range being run (the story anchor, §3) — the rest is inducement | `minTouches` / `minLevelAge` (reused) | 2 touches / 50 bars |
+| Where a timeframe's own direction comes from (§3): the trap, the draw, or nothing | `Bias` / `bias_source` / `--bias` | trap |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
 09:55 replay experiment (§7.1): 1-tick zones made R math absurd, extremes
@@ -366,7 +406,9 @@ tuning any default:
   TradingView as the user's script "Liq blocks".
 - **`src/core/marco.js`** — the analysis engine: the same levels/sweep/LB
   replay plus the narrative layer (`storyRead`, §3 — anchored on the last
-  live qualified LB; inducement zones are flagged, never a flip), setups in the bias
+  live qualified LB; inducement zones are flagged, never a flip; the build-up
+  the trap ran is named as the local target), build-ups that outlive their
+  sweep (`liquidity.buildups`, §2.1), setups in the bias
   direction (`triggerSetups`, §4.4 — sweep triggers and zone taps, nearest
   first, each with stop anchor, target and RR), the 10 a.m. gate
   (`h4Model`, §4.3) and an HTF second pass (`htfContext`) that runs the map
@@ -375,6 +417,9 @@ tuning any default:
   - `node src/cli/index.js marco brief --compact` — scan the `marco` list in
     `watchlists.json` (default TFs 15/60).
   - `node src/cli/index.js marco scan COMEX_MINI:MGC1! --tf 15` — one symbol.
+  - `--bias weekly|long|short|off|trap|draw` on `brief`/`scan` — which bias
+    sets the zone roles (default `weekly` = the latest weekly brief; `off`
+    marks nothing; `trap`/`draw` use this TF's own story source, §3).
   - `node src/cli/index.js marco weekly --compact` — the weekly bias brief
     (§3.1 + §4.4): W and D stories → `resolveBias` → targets, invalidation,
     sweep triggers on 240 and D. Writes `briefs/weekly/<ISO week>.md` and
@@ -383,8 +428,9 @@ tuning any default:
   - Optional overrides live in `rules.json` → `marco` (gitignored, optional).
 - **`tests/marco.test.js`** (`npm run test:marco`) — fixture scenarios for
   every §§2–4 rule: sweep+reclaim, breakdown, build-up qualification,
-  invalidation, tap, the bearish mirror, the H4 gate, and the V1 inducement
-  sequence (build-up run → single-touch high run → story holds).
+  invalidation, tap, the bearish mirror, the H4 gate, the V1 inducement
+  sequence (build-up run → single-touch high run → story holds), and the
+  build-up record (equal highs x3 → swept → linked LB).
 
 ### 7.1 Replay validation against the author's own trades
 

@@ -17,6 +17,11 @@ const commonOptions = {
     short: "c",
     description: "Return a compact, report-ready payload without the config echo",
   },
+  bias: {
+    type: "string",
+    description:
+      "Bias that sets zone roles: weekly (default, latest weekly brief) | long | short | off (no bias, you decide) | trap | draw (this TF's own story source)",
+  },
 };
 
 register("marco", {
@@ -29,8 +34,8 @@ register("marco", {
         description:
           'Scan the "marco" watchlist and return the liquidity story per symbol',
         options: commonOptions,
-        handler: async ({ rules, tf, compact }) => {
-          const result = await core.runMarcoBrief({ rules_path: rules, timeframes: tf });
+        handler: async ({ rules, tf, compact, bias }) => {
+          const result = await core.runMarcoBrief({ rules_path: rules, timeframes: tf, bias });
           return compact ? core.compactMarcoBrief(result) : result;
         },
       },
@@ -59,13 +64,14 @@ register("marco", {
       {
         description: "Accettone read of a single symbol: tv marco scan COMEX_MINI:MGC1!",
         options: commonOptions,
-        handler: async ({ rules, tf, compact }, positionals) => {
+        handler: async ({ rules, tf, compact, bias }, positionals) => {
           const symbol = positionals?.[0];
-          if (!symbol) throw new Error("Usage: tv marco scan <SYMBOL> [--tf 15 --tf 60]");
+          if (!symbol) throw new Error("Usage: tv marco scan <SYMBOL> [--tf 15 --tf 60] [--bias weekly|long|short|off|trap|draw]");
           const result = await core.runMarcoBrief({
             rules_path: rules,
             symbols: [symbol],
             timeframes: tf,
+            bias,
           });
           return compact ? core.compactMarcoBrief(result) : result;
         },

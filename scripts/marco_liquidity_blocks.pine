@@ -17,6 +17,12 @@
 //   * An unqualified zone born against a live qualified one is inducement
 //     (§3, V1): under Auto bias it draws dashed as `false` and never flips
 //     the bias — an LB never sets the story by itself, liquidity does.
+//   * Build-up boxes (§2.1): once a level has the build-up touch count, a box
+//     spans its equal extremes (`xN`) — the local target of the story; after
+//     the run it stays grey as `swept xN` (toggle) until it ages out.
+//   * Bias source (§3): Auto = the last qualified LB (the trap), Auto (draw)
+//     = the side holding more intact build-up taps (the lean before the
+//     trap), Long/Short = by hand from the weekly brief, Off = no bias.
 //@version=6
 indicator("Marco LB — Liquidity Blocks", "Marco LB", overlay = true,
      max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -43,8 +49,14 @@ respectTol  = input.float(0.75, "Respect tolerance (ATR mult)", step = 0.05, min
      tooltip = "Low respecting low: a later low holding this far above a level counts as a confirming touch (docs/MARCO.md §4.4).")
 
 grpB = "Bias"
-biasMode    = input.string("Auto", "Bias", options = ["Auto", "Long", "Short", "Off"], group = grpB,
-     tooltip = "Zones against the bias draw dashed with 'false' — pullback origins, never entries (docs/MARCO.md §3). Auto = side of the last build-up-qualified LB; an unqualified LB against a live qualified one is inducement and does not flip it (§3). Set Long/Short from the weekly brief.")
+biasMode    = input.string("Auto", "Bias", options = ["Auto", "Auto (draw)", "Long", "Short", "Off"], group = grpB,
+     tooltip = "Zones against the bias draw dashed with 'false' — pullback origins, never entries (docs/MARCO.md §3). Auto = side of the last build-up-qualified LB (the trap; an unqualified LB against a live qualified one is inducement and does not flip it). Auto (draw) = the side holding more intact build-up taps — Marco's lean before the trap. Long/Short = set by hand from the weekly brief. Off = no bias, nothing is marked false.")
+
+grpU = "Build-up"
+showBuildups = input.bool(true, "Build-up boxes (equal highs/lows)", group = grpU,
+     tooltip = "A box across the equal extremes once a level has the build-up touch count — Accettone's 'high respecting high' liquidity, the local target of the story (docs/MARCO.md §2.1).")
+keepSwept   = input.bool(true, "Keep swept build-up boxes (grey)", group = grpU,
+     tooltip = "After the run the box freezes at the sweep bar and turns grey ('swept xN') until it ages out (Zone max age).")
 
 grpV = "Visuals"
 showLevels  = input.bool(true, "Show liquidity levels", group = grpV)
@@ -55,13 +67,16 @@ colBull     = input.color(#26a69a, "Bullish", group = grpV, inline = "c")
 colBear     = input.color(#ef5350, "Bearish", group = grpV, inline = "c")
 
 int MAX_BLOCKS = 80
+int MAX_SWEPT  = 60
 
 // ----------------------------------------------------------------- types ---
 type LqLevel
     float price
+    float near      // nearest of the "equal" extremes — the build-up box's inner edge
     int   born
     int   touches
     line  ln
+    box   bx = na   // build-up box, once touches >= minTouches
 
 type Pending
     float lvl     = na // nearest swept level (reclaim target / zone inner edge)
@@ -85,10 +100,15 @@ type Block
     int   born
     int   left // bar of the sweep extreme
 
+type SweptBox
+    box bx
+    int at // sweep bar
+
 // ----------------------------------------------------------------- state ---
 var array<LqLevel> lowLvls  = array.new<LqLevel>()
 var array<LqLevel> highLvls = array.new<LqLevel>()
 var array<Block>   blocks   = array.new<Block>()
+var array<SweptBox> sweptBoxes = array.new<SweptBox>()
 var Pending pendBull = Pending.new()
 var Pending pendBear = Pending.new()
 var int biasDir   = 0 // +1 long, -1 short, 0 none
@@ -98,6 +118,7 @@ atrVal   = ta.atr(14)
 bodyLo   = math.min(open, close)
 bodyHi   = math.max(open, close)
 colDead  = color.new(#787b86, 82)
+colSwept = #787b86
 
 // --------------------------------------------------------------- helpers ---
 // a zone against the bias is a pullback origin, never an entry (V1 5:27–6:02)
@@ -121,6 +142,58 @@ liveBuild(bool isBull) =>
             if not blk.dead and blk.build and blk.isBull == isBull
                 found := true
     found
+
+// docs/MARCO.md §2.1: a level with the build-up touch count is a liquidity
+// build-up — draw the box across its equal extremes (the local target)
+updateBuildup(LqLevel lv, bool isLow) =>
+    if showBuildups and lv.touches >= minTouches
+        float top = isLow ? lv.near : lv.price
+        float bot = isLow ? lv.price : lv.near
+        if top - bot < syminfo.mintick
+            bot := top - syminfo.mintick
+        col = isLow ? colBull : colBear
+        string txt = "x" + str.tostring(lv.touches)
+        if na(lv.bx)
+            lv.bx := box.new(lv.born, top, bar_index, bot,
+                 border_color = color.new(col, 55), border_width = 1, border_style = line.style_dotted,
+                 bgcolor = color.new(col, 90), text = txt, text_size = size.tiny,
+                 text_color = color.new(col, 35), text_halign = text.align_right,
+                 text_valign = isLow ? text.align_bottom : text.align_top)
+        box.set_top(lv.bx, top)
+        box.set_bottom(lv.bx, bot)
+        box.set_text(lv.bx, txt)
+
+// the build-up was run: freeze the box at the sweep bar (grey, "swept xN") or drop it
+retireBuildup(LqLevel lv) =>
+    if not na(lv.bx)
+        if keepSwept
+            box.set_right(lv.bx, bar_index)
+            box.set_bgcolor(lv.bx, color.new(colSwept, 90))
+            box.set_border_color(lv.bx, color.new(colSwept, 50))
+            box.set_text_color(lv.bx, color.new(colSwept, 30))
+            box.set_text(lv.bx, "swept x" + str.tostring(lv.touches))
+            array.push(sweptBoxes, SweptBox.new(bx = lv.bx, at = bar_index))
+            if array.size(sweptBoxes) > MAX_SWEPT
+                SweptBox old = array.shift(sweptBoxes)
+                box.delete(old.bx)
+        else
+            box.delete(lv.bx)
+        lv.bx := na
+
+// docs/MARCO.md §3 (bias source "draw"): the side holding more intact
+// build-up taps is the draw — Marco's lean before the trap
+drawBias() =>
+    int up = 0
+    int dn = 0
+    if array.size(highLvls) > 0
+        for lv in highLvls
+            if lv.touches >= minTouches and lv.price > close
+                up += lv.touches
+    if array.size(lowLvls) > 0
+        for lv in lowLvls
+            if lv.touches >= minTouches and lv.price < close
+                dn += lv.touches
+    up > dn ? 1 : dn > up ? -1 : 0
 
 newBlock(bool isBull, int leftBar, float top, float bot, bool qualified) =>
     // docs/MARCO.md §7.1: a zone thinner than minZoneAtr is not entry-grade
@@ -158,7 +231,8 @@ bool tapBear  = false
 bool tapBullQ = false
 bool tapBearQ = false
 
-int curBias = biasMode == "Long" ? 1 : biasMode == "Short" ? -1 : biasMode == "Off" ? 0 : lastLbDir
+int curBias = biasMode == "Long" ? 1 : biasMode == "Short" ? -1 : biasMode == "Off" ? 0 :
+     biasMode == "Auto (draw)" ? drawBias() : lastLbDir
 if curBias != biasDir
     biasDir := curBias
     applyBias(biasDir)
@@ -234,10 +308,21 @@ if array.size(lowLvls) > 0
     for lv in lowLvls
         if not na(lv.ln)
             line.set_x2(lv.ln, bar_index)
+        if not na(lv.bx)
+            box.set_right(lv.bx, bar_index)
 if array.size(highLvls) > 0
     for lv in highLvls
         if not na(lv.ln)
             line.set_x2(lv.ln, bar_index)
+        if not na(lv.bx)
+            box.set_right(lv.bx, bar_index)
+// swept build-up boxes age out with the zones
+if array.size(sweptBoxes) > 0
+    for i = array.size(sweptBoxes) - 1 to 0
+        SweptBox sb = array.get(sweptBoxes, i)
+        if bar_index - sb.at > maxAgeBars
+            box.delete(sb.bx)
+            array.remove(sweptBoxes, i)
 
 // --------------------------------------- 3. sweep scan: consume levels -----
 if array.size(lowLvls) > 0
@@ -258,6 +343,7 @@ if array.size(lowLvls) > 0
                 pendBull.age     := math.max(pendBull.age, bar_index - lv.born)
             if not na(lv.ln)
                 line.delete(lv.ln)
+            retireBuildup(lv)
             array.remove(lowLvls, i)
 
 if array.size(highLvls) > 0
@@ -278,6 +364,7 @@ if array.size(highLvls) > 0
                 pendBear.age     := math.max(pendBear.age, bar_index - lv.born)
             if not na(lv.ln)
                 line.delete(lv.ln)
+            retireBuildup(lv)
             array.remove(highLvls, i)
 
 // ------------------------------- 4. pending sweeps: reclaim or abandon -----
@@ -333,12 +420,14 @@ registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice) =>
             if math.abs(lv.price - pPrice) <= eqTol * atrVal
                 lv.touches += 1
                 lv.price := isLow ? math.min(lv.price, pPrice) : math.max(lv.price, pPrice)
+                lv.near  := isLow ? math.max(lv.near, pPrice) : math.min(lv.near, pPrice)
                 if not na(lv.ln)
                     line.set_y1(lv.ln, lv.price)
                     line.set_y2(lv.ln, lv.price)
                     if lv.touches >= minTouches
                         line.set_width(lv.ln, 2)
                         line.set_color(lv.ln, color.new(isLow ? colBull : colBear, 30))
+                updateBuildup(lv, isLow)
                 merged := true
                 break
     // low respecting low (docs/MARCO.md §4.4): a later low that holds above an
@@ -356,17 +445,20 @@ registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice) =>
             if bestLv.touches >= minTouches and not na(bestLv.ln)
                 line.set_width(bestLv.ln, 2)
                 line.set_color(bestLv.ln, color.new(isLow ? colBull : colBear, 30))
+            updateBuildup(bestLv, isLow)
             merged := true
     if not merged
         line lin = showLevels ?
              line.new(pBar, pPrice, bar_index, pPrice,
                  color = color.new(isLow ? colBull : colBear, 65),
                  width = 1, style = line.style_dotted) : na
-        array.push(lvls, LqLevel.new(price = pPrice, born = pBar, touches = 1, ln = lin))
+        array.push(lvls, LqLevel.new(price = pPrice, near = pPrice, born = pBar, touches = 1, ln = lin))
         if array.size(lvls) > maxLevels
             LqLevel old = array.shift(lvls)
             if not na(old.ln)
                 line.delete(old.ln)
+            if not na(old.bx)
+                box.delete(old.bx)
 
 insideAliveZone(bool isBull, float p) =>
     bool inside = false

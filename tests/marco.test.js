@@ -516,3 +516,113 @@ test("a live qualified LB anchors the story past story_lookback (V1: 68 bars at 
   const plain = mkBars([...SWEEP_RECLAIM, ...quiet]);
   assert.equal(storyRead(buildLiquidityMap(plain, cfg), plain, cfg).mode, "no_mans_land");
 });
+
+// --- build-ups: the local target survives its own sweep (docs/MARCO.md §2.1) ---
+
+// MNQ 1h, 31 Aug – 1 Sep 2026 in miniature: equal highs tapped three times
+// ("high respecting high"), then a spike runs them and closes back below.
+const QUIET6 = Array.from({ length: 6 }, () => [101, 101.6, 100.9, 101.3]); // no pivots, just bar count
+const EQUAL_HIGHS_X3 = [
+  ...QUIET6,
+  [101, 102, 100.9, 101.5],
+  [101.5, 103.0, 101.2, 102.4], // pivot high 103.0
+  [102.4, 102.6, 101.8, 102.2],
+  [102.2, 102.98, 101.9, 102.5], // pivot high 102.98 → equal (at/below the first) → build-up x2
+  [102.5, 102.7, 101.7, 102.0],
+  [102.0, 102.95, 101.6, 102.3], // pivot high 102.95 → x3
+  [102.3, 102.5, 101.5, 102.1],
+];
+const EQUAL_HIGHS_SWEPT = [
+  ...EQUAL_HIGHS_X3,
+  [102.1, 103.6, 101.9, 102.4], // runs 103.0, closes back → qualified bear LB; the build-up is swept
+];
+
+test("an intact build-up spans the equal extremes and counts its taps", () => {
+  const bars = mkBars(EQUAL_HIGHS_X3);
+  const map = buildLiquidityMap(bars, CFG);
+  assert.equal(map.buildups.length, 1);
+  const bu = map.buildups[0];
+  assert.equal(bu.side, "high");
+  assert.equal(bu.touches, 3);
+  assert.equal(bu.price, 103.0);
+  assert.equal(bu.near, 102.95);
+  assert.equal(bu.swept, null);
+  const read = analyzeMarco(bars, CFG);
+  assert.deepEqual(read.liquidity.buildups[0], {
+    side: "high",
+    zone: [102.95, 103],
+    touches: 3,
+    status: "intact",
+    age_bars: 5,
+    swept_bars_ago: null,
+    lb: null,
+  });
+});
+
+test("a swept build-up stays on the map, linked to the LB its run created", () => {
+  const bars = mkBars(EQUAL_HIGHS_SWEPT);
+  const map = buildLiquidityMap(bars, CFG);
+  const bu = map.buildups[0];
+  assert.equal(bu.swept, 13);
+  assert.equal(bu.sweptExt, 103.6);
+  const lb = map.blocks[bu.lb];
+  assert.equal(lb.side, "bear");
+  assert.equal(lb.qualified, true);
+  assert.equal(lb.buildup, 0);
+  assert.ok(map.events.some((e) => e.type === "high_swept" && e.buildup === 0 && e.touches === 3));
+
+  const read = analyzeMarco(bars, CFG);
+  const out = read.liquidity.buildups[0];
+  assert.equal(out.status, "swept");
+  assert.equal(out.swept_bars_ago, 0);
+  assert.deepEqual(out.lb, [103, 103.6]);
+  assert.equal(read.story.mode, "sell_story");
+  assert.match(read.story.read, /the x3 build-up at 103 was the local target, now taken/);
+});
+
+// --- bias source: trap (default) / draw / off (docs/MARCO.md §3) ---
+
+test("draw: the side with more intact build-up fuel is the lean; no trap yet means no story", () => {
+  const bars = mkBars(EQUAL_HIGHS_X3); // a x3 build-up above price, nothing below
+  const map = buildLiquidityMap(bars, CFG);
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.draw.direction, 1);
+  assert.equal(story.draw.fuel_above, 3);
+  assert.equal(story.draw.fuel_below, 0);
+  assert.equal(story.draw.activated, false);
+  assert.match(story.draw.read, /draw up .* no trap yet/);
+});
+
+test("draw is activated by a trap on the other side; bias_source and an explicit bias pick the roles", () => {
+  // build-up lows run and reclaimed (bull anchor) + equal highs left intact above
+  const bars = mkBars([...V1_BUILDUP_THEN_RALLY.slice(0, 6), ...EQUAL_HIGHS_X3.slice(6)]);
+  const map = buildLiquidityMap(bars, CFG);
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.direction, 1);
+  assert.equal(story.draw.direction, 1);
+  assert.equal(story.draw.fuel_above, 4);
+  assert.equal(story.draw.activated, true);
+  assert.match(story.draw.read, /activated/);
+
+  const viaTrap = analyzeMarco(bars, CFG);
+  assert.equal(viaTrap.bias_used, 1);
+  assert.equal(viaTrap.bias_source, "trap");
+
+  const viaDraw = analyzeMarco(bars, { ...CFG, bias_source: "draw" });
+  assert.equal(viaDraw.bias_used, 1);
+  assert.equal(viaDraw.bias_source, "draw");
+
+  const off = analyzeMarco(bars, { ...CFG, bias_source: "off" });
+  assert.equal(off.bias_used, 0);
+  assert.equal(off.bias_source, "off");
+  assert.ok(off.blocks.every((b) => b.role === null));
+  assert.deepEqual(off.false_reactions, []);
+  assert.deepEqual(off.triggers, []);
+
+  const manualOff = analyzeMarco(bars, CFG, { bias: 0 }); // --bias off
+  assert.equal(manualOff.bias_used, 0);
+  assert.equal(manualOff.bias_source, "explicit");
+  const manualShort = analyzeMarco(bars, { ...CFG, bias_source: "off" }, { bias: -1 }); // --bias short
+  assert.equal(manualShort.bias_used, -1);
+  assert.equal(manualShort.blocks.find((b) => b.side === "bull").role, "pullback_origin");
+});

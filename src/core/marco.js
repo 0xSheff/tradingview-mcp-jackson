@@ -31,6 +31,12 @@ export const MARCO_DEFAULTS = {
   max_levels: 20, // intact levels tracked per side
   zone_max_age: 300, // LB zone lifetime in bars
   story_lookback: 60, // how far back the narrative looks for the last run
+  // docs/MARCO.md §3: where the LTF story's direction comes from — "trap"
+  // (the last qualified LB: the last confirmed side that was run and
+  // reclaimed), "draw" (the side holding more intact build-up fuel — Marco's
+  // lean before the trap) or "off" (no automatic bias; roles only from an
+  // explicit/weekly bias). An explicit bias always overrides the source.
+  bias_source: "trap",
 
   // findings of the 09:55 experiment (docs/MARCO.md §7.1) — all [CALIBRATION]
   min_zone_atr: 0.25, // thinner zones are flagged `thin`: not entry-grade
@@ -97,17 +103,33 @@ function insideZone(blocks, side, price) {
   );
 }
 
-function registerLevel(lvls, side, born, price, atrNow, cfg, events, bar) {
+function registerLevel(lvls, side, born, price, atrNow, cfg, events, bar, buildups) {
   const tol = (atrNow ?? 0) * cfg.eq_tolerance_atr;
+  // docs/MARCO.md §2.1: once a level has min_touches taps it is a liquidity
+  // build-up — the local target. The record outlives the level: the sweep
+  // marks it swept and links the LB the run creates.
+  const track = (lv, respect) => {
+    if (lv.touches === cfg.min_touches) {
+      events.push({ bar, type: `${side}_buildup`, level: lv.price, touches: lv.touches, ...(respect ? { respect: true } : {}) });
+      lv.buildup = buildups.length;
+      buildups.push({ side, price: lv.price, near: lv.near, touches: lv.touches, born: lv.born, lastTouch: born, swept: null, sweptExt: null, lb: null });
+    } else if (lv.buildup != null) {
+      const bu = buildups[lv.buildup];
+      bu.touches = lv.touches;
+      bu.price = lv.price;
+      bu.near = lv.near;
+      bu.lastTouch = born;
+    }
+  };
   for (const lv of lvls) {
     if (Math.abs(lv.price - price) <= tol) {
       lv.touches += 1;
-      // liquidity rests beyond the furthest of the "equal" extremes
+      // liquidity rests beyond the furthest of the "equal" extremes; the
+      // nearest one is the inner edge of the build-up box
       lv.price = side === "low" ? Math.min(lv.price, price) : Math.max(lv.price, price);
+      lv.near = side === "low" ? Math.max(lv.near, price) : Math.min(lv.near, price);
       lv.lastTouch = born;
-      if (lv.touches === cfg.min_touches) {
-        events.push({ bar, type: `${side}_buildup`, level: lv.price, touches: lv.touches });
-      }
+      track(lv, false);
       return;
     }
   }
@@ -123,12 +145,10 @@ function registerLevel(lvls, side, born, price, atrNow, cfg, events, bar) {
   if (best) {
     best.lv.touches += 1;
     best.lv.lastTouch = born;
-    if (best.lv.touches === cfg.min_touches) {
-      events.push({ bar, type: `${side}_buildup`, level: best.lv.price, touches: best.lv.touches, respect: true });
-    }
+    track(best.lv, true);
     return;
   }
-  lvls.push({ price, born, touches: 1, lastTouch: born });
+  lvls.push({ price, near: price, born, touches: 1, lastTouch: born, buildup: null });
   if (lvls.length > cfg.max_levels) lvls.shift();
 }
 
@@ -145,6 +165,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
   const highLvls = [];
   const blocks = [];
   const events = [];
+  const buildups = [];
   let pendBull = null;
   let pendBear = null;
 
@@ -215,13 +236,18 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
       const lv = lowLvls[k];
       if (b.low < lv.price) {
         if (!pendBull) {
-          pendBull = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.low, extBar: i, miss: 0 };
+          pendBull = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.low, extBar: i, miss: 0, buildup: lv.buildup ?? null };
         } else {
+          if (lv.buildup != null && lv.touches >= pendBull.touches) pendBull.buildup = lv.buildup;
           pendBull.lvl = Math.min(pendBull.lvl, lv.price);
           pendBull.touches = Math.max(pendBull.touches, lv.touches);
           pendBull.age = Math.max(pendBull.age, i - lv.born);
         }
-        events.push({ bar: i, type: "low_swept", level: lv.price, touches: lv.touches });
+        if (lv.buildup != null) {
+          buildups[lv.buildup].swept = i;
+          buildups[lv.buildup].sweptExt = b.low;
+        }
+        events.push({ bar: i, type: "low_swept", level: lv.price, touches: lv.touches, buildup: lv.buildup ?? null });
         lowLvls.splice(k, 1);
       }
     }
@@ -229,13 +255,18 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
       const lv = highLvls[k];
       if (b.high > lv.price) {
         if (!pendBear) {
-          pendBear = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.high, extBar: i, miss: 0 };
+          pendBear = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.high, extBar: i, miss: 0, buildup: lv.buildup ?? null };
         } else {
+          if (lv.buildup != null && lv.touches >= pendBear.touches) pendBear.buildup = lv.buildup;
           pendBear.lvl = Math.max(pendBear.lvl, lv.price);
           pendBear.touches = Math.max(pendBear.touches, lv.touches);
           pendBear.age = Math.max(pendBear.age, i - lv.born);
         }
-        events.push({ bar: i, type: "high_swept", level: lv.price, touches: lv.touches });
+        if (lv.buildup != null) {
+          buildups[lv.buildup].swept = i;
+          buildups[lv.buildup].sweptExt = b.high;
+        }
+        events.push({ bar: i, type: "high_swept", level: lv.price, touches: lv.touches, buildup: lv.buildup ?? null });
         highLvls.splice(k, 1);
       }
     }
@@ -266,9 +297,11 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
           qualified,
           thin,
           inducement,
+          buildup: pendBull.buildup ?? null,
           tapped: false,
           dead: false,
         });
+        if (pendBull.buildup != null) buildups[pendBull.buildup].lb = blocks.length - 1;
         events.push({ bar: i, type: "bull_lb_created", zone: [pendBull.ext, pendBull.lvl], qualified, inducement });
         pendBull = null;
       } else if (++pendBull.miss > cfg.confirm_bars) {
@@ -298,9 +331,11 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
           qualified,
           thin,
           inducement,
+          buildup: pendBear.buildup ?? null,
           tapped: false,
           dead: false,
         });
+        if (pendBear.buildup != null) buildups[pendBear.buildup].lb = blocks.length - 1;
         events.push({ bar: i, type: "bear_lb_created", zone: [pendBear.lvl, pendBear.ext], qualified, inducement });
         pendBear = null;
       } else if (++pendBear.miss > cfg.confirm_bars) {
@@ -320,15 +355,15 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS) {
       const lo = bars[j].low;
       const hi = bars[j].high;
       if (!(pendBull && lo <= pendBull.lvl) && isPivot(j, "low") && !insideZone(blocks, "bull", lo)) {
-        registerLevel(lowLvls, "low", j, lo, atr[i], cfg, events, i);
+        registerLevel(lowLvls, "low", j, lo, atr[i], cfg, events, i, buildups);
       }
       if (!(pendBear && hi >= pendBear.lvl) && isPivot(j, "high") && !insideZone(blocks, "bear", hi)) {
-        registerLevel(highLvls, "high", j, hi, atr[i], cfg, events, i);
+        registerLevel(highLvls, "high", j, hi, atr[i], cfg, events, i, buildups);
       }
     }
   }
 
-  return { levels: { lows: lowLvls, highs: highLvls }, blocks, events };
+  return { levels: { lows: lowLvls, highs: highLvls }, blocks, events, buildups };
 }
 
 /**
@@ -469,6 +504,11 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
     if (lbBlock?.thin) notes.push("zone too thin to hold a stop — refine the entry on a lower TF");
     if (lbBlock?.tapped) notes.push("LB already tapped once");
     if (notes.length) read += ` [${notes.join("; ")}]`;
+    // the run that made the story took a build-up: that was the local target
+    if (lbBlock && (lbBlock.sweptTouches ?? 1) >= cfg.min_touches) {
+      const lvl = lbBlock.side === "bull" ? lbBlock.top : lbBlock.bot;
+      read += ` — the x${lbBlock.sweptTouches} build-up at ${round(lvl)} was the local target, now taken`;
+    }
   }
   const inducedBlock = inducedLb
     ? map.blocks.find((b) => b.born === inducedLb.bar && inducedLb.type.startsWith(b.side)) ?? null
@@ -502,12 +542,40 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
         }
       : null;
 
+  // docs/MARCO.md §3 (bias source "draw"): Marco's lean before the trap —
+  // the side holding more intact build-up is the draw; the trap on the other
+  // side activates it. Fuel = taps of intact build-up levels on each side.
+  const fuelOf = (lvls, isAbove) =>
+    lvls
+      .filter((l) => l.touches >= cfg.min_touches && (isAbove ? l.price > price : l.price < price))
+      .reduce((sum, l) => sum + l.touches, 0);
+  const fuelAbove = fuelOf(map.levels.highs, true);
+  const fuelBelow = fuelOf(map.levels.lows, false);
+  const drawDir = fuelAbove > fuelBelow ? 1 : fuelBelow > fuelAbove ? -1 : 0;
+  const anchorDir = anchor ? (anchor.side === "bull" ? 1 : -1) : 0;
+  const draw = {
+    direction: drawDir,
+    fuel_above: fuelAbove,
+    fuel_below: fuelBelow,
+    activated: drawDir !== 0 && anchorDir === drawDir,
+    read:
+      drawDir === 0
+        ? `no draw — build-up fuel is balanced (above x${fuelAbove}, below x${fuelBelow})`
+        : `draw ${drawDir > 0 ? "up" : "down"} — intact build-up above x${fuelAbove} vs below x${fuelBelow}` +
+          (anchorDir === drawDir
+            ? `; the trap on the ${drawDir > 0 ? "low" : "high"} side is in — activated`
+            : anchorDir === 0
+              ? "; no trap yet — a lean, not a story"
+              : "; the last trap sits on the draw side itself — a lean against the running story"),
+  };
+
   return {
     price: round(price),
     mode,
     direction,
     fresh,
     lb,
+    draw,
     inducement: inducedLb
       ? {
           side: inducedLb.type === "bear_lb_created" ? "bear" : "bull",
@@ -788,8 +856,13 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null } = {}) {
   const story = storyRead(map, bars, cfg);
   const atr = atrSeries(bars, cfg.atr_length);
   const buf = cfg.stop_buffer_atr * (atr[n - 1] ?? 0);
-  // the higher-timeframe bias leads when known; otherwise this TF's own story
-  const dir = bias || story.direction;
+  // docs/MARCO.md §3: an explicit bias (weekly brief or manual, 0 = off)
+  // leads; otherwise this TF's own story by cfg.bias_source — trap (the last
+  // qualified LB), draw (build-up fuel) or off (no automatic bias)
+  const src = cfg.bias_source ?? "trap";
+  const explicit = bias !== null && bias !== undefined;
+  const dir = explicit ? bias : src === "draw" ? story.draw.direction : src === "off" ? 0 : story.direction;
+  const biasSource = explicit ? "explicit" : src;
   const roleOf = (b) => (!dir ? null : b.side === (dir > 0 ? "bull" : "bear") ? "entry" : "pullback_origin");
 
   const blocks = map.blocks
@@ -813,17 +886,35 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null } = {}) {
     )
     .slice(0, 6);
 
+  // docs/MARCO.md §2.1: intact build-ups are the local targets; swept ones
+  // stay listed (with the LB they produced) as long as a zone would
+  const buildups = map.buildups
+    .filter((u) => u.swept === null || n - 1 - u.swept <= cfg.zone_max_age)
+    .map((u) => ({
+      side: u.side,
+      zone: [round(Math.min(u.price, u.near)), round(Math.max(u.price, u.near))],
+      touches: u.touches,
+      status: u.swept === null ? "intact" : "swept",
+      age_bars: n - 1 - u.born,
+      swept_bars_ago: u.swept === null ? null : n - 1 - u.swept,
+      lb: u.lb === null || u.lb === undefined ? null : [round(map.blocks[u.lb].bot), round(map.blocks[u.lb].top)],
+    }))
+    .sort((a, b) => (a.status === b.status ? a.age_bars - b.age_bars : a.status === "intact" ? -1 : 1))
+    .slice(0, 8);
+
   return {
     bars_analyzed: n,
     last_price: story.price,
-    story: { mode: story.mode, direction: story.direction, read: story.read, lb: story.lb },
+    story: { mode: story.mode, direction: story.direction, read: story.read, lb: story.lb, draw: story.draw },
     bias_used: dir,
+    bias_source: biasSource,
     blocks,
     triggers: triggerSetups(map, bars, cfg, { direction: dir }),
     false_reactions: falseReactions(map, story.price, dir),
     liquidity: {
       intact_above: story.intact_above,
       intact_below: story.intact_below,
+      buildups,
     },
     h4_model: h4Model(bars, cfg),
   };
@@ -1133,7 +1224,7 @@ function mergeConfig(rules) {
   return out;
 }
 
-export async function runMarcoBrief({ rules_path, symbols, timeframes } = {}) {
+export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = {}) {
   let rules = {};
   let loadedFrom = null;
   try {
@@ -1143,7 +1234,13 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes } = {}) {
   } catch {
     // rules.json is optional on this branch — defaults are fine
   }
-  const cfg = mergeConfig(rules);
+  // --bias: weekly (default — the latest weekly brief) | long | short | off
+  // (no bias, the analyst decides) | trap | draw (this TF's own story source)
+  const biasOpt = String(bias ?? "weekly").toLowerCase();
+  const manualBias = biasOpt === "long" ? 1 : biasOpt === "short" ? -1 : biasOpt === "off" ? 0 : null;
+  const cfg0 = mergeConfig(rules);
+  const cfg = biasOpt === "trap" || biasOpt === "draw" ? { ...cfg0, bias_source: biasOpt } : cfg0;
+  const useWeekly = biasOpt === "weekly";
   const tfs = timeframes?.length ? timeframes : cfg.timeframes;
   const watchlist = symbols?.length
     ? symbols
@@ -1189,7 +1286,9 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes } = {}) {
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
         const { bars } = await data.getOhlcv({ count: cfg.bars_to_fetch });
-        const read = analyzeMarco(bars, cfg, { bias: wk?.bias?.bias || null });
+        const read = analyzeMarco(bars, cfg, {
+          bias: manualBias !== null ? manualBias : useWeekly ? wk?.bias?.bias || null : null,
+        });
         if (!read.error && htfBars) read.htf = htfContext(htfBars, read.last_price, cfg);
         if (!read.error && wk) {
           read.alignment = alignmentOf(read.story.direction, wk.bias.bias);
@@ -1240,7 +1339,8 @@ export function compactMarcoBrief(brief) {
       "Render one compact block per symbol/timeframe: the story line first " +
       "(mode + read — liquidity is the priority), then LB rows (side, role, zone, " +
       "qualified, inducement, tapped, stop_beyond), then intact liquidity with touch " +
-      "counts, then the 10 a.m. H4 line when available. All thresholds are " +
+      "counts and build-ups (equal highs/lows with xN taps — the local targets; " +
+      "swept ones name the LB they produced), then the 10 a.m. H4 line when available. All thresholds are " +
       "[CALIBRATION] (docs/MARCO.md §6) — never present them as Accettone's.",
     generated_at: brief.generated_at,
     symbols: brief.results.map((r) =>
@@ -1257,13 +1357,16 @@ export function compactMarcoBrief(brief) {
                   ? { error: t.error }
                   : {
                       story: `${t.story.mode}: ${t.story.read}`,
+                      draw: t.story.draw?.read ?? null,
                       alignment: t.alignment ?? null,
                       bias_used: t.bias_used,
+                      bias_source: t.bias_source,
                       triggers: t.triggers,
                       false_reactions: t.false_reactions,
                       blocks: t.blocks,
                       intact_above: t.liquidity.intact_above.slice(0, 4),
                       intact_below: t.liquidity.intact_below.slice(0, 4),
+                      buildups: t.liquidity.buildups ?? [],
                       h4: t.h4_model.available
                         ? {
                             phase: t.h4_model.phase,
