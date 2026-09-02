@@ -270,20 +270,25 @@ left" (V6). The only forward-looking part is build-up asymmetry — the side
 with more taps is where the crowd's stops rest, hence the likelier first
 run — but it is waited for, never front-run. **[SOURCE, V3, V4, V6]**
 
-**Intraweek transposition [CALIBRATION, user, 2026-09-02].** The author's
-weekly→daily read serves trades held for days-to-weeks; our execution is
-intraweek with a Friday flat, and a week is one candle on the W chart —
-the weekly draw sits months away (W36: MGC primary 5752 ≈ 8–12 weekly
-ranges from price). The weekly brief therefore runs the same §3.1 read one
-level down — licensed by fractality **[SOURCE, V2, V4]** and by the
-author's own layering ("this is more of an intraday/intraweek kind of
-play… most likely not going to be that higher time frame move",
-**[SOURCE, V7]**): senior story = **D**, junior = **4h**, triggers on
-240/60, targets = the nearest senior liquidity (annotated with distance in
-weekly ATRs), and the **W story stays as context** — its alignment and the
-big draw are printed per symbol so the week's bias is never read blind to
-the higher frame. The divergence rule below applies unchanged to the
-transposed pair.
+**Two layers of the weekly brief [CALIBRATION, user, 2026-09-02].** The
+author's weekly→daily read is kept as the **global layer**: the bias, its
+invalidation and the big targets — which will *not* be hit within a week
+(W36: MGC primary 5752 ≈ 8–12 weekly ranges away). They are recorded as
+such and re-evaluated every weekend ("has the picture changed, is it still
+valid?"). W36 confirmed the layer: the bias side and the levels it was
+expected to start from played out (MGC tap 4349–4365 → 4418, 6E stab
+1.1572 → reclaim) while the big targets stayed far. The **intraweek layer**
+then answers the week's practical questions inside that story: the phase
+the week starts in (the D vs 4h read — `aligned` or `pullback`), reachable
+targets (nearest D/4h liquidity, annotated with distance in weekly ATRs,
+≈Nw), triggers on 240/60 in the global direction, and the **early-week
+counter-trend allowance**: the first two sessions of a week usually pull
+back, so Monday–Tuesday intraday counter-trend trades are permitted when a
+visible short-term target exists — nearest target only, never held against
+the global bias. Fractality **[SOURCE, V2, V4]** and the author's own
+layering ("this is more of an intraday/intraweek kind of play… most likely
+not going to be that higher time frame move", **[SOURCE, V7]**) license the
+second layer; the first stays exactly the author's.
 
 **Divergence rule [CALIBRATION, user]:** a daily trap against a *live*
 weekly story (trap fresh, target still open) is inducement — the weekly
@@ -417,7 +422,7 @@ Everything below is ours to tune — the videos show it by eye only.
 | A later low holding this far above a level is a confirming touch ("low respecting low") | `respectTol` / `respect_tolerance_atr` | 0.75 ATR |
 | Which sweeps count as a side of the range being run (the story anchor, §3) — the rest is inducement | `minTouches` / `minLevelAge` (reused) | 2 touches / 50 bars |
 | Where a timeframe's own direction comes from (§3): the trap, the draw, or nothing | `Bias` / `bias_source` / `--bias` | trap |
-| The weekly-brief stack (§3.1): senior/junior stories, trigger TFs, context TF | `marco weekly` | D + 240, triggers 240/60, W context |
+| The weekly brief's two layers (§3.1): global bias W→D with big targets; intraweek phase D/4h, reachable targets, triggers 240/60, counter-trend window | `marco weekly` | Mon–Tue counter-trend, nearest target only |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
 09:55 replay experiment (§7.1): 1-tick zones made R math absurd, extremes
@@ -459,11 +464,11 @@ tuning any default:
   - `--bias weekly|long|short|off|trap|draw` on `brief`/`scan` — which bias
     sets the zone roles (default `weekly` = the latest weekly brief; `off`
     marks nothing; `trap`/`draw` use this TF's own story source, §3).
-  - `node src/cli/index.js marco weekly --compact` — the weekly bias brief
-    (§3.1 transposed, intraweek stack): D and 4h stories → `resolveBias` →
-    nearest-liquidity targets (≈Nw = weekly-ATR distance), invalidation,
-    sweep triggers on 240 and 60, the W story as context per symbol.
-    Writes `briefs/weekly/<ISO week>.md` and
+  - `node src/cli/index.js marco weekly --compact` — the weekly brief in
+    two layers (§3.1): global bias W→D with the big targets (≈Nw = distance
+    in weekly ATRs) and invalidation; intraweek phase (D vs 4h), reachable
+    week targets, sweep triggers on 240 and 60 in the bias direction, and
+    the early-week counter-trend setups. Writes `briefs/weekly/<ISO week>.md` and
     `.json`; `marco brief`/`scan` read the latest `.json` and stamp every
     intraday story `aligned` / `against` the weekly bias.
   - Optional overrides live in `rules.json` → `marco` (gitignored, optional).
