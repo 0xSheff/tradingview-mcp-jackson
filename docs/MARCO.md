@@ -3,8 +3,8 @@
 This file is the single source of truth for the `marco` branch.
 
 Sources — six public videos from the **Inter Equity Trading** YouTube channel
-(@InterEquity, Marco Accettone). Rules below are distilled from the full
-auto-generated transcripts of:
+(@InterEquity, Marco Accettone) plus one long-form interview (V7). Rules
+below are distilled from the full auto-generated transcripts of:
 
 | Ref | Video ID | Title | What it contributes |
 | --- | --- | --- | --- |
@@ -14,6 +14,7 @@ auto-generated transcripts of:
 | **V4** | `hKh3-f3oAO8` | $10,000 Liquidity Inducement Trade in 4 MINUTES | Liquidity build-up, waiting for the trap, pre-framing targets |
 | **V5** | `lEsZYpeGNVQ` | The Simple Trading Strategy That Actually Works | The 10 a.m. reversal — the 06:00–10:00 ET H4 candle model |
 | **V6** | `aKoGbAe-xTE` | 10,000 Hours of Liquidity Trading in a 16 Minute Video | Weekly/daily bias, trend-line liquidity, the HTF→LTF entry chain |
+| **V7** | `5NrNBik2dmY` | MRKT interview (Jun 2026, XAUUSD/NQ walkthrough) | "Invisible" levels = HTF candle highs / highs respected multiple times; re-entry while the target is intact; counter-bias framing; the short-term play toward the local draw |
 
 > **Two kinds of statement in this document.**
 > Lines marked **[SOURCE]** are the author's rules, restated from the
@@ -58,7 +59,11 @@ A swing high/low left behind by price. Sub-types the author marks on charts:
 - **Build-up / equal levels** — repeated taps on the same level ("high
   respecting high tells me sellers in the market below these highs"; "we are
   building a tremendous amount of liquidity here"). The more taps, the more
-  fuel. **[SOURCE, V3, V4]** The author boxes the equal extremes and drags
+  fuel. **[SOURCE, V3, V4]** "We are respecting this high multiple times" is
+  the tell — the XAUUSD level of the V7 walkthrough (a plain 1h bar high at
+  4378, no visible extreme) mattered exactly because later highs kept
+  respecting it, and its run was the sell. **[SOURCE, V7]** The author boxes
+  the equal extremes and drags
   the box right; it is the *local target* of the story, and its run is the
   trap that flips it (MNQ 1h, 31 Aug–1 Sep 2026: equal highs 29538–29543.5
   tapped four times, run at 08:00 Athens, price fell 300 points). Tooling:
@@ -74,6 +79,12 @@ A swing high/low left behind by price. Sub-types the author marks on charts:
   each tap the same sloped line. The line is where trend-line traders' stops
   rest; a move whose "purpose" is to clear it runs through the whole chain in
   one go, then finds the LB below. **[SOURCE, V6]**
+- **Higher-timeframe candle highs/lows** — "this 4-hour high here is just
+  another high on the lower time frames — I just grab that high": a level can
+  be the extreme of an HTF candle, invisible as a swing on the LTF. This is
+  why the engine runs the HTF second pass (`htfContext`) and why the V3
+  replay's entry zone was missed (§7.1). No FVG/imbalance is involved
+  anywhere in the method. **[SOURCE, V7]**
 
 ### 2.2 Inducement (the trap)
 
@@ -210,7 +221,13 @@ indicator:
 
 Because every source is read per timeframe, the indicator on `Auto` is a
 pure LTF story without HTF or draw — useful precisely to see the local bias
-flip back into the higher-timeframe one.
+flip back into the higher-timeframe one. The author trades both layers
+himself: in V7 he runs a "short-term long" *into* the highs where the
+sellers sit (the local draw) while the higher-timeframe idea waits for those
+same highs to be taken out — the LTF story toward local liquidity is a
+legitimate intraday/intraweek play, not merely a false move, as long as it
+is managed as such ("once we take out a low like this, that's a target — in
+and out"). **[SOURCE, V7]**
 
 ---
 
@@ -252,6 +269,21 @@ again"), so the untaken side becomes "the only logical liquidity point
 left" (V6). The only forward-looking part is build-up asymmetry — the side
 with more taps is where the crowd's stops rest, hence the likelier first
 run — but it is waited for, never front-run. **[SOURCE, V3, V4, V6]**
+
+**Intraweek transposition [CALIBRATION, user, 2026-09-02].** The author's
+weekly→daily read serves trades held for days-to-weeks; our execution is
+intraweek with a Friday flat, and a week is one candle on the W chart —
+the weekly draw sits months away (W36: MGC primary 5752 ≈ 8–12 weekly
+ranges from price). The weekly brief therefore runs the same §3.1 read one
+level down — licensed by fractality **[SOURCE, V2, V4]** and by the
+author's own layering ("this is more of an intraday/intraweek kind of
+play… most likely not going to be that higher time frame move",
+**[SOURCE, V7]**): senior story = **D**, junior = **4h**, triggers on
+240/60, targets = the nearest senior liquidity (annotated with distance in
+weekly ATRs), and the **W story stays as context** — its alignment and the
+big draw are printed per symbol so the week's bias is never read blind to
+the higher frame. The divergence rule below applies unchanged to the
+transposed pair.
 
 **Divergence rule [CALIBRATION, user]:** a daily trap against a *live*
 weekly story (trap fresh, target still open) is inducement — the weekly
@@ -355,6 +387,12 @@ beyond any equal-level tolerance). It counts as build-up through a separate
   **[SOURCE, V3]**
 - Targets framed **before** entry — entry, stop and targets are all known
   before the button is clicked. **[SOURCE, V4]**
+- **Re-entry:** a stop-out does not kill the idea. While the target-side
+  liquidity is still intact and the trap repeats, look for the re-entry —
+  "if my sell target is still intact, definitely I'll be looking for
+  re-entry"; a missed entry can be retaken on the snap-back and a lower-TF
+  retest. One or two small losses before the real trade is normal (the
+  author's own win rate is 40–60%, condition-dependent). **[SOURCE, V7]**
 
 ---
 
@@ -379,6 +417,7 @@ Everything below is ours to tune — the videos show it by eye only.
 | A later low holding this far above a level is a confirming touch ("low respecting low") | `respectTol` / `respect_tolerance_atr` | 0.75 ATR |
 | Which sweeps count as a side of the range being run (the story anchor, §3) — the rest is inducement | `minTouches` / `minLevelAge` (reused) | 2 touches / 50 bars |
 | Where a timeframe's own direction comes from (§3): the trap, the draw, or nothing | `Bias` / `bias_source` / `--bias` | trap |
+| The weekly-brief stack (§3.1): senior/junior stories, trigger TFs, context TF | `marco weekly` | D + 240, triggers 240/60, W context |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
 09:55 replay experiment (§7.1): 1-tick zones made R math absurd, extremes
@@ -421,8 +460,10 @@ tuning any default:
     sets the zone roles (default `weekly` = the latest weekly brief; `off`
     marks nothing; `trap`/`draw` use this TF's own story source, §3).
   - `node src/cli/index.js marco weekly --compact` — the weekly bias brief
-    (§3.1 + §4.4): W and D stories → `resolveBias` → targets, invalidation,
-    sweep triggers on 240 and D. Writes `briefs/weekly/<ISO week>.md` and
+    (§3.1 transposed, intraweek stack): D and 4h stories → `resolveBias` →
+    nearest-liquidity targets (≈Nw = weekly-ATR distance), invalidation,
+    sweep triggers on 240 and 60, the W story as context per symbol.
+    Writes `briefs/weekly/<ISO week>.md` and
     `.json`; `marco brief`/`scan` read the latest `.json` and stamp every
     intraday story `aligned` / `against` the weekly bias.
   - Optional overrides live in `rules.json` → `marco` (gitignored, optional).
@@ -467,6 +508,28 @@ reclaimed the next week) opens no pending sweep. **Rule (implemented):** an inva
 extreme is swept liquidity — a pending opens on the invalidating bar and a
 reclaim makes the new extreme an LB (test: "an invalidated LB's extreme is
 swept liquidity"). **[CALIBRATION]**
+
+**V7 check (XAUUSD 1h, replayed at 2026-06-18, engine defaults):** the
+interview's 4378 level is not a 1h pivot and never registers — yet the
+machinery recovered the trade: before the spike the story was already
+`sell_story` ("highs were run and reclaimed 2 bars ago — look for shorts at
+the bearish LB 4349.6–4364.1") with the intact single-touch high 4369.7
+standing as the run target; the 17 Jun 17:00 spike swept 4363.7/4364.1 (both
+age-qualified via the invalidated-LB rule) and 4369.7, and left a
+**qualified bear LB 4369.7–4382.6 that brackets the author's 4378 line** —
+price then fell ~100 to 4278. Cost of the fractal proxy: the anchor sits
+~$9 below his hand-drawn line. Open idea (not built — the case is caught
+functionally): promote a non-pivot bar high to a level once later highs
+respect it ≥ `min_touches` times within `eq_tolerance` — market-confirmed,
+no new parameters; would move the anchor to the true bar high. **[V7]**
+A second live case (6E 1h, W36) shows the miss can sit on the *trigger*
+edge, not only the stop anchor: the Aug-16 Sunday-open wick 1.15765 is the
+true bottom of the entry pocket but never registers (flat neighbors — not a
+strict pivot), so the engine's sweep trigger reads 1.15795 (the pivot 3
+pips above). By the book the trap completes only below the pocket's
+furthest low — a stab under 1.15795 holding above 1.1576 is another
+inducement into the pocket, not the completed run. Had 1.15765 registered,
+the respect rule would have kept the level at the extreme.
 
 ### 7.2 V6 entry chain — validation targets
 

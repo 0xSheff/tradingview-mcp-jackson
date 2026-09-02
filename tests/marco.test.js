@@ -626,3 +626,19 @@ test("draw is activated by a trap on the other side; bias_source and an explicit
   assert.equal(manualShort.bias_used, -1);
   assert.equal(manualShort.blocks.find((b) => b.side === "bull").role, "pullback_origin");
 });
+
+test("resolveBias speaks in the given senior/junior names (intraweek stack)", () => {
+  const senior = {
+    direction: 1, mode: "buy_story", read: "d", fresh: true,
+    targets_above: [{ price: 105, touches: 2, buildup: true }], targets_below: [],
+    intact_above: [], intact_below: [], lb: { zone: [99, 100], alive: true },
+  };
+  const junior = {
+    direction: -1, mode: "sell_story", read: "h4", targets_above: [], targets_below: [],
+    intact_above: [], intact_below: [], lb: null,
+  };
+  const b = resolveBias(senior, junior, { senior: "daily", junior: "4h" });
+  assert.equal(b.regime, "pullback");
+  assert.match(b.note, /4h bearish trap against a live daily buy story/);
+  assert.equal(b.invalidation.rule, "daily close below");
+});

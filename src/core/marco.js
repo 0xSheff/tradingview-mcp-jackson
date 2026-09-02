@@ -928,7 +928,9 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null } = {}) {
  * daily consciously as counter-trend with targets at the nearest levels
  * only; when they agree, target the higher-timeframe liquidity (V6 §3.1).
  */
-export function resolveBias(w, d) {
+export function resolveBias(w, d, names = { senior: "weekly", junior: "daily" }) {
+  const S = names.senior;
+  const J = names.junior;
   // a "story" is a confirmed trap (buy/sell_story); a "lean" also counts the
   // continuation states — continuation alone never makes a counter-trend case
   const story = (s) => (s?.mode === "buy_story" ? 1 : s?.mode === "sell_story" ? -1 : 0);
@@ -951,33 +953,33 @@ export function resolveBias(w, d) {
   let regime = "no_bias";
   let targets = [];
   let primary = null;
-  let note = `no trap on either timeframe (weekly leans ${leanWord(lW)}, daily leans ${leanWord(lD)}) — no bias, wait for a run`;
+  let note = `no trap on either timeframe (${S} leans ${leanWord(lW)}, ${J} leans ${leanWord(lD)}) — no bias, wait for a run`;
   if (lW && lD === lW && (sW || sD)) {
     bias = lW;
     regime = "aligned";
     targets = far(w, lW).slice(0, 3);
     primary = preferBuildup(targets);
-    note = "weekly and daily agree — every move against the bias is false; target the weekly liquidity";
+    note = `${S} and ${J} agree — every move against the bias is false; target the ${S} liquidity`;
   } else if (sW && sD && weeklyLive) {
     bias = sW;
     regime = "pullback";
     targets = far(w, sW).slice(0, 3);
     primary = preferBuildup(targets);
     note =
-      `daily ${sD > 0 ? "bullish" : "bearish"} trap against a live weekly ${sW > 0 ? "buy" : "sell"} story — inducement, ` +
-      "not a new story; the move against the bias is false, use it to enter with the weekly (trigger below/above the daily trap's run)";
+      `${J} ${sD > 0 ? "bullish" : "bearish"} trap against a live ${S} ${sW > 0 ? "buy" : "sell"} story — inducement, ` +
+      `not a new story; the move against the bias is false, use it to enter with the ${S} (trigger below/above the ${J} trap's run)`;
   } else if (sW && sD) {
     bias = sD;
     regime = "counter_trend";
     targets = far(d, sD).slice(0, 2);
     primary = targets[0] ?? null;
-    note = "daily trap against a stale weekly story — trade the daily consciously as counter-trend, targets at the nearest levels only";
+    note = `${J} trap against a stale ${S} story — trade the ${J} consciously as counter-trend, targets at the nearest levels only`;
   } else if (sW && lD === -sW) {
     bias = sW;
     regime = "pullback";
     targets = far(w, sW).slice(0, 3);
     primary = preferBuildup(targets);
-    note = "daily is running against the weekly without a trap — a pullback; wait for the daily to print its own trap in the bias direction before triggering";
+    note = `${J} is running against the ${S} without a trap — a pullback; wait for the ${J} to print its own trap in the bias direction before triggering`;
   } else if (sD) {
     bias = sD;
     regime = "daily_only";
@@ -985,14 +987,14 @@ export function resolveBias(w, d) {
     primary = targets[0] ?? null;
     note =
       lW === -sD
-        ? "weekly leans the other way without a trap — treat as counter-trend, nearest targets only"
-        : "weekly has no story — the daily leads, nearest targets";
+        ? `${S} leans the other way without a trap — treat as counter-trend, nearest targets only`
+        : `${S} has no story — the ${J} leads, nearest targets`;
   } else if (sW) {
     bias = sW;
     regime = "weekly_only";
     targets = far(w, sW).slice(0, 3);
     primary = preferBuildup(targets);
-    note = "daily has no story — the weekly leads";
+    note = `${J} has no story — the ${S} leads`;
   }
 
   const weeklyLeads = regime === "aligned" || regime === "weekly_only" || regime === "pullback";
@@ -1000,13 +1002,14 @@ export function resolveBias(w, d) {
   const leadLb = lead?.lb?.alive ? lead.lb : (regime === "aligned" && d?.lb?.alive ? d.lb : null);
   const invalidation =
     bias && leadLb
-      ? { level: bias > 0 ? leadLb.zone[0] : leadLb.zone[1], rule: `${weeklyLeads ? "weekly" : "daily"} close ${bias > 0 ? "below" : "above"}` }
+      ? { level: bias > 0 ? leadLb.zone[0] : leadLb.zone[1], rule: `${weeklyLeads ? S : J} close ${bias > 0 ? "below" : "above"}` }
       : null;
 
   return {
     bias,
     bias_word: bias > 0 ? "long" : bias < 0 ? "short" : "none",
     regime,
+    // key names are historical: `weekly` = the senior story, `daily` = junior
     weekly: { mode: w?.mode ?? null, read: w?.read ?? null },
     daily: { mode: d?.mode ?? null, read: d?.read ?? null },
     targets,
@@ -1043,7 +1046,8 @@ export function loadLatestWeekly(dir = WEEKLY_DIR) {
 function fmtLevel(l) {
   if (!l) return "—";
   const kind = l.kind === "lb" ? ` (LB ${l.zone[0]}–${l.zone[1]})` : "";
-  return `${l.price}${kind}${l.touches > 1 ? ` (x${l.touches})` : ""}`;
+  const w = l.atr_weeks !== undefined && l.atr_weeks !== null ? ` (≈${l.atr_weeks}w)` : "";
+  return `${l.price}${kind}${l.touches > 1 ? ` (x${l.touches})` : ""}${w}`;
 }
 
 function fmtTrigger(t) {
@@ -1059,10 +1063,10 @@ export function renderWeeklyMarkdown(result) {
   const lines = [
     `# Marco weekly brief — ${result.week}`,
     "",
-    `Generated ${result.generated_at}. Methodology: docs/MARCO.md §3.1 (weekly bias), §4.4 (sweep triggers).`,
+    `Generated ${result.generated_at}. Methodology: docs/MARCO.md §3.1 transposed one level down — senior story D, junior 4h, weekly as context (intraweek plan, flat by Friday).`,
     "Rules: every move against the bias is false (use it to enter with the bias);",
-    "when the daily disagrees with the weekly we trade the daily as counter-trend with nearest targets only [user calibration].",
-    "All thresholds are [CALIBRATION].",
+    "when the 4h disagrees with the daily we trade the 4h consciously as counter-trend with nearest targets only [user calibration].",
+    "Targets are the nearest senior liquidity; ≈Nw = distance in weekly ATRs. All thresholds are [CALIBRATION].",
     "",
   ];
   for (const r of result.symbols) {
@@ -1073,8 +1077,14 @@ export function renderWeeklyMarkdown(result) {
     const b = r.bias;
     lines.push(`## ${r.symbol} — ${b.bias_word.toUpperCase()} (${b.regime})`, "");
     lines.push(`- Price: ${r.price}`);
-    lines.push(`- Weekly: ${b.weekly.mode} — ${b.weekly.read}`);
-    lines.push(`- Daily: ${b.daily.mode} — ${b.daily.read}`);
+    lines.push(`- Daily: ${b.weekly.mode} — ${b.weekly.read}`);
+    lines.push(`- 4h: ${b.daily.mode} — ${b.daily.read}`);
+    if (r.weekly_context) {
+      const wc = r.weekly_context;
+      lines.push(
+        `- Weekly (context): ${wc.mode}, ${wc.alignment} the bias${wc.big_draw ? `; big draw ${wc.big_draw.price}${wc.big_draw.atr_weeks !== null ? ` (≈${wc.big_draw.atr_weeks}w away)` : ""}` : ""}`,
+      );
+    }
     lines.push(`- Verdict: ${b.note}`);
     lines.push(`- Targets: ${b.targets.length ? b.targets.map(fmtLevel).join(", ") : "—"}${b.primary_target !== null ? ` — primary ${b.primary_target}` : ""}`);
     lines.push(`- Invalidation: ${b.invalidation ? `${b.invalidation.rule} ${b.invalidation.level}` : "—"}`);
@@ -1123,17 +1133,38 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
       await chart.setSymbol({ symbol });
       await sleep(900);
       const reads = {};
-      for (const tf of ["W", "D", execTf]) {
+      for (const tf of ["W", "D", execTf, "60"]) {
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
         const { bars } = await data.getOhlcv({ count: 500 });
         const map = buildLiquidityMap(bars, cfg);
         reads[tf] = { bars, map, story: storyRead(map, bars, cfg) };
       }
-      const bias = resolveBias(reads.W.story, reads.D.story);
+      // intraweek stack [user, 2026-09-02]: the plan is for one week with a
+      // Friday flat, so the senior story is the DAILY and the junior the 4h —
+      // the same §3.1 read transposed one level down (fractality, V2/V4; V7:
+      // "this is more of an intraday/intraweek kind of play"). The weekly
+      // story stays as context, and targets come out as the nearest senior
+      // liquidity instead of a months-away weekly draw.
+      const bias = resolveBias(reads.D.story, reads[execTf].story, { senior: "daily", junior: "4h" });
+      const wStory = reads.W.story;
+      const watr = atrSeries(reads.W.bars, cfg.atr_length).at(-1) ?? null;
+      const price0 = reads.D.story.price;
+      const weeks = (level) => (watr ? Math.round((Math.abs(level - price0) / watr) * 10) / 10 : null);
+      for (const t of bias.targets) t.atr_weeks = weeks(t.price);
+      const wDraw = bias.bias
+        ? (bias.bias > 0 ? wStory.targets_above : wStory.targets_below)[0] ?? null
+        : null;
+      const weekly_context = {
+        mode: wStory.mode,
+        direction: wStory.direction,
+        read: wStory.read,
+        alignment: alignmentOf(wStory.direction, bias.bias),
+        big_draw: wDraw ? { price: wDraw.price, atr_weeks: weeks(wDraw.price) } : null,
+      };
       const triggers = {};
       const false_reactions = {};
-      for (const tf of [execTf, "D"]) {
+      for (const tf of [execTf, "60"]) {
         triggers[tf] = triggerSetups(reads[tf].map, reads[tf].bars, cfg, {
           direction: bias.bias,
           target: bias.primary_target,
@@ -1156,7 +1187,7 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
         )
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 4);
-      results.push({ symbol, price, bias, triggers, false_reactions, htf_zones });
+      results.push({ symbol, price, bias, weekly_context, triggers, false_reactions, htf_zones });
     } catch (err) {
       results.push({ symbol, error: err.message });
     }
@@ -1175,7 +1206,7 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
   const result = {
     week: isoWeek(),
     generated_at: new Date().toISOString(),
-    methodology: "docs/MARCO.md §3.1 / §4.4",
+    methodology: "docs/MARCO.md §3.1 transposed to the intraweek stack (senior D, junior 240, W as context) / §4.4",
     symbols: results,
   };
   const dir = out_dir ? resolve(out_dir) : WEEKLY_DIR;
@@ -1197,6 +1228,9 @@ export function compactMarcoWeekly(result) {
         : {
             symbol: r.symbol,
             bias: `${r.bias.bias_word} (${r.bias.regime})`,
+            weekly_context: r.weekly_context
+              ? `${r.weekly_context.mode}, ${r.weekly_context.alignment} the bias${r.weekly_context.big_draw ? `; big draw ${r.weekly_context.big_draw.price}` : ""}`
+              : null,
             primary_target: r.bias.primary_target,
             invalidation: r.bias.invalidation,
             next_trigger: Object.fromEntries(
@@ -1293,9 +1327,9 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = 
         if (!read.error && wk) {
           read.alignment = alignmentOf(read.story.direction, wk.bias.bias);
           if (read.alignment === "against") {
-            read.story.read += ` [AGAINST the weekly ${wk.bias.bias_word} bias — a false move, use it to enter with the bias]`;
+            read.story.read += ` [AGAINST the week's ${wk.bias.bias_word} bias — a false move, use it to enter with the bias]`;
           } else if (read.alignment === "aligned") {
-            read.story.read += ` [aligned with the weekly ${wk.bias.bias_word} bias${wk.bias.primary_target !== null ? `, HTF target ${wk.bias.primary_target}` : ""}]`;
+            read.story.read += ` [aligned with the week's ${wk.bias.bias_word} bias${wk.bias.primary_target !== null ? `, HTF target ${wk.bias.primary_target}` : ""}]`;
           }
         }
         perTf[tf] = read;
