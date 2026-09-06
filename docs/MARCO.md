@@ -86,6 +86,16 @@ A swing high/low left behind by price. Sub-types the author marks on charts:
   replay's entry zone was missed (§7.1). No FVG/imbalance is involved
   anywhere in the method. **[SOURCE, V7]**
 
+**Memory and swings [CALIBRATION, 2026-09-06].** TradingView hands the
+engine at most 500 bars of a timeframe, so a lower-timeframe map inherits
+the intact levels of the timeframe above it before its first bar (`seed_levels`
+nearest per side; W → D → 240/60) — V7's "this 4-hour high is just another
+high on the lower time frames, I just grab that high". The Pine indicator,
+which sees the whole chart, bounds the same memory with `levelMaxAge`. A
+swing is strictly beyond the `pivot_len` bars on its left and beyond-or-equal
+on its right: a run of equal lows registers once, on its first bar (equal
+lows 06:00/09:00 used to cancel each other out and vanish).
+
 ### 2.2 Inducement (the trap)
 
 When price takes out a minor level, the crowd reads it as a BOS and enters in
@@ -103,6 +113,35 @@ Created **when a level of liquidity gets swept and price moves away**:
   trade below it again". **[SOURCE, V1]**
 - **Bearish LB** — mirror: the high that swept a previous *high* and price
   moved away down. **[SOURCE, V1]**
+
+**What ends an LB [CALIBRATION, user, 2026-09-06].** Three rules follow from
+"holds no liquidity" and from the stop always sitting beyond the extreme (§5):
+
+- **A trade beyond the extreme kills the zone** — by trade, not by close. If
+  price was there, the stop was hit and "no reason to trade below it" no
+  longer holds; the extreme is swept liquidity (§7.1 pending rule: a reclaim
+  makes the new extreme the new LB). The earlier close-based rule let the
+  D-6B bear LB 1.3594–1.3653 survive the Aug-2026 wick to 1.3676 and never
+  opened the pending that would have printed the 1.3653–1.3676 zone.
+- **The zone ages out, the extreme does not.** A low that was made and never
+  taken is still liquidity: when a zone expires (`zone_max_age`) its extreme
+  returns to the map as a level, carrying the respects it collected. The
+  engine's window is not its memory — lower timeframes inherit the higher
+  timeframe's intact levels (§2.1, "HTF feed").
+- **An LB is not a build-up.** The block is a low behind which there is no
+  liquidity — until the crowd builds some. A later swing that holds within
+  `eq_tolerance` of a live zone's extreme is a *respect* of that extreme;
+  at `min_touches` taps (extreme + respects) the extreme is a target, not a
+  block: the zone retires and its extreme joins the map as a build-up level.
+- **Pocket floor.** A run that stops within `eq_tolerance` short of a deeper
+  intact level took an inner level only — the trap completes beyond the
+  pocket's *furthest* extreme (6E 1.15765, W36), so the stab is inducement
+  into the pocket: the inner level is consumed, no pending opens, no LB is
+  born, the floor keeps the liquidity. 6B 1h, 4 Sep 2026: Friday's 1.3476
+  "swept" the 1.348 x3 cluster by 4 pips and stopped 2 pips above the
+  Aug-13 / Sep-2 floor 1.3474 — under the old rules that made a bull LB, a
+  1h buy story and "x0 fuel below"; under these it is a poke, and 1.3474 is
+  an intact x4 build-up — the short's target.
 
 ### 2.4 The LB zone
 
@@ -290,6 +329,22 @@ layering ("this is more of an intraday/intraweek kind of play… most likely
 not going to be that higher time frame move", **[SOURCE, V7]**) license the
 second layer; the first stays exactly the author's.
 
+*Mechanics of the intraweek layer [CALIBRATION, 2026-09-06, after the W37
+review].* Week targets are **clusters**: D/4h levels and zone edges within
+`eq_tolerance` (of the daily ATR) are one draw, shown as a range with the
+summed taps (MNQ 29759–29811.75 x2) — three slots mean three distinct draws.
+A **target belongs to the trigger, not to the price**: each trigger takes
+the first rung beyond its own entry that clears `target_min_rr`, and prints
+the rungs it skipped ("T1 29585 gives RR 1.13 — target moved to
+30076.75"); when the rung it lands on is more than a weekly range away the
+brief says to refine the stop on a lower-TF LB instead of chasing it (§5,
+V6). "Aligned" needs a **live** story on at least one side — a stale trap
+plus a continuation on the other timeframe is a lean (`weekly_only` /
+`daily_only`, flagged `stale`), not agreement. The phase note is phrased
+against the week's bias (a 4h trap with the week's side while the daily is
+still continuation reads "the trigger timeframe agrees, the daily has not
+turned yet", not "counter-trend").
+
 **Divergence rule [CALIBRATION, user]:** a daily trap against a *live*
 weekly story (trap fresh, target still open) is inducement — the weekly
 leads, the daily move is false, enter with the weekly once the daily's run
@@ -412,7 +467,11 @@ Everything below is ours to tune — the videos show it by eye only.
 | Must the sweep close back above the swept level, and how fast | `confirmBars` | 3 |
 | LB zone top edge | `zoneTopMode` | swept level |
 | How long a zone stays alive untapped | `maxAgeBars` | 300 |
-| What kills a zone | close beyond LB extreme | on |
+| What kills a zone | trade beyond the LB extreme (wick, no buffer) — since 2026-09-06; close-based before | on |
+| How long an intact level is remembered | `levelMaxAge` (Pine) / HTF feed `seed_levels` (engine) | 2000 bars / 10 per side |
+| Respects that turn a zone's extreme into a target (§2.3) | `minTouches` (reused: extreme + respects) | 2 |
+| A run stopping this close above a deeper level is a poke, not a trap (§2.3) | `eqTolerance` (reused) | 0.25 ATR |
+| Equal extremes: which bar of a tie run is the swing | first bar (strict left, ≥ right) | — |
 | "Equal" level tolerance for build-up | `eqTolerance` (ATR mult) | 0.25 |
 | Taps needed to call a level "build-up" | `minTouches` | 2 |
 | How far back liquidity levels are tracked | `maxLevels` per side | 20 |
@@ -423,6 +482,9 @@ Everything below is ours to tune — the videos show it by eye only.
 | Which sweeps count as a side of the range being run (the story anchor, §3) — the rest is inducement | `minTouches` / `minLevelAge` (reused) | 2 touches / 50 bars |
 | Where a timeframe's own direction comes from (§3): the trap, the draw, or nothing | `Bias` / `bias_source` / `--bias` | trap |
 | The weekly brief's two layers (§3.1): global bias W→D with big targets; intraweek phase D/4h, reachable targets, triggers 240/60, counter-trend window | `marco weekly` | Mon–Tue counter-trend, nearest target only |
+| A trigger's target steps to the next cluster below this RR (§3.1) | `target_min_rr` | 1.5 (the journal's min RR) |
+| Week-target clusters: D/4h levels closer than this are one draw | `eq_tolerance_atr` on the daily ATR (reused) | 0.25 ATR |
+| "Aligned" needs a live story; a stale trap + continuation is a lean | `story_fresh_bars` (reused) | 16 bars |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
 09:55 replay experiment (§7.1): 1-tick zones made R math absurd, extremes
@@ -464,6 +526,17 @@ tuning any default:
   - `--bias weekly|long|short|off|trap|draw` on `brief`/`scan` — which bias
     sets the zone roles (default `weekly` = the latest weekly brief; `off`
     marks nothing; `trap`/`draw` use this TF's own story source, §3).
+  - `intraweekLayer(reads, bias)` — the pure intraweek layer (§3.1):
+    `clusterTargets` ladder, per-trigger targets (`triggerSetups(..., {
+    targets })` returns `targets: [{price, rr, atr_weeks}]` per trigger and
+    the step/refine notes), phase note against the week's bias;
+    `resolveBias` returns `stale`. Fixtures: `tests/fixtures/mnq_2026-09-04.json`,
+    `6b_2026-09-04.json` (W/D/240/60 bars).
+  - `seedFromMap(htfMap, htfBars, { before, price })` — the HTF feed (§2.1):
+    `marco weekly` seeds D from W and 240/60 from D; `marco brief`/`scan`
+    seed every scanned TF from the `htf` (240) map. New events: `low_poke` /
+    `high_poke` (pocket floor), `*_lb_respect`, `*_lb_retired` (reason
+    `expired` | `buildup`); blocks carry `respects`, levels `seeded`.
   - `node src/cli/index.js marco weekly --compact` — the weekly brief in
     two layers (§3.1): global bias W→D with the big targets (≈Nw = distance
     in weekly ATRs) and invalidation; intraweek phase (D vs 4h), reachable
@@ -535,6 +608,23 @@ pips above). By the book the trap completes only below the pocket's
 furthest low — a stab under 1.15795 holding above 1.1576 is another
 inducement into the pocket, not the completed run. Had 1.15765 registered,
 the respect rule would have kept the level at the extreme.
+
+**Third case and the fix (6B 1h, 4 Sep 2026 — built 2026-09-06).** The
+floor 1.3474 (13 Aug, equal lows 06:00/09:00) never registered on the 1h —
+tie pivots cancelled, and the Aug-13 bull LB 1.3474–1.3483 that did carry
+it had aged out, extreme and all. Sep 2's 1.3475 (equal 12:00/13:00) was
+invisible for the same reason, so Friday's 1.3476 read as a full sweep of
+the 1.348 x3 cluster: bull LB, 1h buy story, "draw up, x0 below" — while
+the user counted x3–x4 at 1.3474 and called it the short's target. Rules
+shipped (§2.3, §2.1): trade-beyond invalidation, expired extreme → level,
+respects retire a zone into a build-up, pocket floor, tie-aware swings, and
+the HTF feed. On the same bars the 1h now reads 1.3474 as an intact x4
+level (seeded from the daily, respected on Sep 2 and Sep 4), records Friday's
+1.3476 as a `low_poke` with floor 1.3474, prints no bull LB there and reads
+sell with the weekly (`tests/fixtures/6b_2026-09-04.json`, regression test).
+The "respected bar-high promotion" idea above is superseded for lows/highs
+that ever were a swing or a zone extreme; a bar extreme that was neither
+still needs the promotion rule — not built.
 
 ### 7.2 V6 entry chain — validation targets
 

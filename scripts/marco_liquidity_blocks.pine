@@ -13,7 +13,17 @@
 //   * Tap labels + alerts when price returns into a zone (strong zones only).
 //   * Zones thinner than minZoneAtr draw faint — not entry-grade (§7.1).
 //   * Dashed stop line past a strong zone's extreme (stopBufAtr).
-//   * Zone dies on close beyond its extreme (stop-loss side) or on age-out.
+//   * Zone dies when price trades beyond its extreme (the stop side, by
+//     trade not by close) or on age-out. An aged-out zone's extreme goes back
+//     on the map as a level: a low that was made and never taken is still
+//     liquidity (v9, user 2026-09-06).
+//   * LB vs build-up (v9): a later pivot holding within eqTol of a live
+//     zone's extreme is a respect of it; at the build-up touch count the zone
+//     retires and its extreme becomes a level — a target, not a block.
+//   * Pocket floor (v9): a run that stops within eqTol short of a deeper
+//     intact level is a stab into the pocket — the inner level is consumed,
+//     no zone is born; the floor keeps the liquidity (6E 1.15765, 6B 1.3474).
+//   * Pivots (v9): a run of equal extremes registers once, on its first bar.
 //   * An unqualified zone born against a live qualified one is inducement
 //     (§3, V1): under Auto bias it draws dashed as `false` and never flips
 //     the bias — an LB never sets the story by itself, liquidity does.
@@ -33,6 +43,8 @@ pivotLen    = input.int(3,   "Pivot length (bars each side)", minval = 1, group 
 confirmBars = input.int(3,   "Reclaim swept level within (bars)", minval = 1, group = grpD,
      tooltip = "After a sweep, a close back beyond the swept level within this many bars confirms the LB. Otherwise it is a breakdown, not a trap.")
 maxLevels   = input.int(20,  "Max tracked levels per side", minval = 2, group = grpD)
+levelMaxAge = input.int(2000, "Level max age (bars)", minval = 100, group = grpD,
+     tooltip = "Intact levels older than this drop off the map. The JS engine reads only a window of bars and inherits older levels from the higher timeframe instead (docs/MARCO.md §2.1).")
 
 grpZ = "Zones"
 zoneModeS   = input.string("Swept level", "Zone inner edge", options = ["Swept level", "Sweep candle body"], group = grpZ)
@@ -99,6 +111,7 @@ type Block
     bool  dead
     int   born
     int   left // bar of the sweep extreme
+    int   respects = 0 // later pivots that held within eqTol of the extreme (v9)
 
 type SweptBox
     box bx
@@ -180,6 +193,75 @@ retireBuildup(LqLevel lv) =>
             box.delete(lv.bx)
         lv.bx := na
 
+// ------------------------------------ register liquidity levels ------------
+// t0 = touches the level already carries (an expired/retired zone's extreme
+// brings its respects); fresh levels start at 1
+registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice, int t0 = 1) =>
+    bool merged = false
+    if array.size(lvls) > 0
+        for lv in lvls
+            if math.abs(lv.price - pPrice) <= eqTol * atrVal
+                lv.touches += t0
+                lv.price := isLow ? math.min(lv.price, pPrice) : math.max(lv.price, pPrice)
+                lv.near  := isLow ? math.max(lv.near, pPrice) : math.min(lv.near, pPrice)
+                if not na(lv.ln)
+                    line.set_y1(lv.ln, lv.price)
+                    line.set_y2(lv.ln, lv.price)
+                    if lv.touches >= minTouches
+                        line.set_width(lv.ln, 2)
+                        line.set_color(lv.ln, color.new(isLow ? colBull : colBear, 30))
+                updateBuildup(lv, isLow)
+                merged := true
+                break
+    // low respecting low (docs/MARCO.md §4.4): a later low that holds above an
+    // existing level within respectTol confirms it — count the touch, keep the price
+    if not merged
+        float bestGap = na
+        LqLevel bestLv = na
+        for lv in lvls
+            float gap = isLow ? pPrice - lv.price : lv.price - pPrice
+            if gap > 0 and gap <= respectTol * atrVal and (na(bestGap) or gap < bestGap)
+                bestGap := gap
+                bestLv  := lv
+        if not na(bestLv)
+            bestLv.touches += t0
+            if bestLv.touches >= minTouches and not na(bestLv.ln)
+                line.set_width(bestLv.ln, 2)
+                line.set_color(bestLv.ln, color.new(isLow ? colBull : colBear, 30))
+            updateBuildup(bestLv, isLow)
+            merged := true
+    if not merged
+        bool strongLv = t0 >= minTouches
+        line lin = showLevels ?
+             line.new(pBar, pPrice, bar_index, pPrice,
+                 color = color.new(isLow ? colBull : colBear, strongLv ? 30 : 65),
+                 width = strongLv ? 2 : 1, style = line.style_dotted) : na
+        LqLevel fresh = LqLevel.new(price = pPrice, near = pPrice, born = pBar, touches = t0, ln = lin)
+        array.push(lvls, fresh)
+        if strongLv
+            updateBuildup(fresh, isLow)
+        if array.size(lvls) > maxLevels
+            LqLevel old = array.shift(lvls)
+            if not na(old.ln)
+                line.delete(old.ln)
+            if not na(old.bx)
+                box.delete(old.bx)
+
+// a zone leaves the map: grey it (keepDead) or delete it
+killBlock(int i, Block blk) =>
+    if keepDead
+        box.set_bgcolor(blk.bx, colDead)
+        box.set_border_color(blk.bx, colDead)
+        box.set_text_color(blk.bx, colDead)
+        if not na(blk.st)
+            line.set_color(blk.st, colDead)
+    else
+        box.delete(blk.bx)
+        if not na(blk.st)
+            line.delete(blk.st)
+        array.remove(blocks, i)
+    true
+
 // docs/MARCO.md §3 (bias source "draw"): the side holding more intact
 // build-up taps is the draw — Marco's lean before the trap
 drawBias() =>
@@ -244,10 +326,19 @@ if array.size(blocks) > 0
             box.set_right(blk.bx, bar_index)
             if not na(blk.st)
                 line.set_x2(blk.st, bar_index)
-            bool invalid = blk.isBull ? close < blk.bot : close > blk.top
+            // v9: a trade beyond the extreme takes the liquidity behind it —
+            // the zone's stop is hit, "no reason to trade below it" no longer holds
+            bool invalid = blk.isBull ? low < blk.bot : high > blk.top
             bool expired = bar_index - blk.born > maxAgeBars
             if invalid or expired
                 blk.dead := true
+                // v9: the zone ages out, the extreme does not — it returns to the
+                // map as a level carrying the respects it collected
+                if expired and not invalid
+                    if blk.isBull
+                        registerLevel(lowLvls, true, blk.left, blk.bot, 1 + blk.respects)
+                    else
+                        registerLevel(highLvls, false, blk.left, blk.top, 1 + blk.respects)
                 // docs/MARCO.md §7.1: the extreme of an invalidated zone is swept
                 // liquidity — open a pending sweep so a reclaim can print the new LB
                 if invalid
@@ -275,17 +366,7 @@ if array.size(blocks) > 0
                         else
                             pendBear.lvl := math.max(pendBear.lvl, blk.top)
                             pendBear.age := math.max(pendBear.age, bar_index - blk.left)
-                if keepDead
-                    box.set_bgcolor(blk.bx, colDead)
-                    box.set_border_color(blk.bx, colDead)
-                    box.set_text_color(blk.bx, colDead)
-                    if not na(blk.st)
-                        line.set_color(blk.st, colDead)
-                else
-                    box.delete(blk.bx)
-                    if not na(blk.st)
-                        line.delete(blk.st)
-                    array.remove(blocks, i)
+                killBlock(i, blk)
             else if bar_index > blk.born and not blk.tapped
                 bool against = againstBias(blk.isBull, biasDir)
                 if blk.isBull and low <= blk.top
@@ -316,6 +397,25 @@ if array.size(highLvls) > 0
             line.set_x2(lv.ln, bar_index)
         if not na(lv.bx)
             box.set_right(lv.bx, bar_index)
+// v9: intact levels older than levelMaxAge drop off the map
+if array.size(lowLvls) > 0
+    for i = array.size(lowLvls) - 1 to 0
+        LqLevel lv = array.get(lowLvls, i)
+        if bar_index - lv.born > levelMaxAge
+            if not na(lv.ln)
+                line.delete(lv.ln)
+            if not na(lv.bx)
+                box.delete(lv.bx)
+            array.remove(lowLvls, i)
+if array.size(highLvls) > 0
+    for i = array.size(highLvls) - 1 to 0
+        LqLevel lv = array.get(highLvls, i)
+        if bar_index - lv.born > levelMaxAge
+            if not na(lv.ln)
+                line.delete(lv.ln)
+            if not na(lv.bx)
+                box.delete(lv.bx)
+            array.remove(highLvls, i)
 // swept build-up boxes age out with the zones
 if array.size(sweptBoxes) > 0
     for i = array.size(sweptBoxes) - 1 to 0
@@ -325,10 +425,28 @@ if array.size(sweptBoxes) > 0
             array.remove(sweptBoxes, i)
 
 // --------------------------------------- 3. sweep scan: consume levels -----
+// v9 pocket floor: a run that stops within eqTol short of a deeper intact
+// level is a stab INTO the pocket, not a trap — the inner level is consumed,
+// no pending opens, the floor keeps the liquidity
+bool floorBelow = false
+bool floorAbove = false
+if array.size(lowLvls) > 0
+    for lv in lowLvls
+        if lv.price < low and low - lv.price <= eqTol * atrVal
+            floorBelow := true
+if array.size(highLvls) > 0
+    for lv in highLvls
+        if lv.price > high and lv.price - high <= eqTol * atrVal
+            floorAbove := true
 if array.size(lowLvls) > 0
     for i = array.size(lowLvls) - 1 to 0
         LqLevel lv = array.get(lowLvls, i)
-        if low < lv.price
+        if low < lv.price and floorBelow
+            if not na(lv.ln)
+                line.delete(lv.ln)
+            retireBuildup(lv)
+            array.remove(lowLvls, i)
+        else if low < lv.price
             if na(pendBull.lvl)
                 pendBull.lvl     := lv.price
                 pendBull.touches := lv.touches
@@ -349,7 +467,12 @@ if array.size(lowLvls) > 0
 if array.size(highLvls) > 0
     for i = array.size(highLvls) - 1 to 0
         LqLevel lv = array.get(highLvls, i)
-        if high > lv.price
+        if high > lv.price and floorAbove
+            if not na(lv.ln)
+                line.delete(lv.ln)
+            retireBuildup(lv)
+            array.remove(highLvls, i)
+        else if high > lv.price
             if na(pendBear.lvl)
                 pendBear.lvl     := lv.price
                 pendBear.touches := lv.touches
@@ -412,54 +535,6 @@ if not na(pendBear.lvl)
         if pendBear.miss > confirmBars
             pendBear := Pending.new()
 
-// ------------------------------------ 5. register new liquidity levels -----
-registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice) =>
-    bool merged = false
-    if array.size(lvls) > 0
-        for lv in lvls
-            if math.abs(lv.price - pPrice) <= eqTol * atrVal
-                lv.touches += 1
-                lv.price := isLow ? math.min(lv.price, pPrice) : math.max(lv.price, pPrice)
-                lv.near  := isLow ? math.max(lv.near, pPrice) : math.min(lv.near, pPrice)
-                if not na(lv.ln)
-                    line.set_y1(lv.ln, lv.price)
-                    line.set_y2(lv.ln, lv.price)
-                    if lv.touches >= minTouches
-                        line.set_width(lv.ln, 2)
-                        line.set_color(lv.ln, color.new(isLow ? colBull : colBear, 30))
-                updateBuildup(lv, isLow)
-                merged := true
-                break
-    // low respecting low (docs/MARCO.md §4.4): a later low that holds above an
-    // existing level within respectTol confirms it — count the touch, keep the price
-    if not merged
-        float bestGap = na
-        LqLevel bestLv = na
-        for lv in lvls
-            float gap = isLow ? pPrice - lv.price : lv.price - pPrice
-            if gap > 0 and gap <= respectTol * atrVal and (na(bestGap) or gap < bestGap)
-                bestGap := gap
-                bestLv  := lv
-        if not na(bestLv)
-            bestLv.touches += 1
-            if bestLv.touches >= minTouches and not na(bestLv.ln)
-                line.set_width(bestLv.ln, 2)
-                line.set_color(bestLv.ln, color.new(isLow ? colBull : colBear, 30))
-            updateBuildup(bestLv, isLow)
-            merged := true
-    if not merged
-        line lin = showLevels ?
-             line.new(pBar, pPrice, bar_index, pPrice,
-                 color = color.new(isLow ? colBull : colBear, 65),
-                 width = 1, style = line.style_dotted) : na
-        array.push(lvls, LqLevel.new(price = pPrice, near = pPrice, born = pBar, touches = 1, ln = lin))
-        if array.size(lvls) > maxLevels
-            LqLevel old = array.shift(lvls)
-            if not na(old.ln)
-                line.delete(old.ln)
-            if not na(old.bx)
-                box.delete(old.bx)
-
 insideAliveZone(bool isBull, float p) =>
     bool inside = false
     if array.size(blocks) > 0
@@ -469,19 +544,67 @@ insideAliveZone(bool isBull, float p) =>
                 break
     inside
 
-float pl = ta.pivotlow(pivotLen, pivotLen)
-float ph = ta.pivothigh(pivotLen, pivotLen)
+// ------------------------------------ 5. register new liquidity levels -----
+// v9: a swing = strictly beyond the pivotLen bars on its left, beyond-or-equal
+// on its right — a run of equal extremes registers once, on its first bar
+// (equal lows used to cancel each other out under ta.pivotlow)
+pivotLowTie(int len) =>
+    float v = low[len]
+    bool ok = true
+    for k = 1 to len
+        if low[len + k] <= v or low[len - k] < v
+            ok := false
+    ok ? v : na
+
+pivotHighTie(int len) =>
+    float v = high[len]
+    bool ok = true
+    for k = 1 to len
+        if high[len + k] >= v or high[len - k] > v
+            ok := false
+    ok ? v : na
+
+// v9 LB vs build-up: a later pivot holding within eqTol of a live zone's
+// extreme is a respect of it; at the build-up touch count the zone retires
+// and its extreme becomes a level — a target, not a block
+respectZone(bool isBull, float p, int pBar) =>
+    if array.size(blocks) > 0
+        for i = array.size(blocks) - 1 to 0
+            Block blk = array.get(blocks, i)
+            if not blk.dead and blk.isBull == isBull and pBar > blk.left
+                float ext = isBull ? blk.bot : blk.top
+                float gap = isBull ? p - ext : ext - p
+                if gap >= 0 and gap <= eqTol * atrVal
+                    blk.respects += 1
+                    if 1 + blk.respects >= minTouches
+                        blk.dead := true
+                        if isBull
+                            registerLevel(lowLvls, true, blk.left, ext, 1 + blk.respects)
+                        else
+                            registerLevel(highLvls, false, blk.left, ext, 1 + blk.respects)
+                        killBlock(i, blk)
+                    break
+    true
+
+float pl = pivotLowTie(pivotLen)
+float ph = pivotHighTie(pivotLen)
 
 if not na(pl)
     // the sweep extreme itself holds no liquidity (docs/MARCO.md §2.3) —
-    // skip lows born inside a live bullish zone or inside an unresolved
-    // sweep's own excursion (beyond the swept level)
-    if (na(pendBull.lvl) or pl > pendBull.lvl) and not insideAliveZone(true, pl)
-        registerLevel(lowLvls, true, bar_index - pivotLen, pl)
+    // skip lows born inside an unresolved sweep's own excursion (beyond the
+    // swept level); a low inside a live bullish zone is a respect of it (v9)
+    if na(pendBull.lvl) or pl > pendBull.lvl
+        if insideAliveZone(true, pl)
+            respectZone(true, pl, bar_index - pivotLen)
+        else
+            registerLevel(lowLvls, true, bar_index - pivotLen, pl)
 
 if not na(ph)
-    if (na(pendBear.lvl) or ph < pendBear.lvl) and not insideAliveZone(false, ph)
-        registerLevel(highLvls, false, bar_index - pivotLen, ph)
+    if na(pendBear.lvl) or ph < pendBear.lvl
+        if insideAliveZone(false, ph)
+            respectZone(false, ph, bar_index - pivotLen)
+        else
+            registerLevel(highLvls, false, bar_index - pivotLen, ph)
 
 // ---------------------------------------------------------------- alerts ---
 alertcondition(tapBullQ, "Tap — qualified bullish LB", "Price tapped a QUALIFIED bullish liquidity block")

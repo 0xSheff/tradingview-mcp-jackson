@@ -4,6 +4,10 @@
 import { evaluate, evaluateAsync, KNOWN_PATHS } from '../connection.js';
 
 const MAX_OHLCV_BARS = 500;
+// Pine drawing prices keep 7 significant digits — FX contracts (6J 0.0063x,
+// 6B 1.3474) lose every pip at 2 decimals; index points are unaffected.
+const px = (v) => (v == null || !Number.isFinite(v) ? null : Number(Number(v).toPrecision(7)));
+
 const MAX_TRADES = 20;
 const CHART_API = KNOWN_PATHS.chartApi;
 const BARS_PATH = KNOWN_PATHS.mainSeriesBars;
@@ -368,8 +372,8 @@ export async function getPineLines({ study_filter, verbose } = {}) {
     const allLines = [];
     for (const item of s.items) {
       const v = item.raw;
-      const y1 = v.y1 != null ? Math.round(v.y1 * 100) / 100 : null;
-      const y2 = v.y2 != null ? Math.round(v.y2 * 100) / 100 : null;
+      const y1 = px(v.y1);
+      const y2 = px(v.y2);
       if (verbose) allLines.push({ id: item.id, y1, y2, x1: v.x1, x2: v.x2, horizontal: v.y1 === v.y2, style: v.st, width: v.w, color: v.ci });
       if (y1 != null && v.y1 === v.y2 && !seen[y1]) { hLevels.push(y1); seen[y1] = true; }
     }
@@ -391,7 +395,7 @@ export async function getPineLabels({ study_filter, max_labels, verbose } = {}) 
     let labels = s.items.map(item => {
       const v = item.raw;
       const text = v.t || '';
-      const price = v.y != null ? Math.round(v.y * 100) / 100 : null;
+      const price = px(v.y);
       if (verbose) return { id: item.id, text, price, x: v.x, yloc: v.yl, size: v.sz, textColor: v.tci, color: v.ci };
       return { text, price };
     }).filter(l => l.text || l.price != null);
@@ -440,8 +444,8 @@ export async function getPineBoxes({ study_filter, verbose } = {}) {
     const allBoxes = [];
     for (const item of s.items) {
       const v = item.raw;
-      const high = v.y1 != null && v.y2 != null ? Math.round(Math.max(v.y1, v.y2) * 100) / 100 : null;
-      const low = v.y1 != null && v.y2 != null ? Math.round(Math.min(v.y1, v.y2) * 100) / 100 : null;
+      const high = v.y1 != null && v.y2 != null ? px(Math.max(v.y1, v.y2)) : null;
+      const low = v.y1 != null && v.y2 != null ? px(Math.min(v.y1, v.y2)) : null;
       if (verbose) allBoxes.push({ id: item.id, high, low, x1: v.x1, x2: v.x2, borderColor: v.c, bgColor: v.bc });
       if (high != null && low != null) { const key = high + ':' + low; if (!seen[key]) { zones.push({ high, low }); seen[key] = true; } }
     }

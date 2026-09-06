@@ -5,6 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   MARCO_DEFAULTS,
   buildLiquidityMap,
@@ -14,6 +15,10 @@ import {
   analyzeMarco,
   triggerSetups,
   resolveBias,
+  seedFromMap,
+  clusterTargets,
+  intraweekLayer,
+  atrSeries,
 } from "../src/core/marco.js";
 
 const CFG = {
@@ -44,6 +49,14 @@ const SWEEP_RECLAIM = [
   [103, 103.6, 99.5, 102.8], // sweep + same-bar reclaim → bullish LB
   [102.8, 103.2, 100.4, 101.9],
 ];
+
+// The same story twice. The second run goes a tick deeper (99.4): under the
+// trade-beyond rule an equal low takes nothing, and the first zone's top
+// (100.0, a pivot inside the zone within eq_tolerance of 99.5) is a respect
+// that retires the zone into a x2 level — the second run sweeps that level.
+const SWEEP_RECLAIM_TWICE = SWEEP_RECLAIM.concat(
+  SWEEP_RECLAIM.map((r, i) => (i === 4 ? [103, 103.6, 99.4, 102.8] : r)),
+);
 
 test("sweep + reclaim creates a bullish LB at the excursion", () => {
   const map = buildLiquidityMap(mkBars(SWEEP_RECLAIM), CFG);
@@ -234,7 +247,7 @@ test("story: a trap older than story_fresh_bars reads as stale", () => {
 });
 
 test("analyzeMarco reports the stop buffered past the zone extreme", () => {
-  const read = analyzeMarco(mkBars(SWEEP_RECLAIM.concat(SWEEP_RECLAIM)), CFG);
+  const read = analyzeMarco(mkBars(SWEEP_RECLAIM_TWICE), CFG);
   const bull = read.blocks.find((b) => b.side === "bull");
   assert.ok(bull);
   assert.ok(bull.stop_beyond < bull.zone[0]);
@@ -365,7 +378,7 @@ test("resolveBias: aligned targets the weekly build-up; divergence trades the da
 });
 
 test("a known bias sorts zones into entries and false-reaction origins", () => {
-  const bars = mkBars(SWEEP_RECLAIM.concat(SWEEP_RECLAIM)); // one alive bull LB below price
+  const bars = mkBars(SWEEP_RECLAIM_TWICE); // one alive bull LB below price
   const withBias = analyzeMarco(bars, CFG, { bias: 1 });
   assert.equal(withBias.bias_used, 1);
   assert.equal(withBias.blocks[0].role, "entry");
@@ -380,7 +393,7 @@ test("a known bias sorts zones into entries and false-reaction origins", () => {
 });
 
 test("htfContext alerts near an HTF zone and stays quiet far away", () => {
-  const htfBars = mkBars(SWEEP_RECLAIM.concat(SWEEP_RECLAIM), { step: 14400 });
+  const htfBars = mkBars(SWEEP_RECLAIM_TWICE, { step: 14400 });
   const near = htfContext(htfBars, 100.2, CFG);
   assert.equal(near.available, true);
   assert.ok(near.zones.length >= 1);
@@ -396,7 +409,7 @@ test("analyzeMarco wires story, blocks, levels and the gate together", () => {
   const small = analyzeMarco(mkBars([[1, 2, 0.5, 1.5]]), CFG);
   assert.ok(small.error);
 
-  const full = analyzeMarco(mkBars(SWEEP_RECLAIM.concat(SWEEP_RECLAIM)), CFG);
+  const full = analyzeMarco(mkBars(SWEEP_RECLAIM_TWICE), CFG);
   assert.ok(full.bars_analyzed >= 10);
   assert.ok(full.story.mode);
   assert.ok(Array.isArray(full.blocks));
@@ -641,4 +654,223 @@ test("resolveBias speaks in the given senior/junior names (intraweek stack)", ()
   assert.equal(b.regime, "pullback");
   assert.match(b.note, /4h bearish trap against a live daily buy story/);
   assert.equal(b.invalidation.rule, "daily close below");
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-06 (user, 6B 1.3474 review): liquidity outlives the zone, the zone
+// is not the liquidity, and a stab into a pocket is not a trap.
+
+test("a trade beyond the LB extreme invalidates the zone even when the bar closes back inside; the extreme is swept liquidity", () => {
+  const rows = [...SWEEP_RECLAIM, [101.9, 102, 99.4, 101.5]]; // wick under 99.5, close above 100
+  const map = buildLiquidityMap(mkBars(rows), CFG);
+  assert.equal(map.blocks[0].dead, true);
+  assert.equal(map.blocks[0].death, "invalidated");
+  assert.equal(map.blocks[0].tapped, false);
+  // §7.1 chain: the invalidating wick opens a pending, the same-bar close reclaims → new LB at the new extreme
+  assert.equal(map.blocks.length, 2);
+  assert.equal(map.blocks[1].bot, 99.4);
+  assert.equal(map.blocks[1].top, 99.5);
+  assert.equal(map.blocks[1].dead, false);
+});
+
+test("an expired zone's extreme returns to the map as a level — the liquidity outlives the zone", () => {
+  const rows = [...SWEEP_RECLAIM, [101.9, 102.5, 101.2, 102.2], [102.2, 102.8, 101.6, 102.5]];
+  const map = buildLiquidityMap(mkBars(rows), { ...CFG, zone_max_age: 2 });
+  const blk = map.blocks[0];
+  assert.equal(blk.death, "expired");
+  const lv = map.levels.lows.find((l) => l.price === 99.5);
+  assert.ok(lv, "the extreme is an intact level again");
+  assert.equal(lv.touches, 1);
+  assert.ok(map.events.some((e) => e.type === "bull_lb_retired" && e.reason === "expired" && e.level === 99.5));
+});
+
+test("LB vs build-up: a later pivot respecting the zone's extreme retires it into a x2 level; the next run sweeps that level", () => {
+  const map = buildLiquidityMap(mkBars(SWEEP_RECLAIM_TWICE), CFG);
+  const first = map.blocks[0];
+  assert.equal(first.death, "buildup");
+  assert.equal(first.respects, 1);
+  assert.ok(map.events.some((e) => e.type === "bull_lb_retired" && e.reason === "buildup" && e.touches === 2));
+  const bu = map.buildups.find((b) => b.side === "low" && b.price === 99.5);
+  assert.ok(bu, "the retired extreme is a build-up record");
+  assert.equal(bu.touches, 2);
+  assert.equal(bu.swept, 10);
+  const second = map.blocks[1];
+  assert.equal(second.bot, 99.4);
+  assert.equal(second.qualified, true); // it ran a x2 build-up
+  assert.equal(second.dead, false);
+});
+
+test("pocket floor: a stab that stops within eq_tolerance above a deeper intact level is a poke, not a trap", () => {
+  const rows = [
+    [100.5, 100.8, 99.8, 100.2],
+    [100.2, 100.4, 99.0, 100.0], // pivot low 99.0 — the pocket floor
+    [100.0, 100.9, 99.7, 100.8],
+    [100.8, 101.5, 100.5, 101.3],
+    [101.3, 101.6, 100.0, 101.0], // pivot low 100.0 — an inner level
+    [101.0, 101.8, 100.6, 101.5],
+    [101.5, 101.7, 99.2, 101.2], // stab under 100.0, stops 0.2 above 99.0, closes back
+    [101.2, 101.6, 100.9, 101.4],
+    [101.4, 101.7, 101.0, 101.6],
+  ];
+  const map = buildLiquidityMap(mkBars(rows), CFG);
+  const poke = map.events.find((e) => e.type === "low_poke");
+  assert.ok(poke, "the stab is recorded as a poke");
+  assert.equal(poke.level, 100.0);
+  assert.equal(poke.floor, 99.0);
+  assert.equal(map.blocks.length, 0, "no LB is born from a stab into the pocket");
+  assert.ok(!map.levels.lows.some((l) => l.price === 100.0), "the poked inner level is consumed");
+  const floor = map.levels.lows.find((l) => l.price === 99.0);
+  assert.ok(floor, "the floor keeps the liquidity");
+  assert.equal(floor.touches, 2, "the stab's pivot counts as a respect of the floor");
+  const story = storyRead(map, mkBars(rows), CFG);
+  assert.match(story.read, /inducement into the pocket/);
+});
+
+test("a run of equal lows registers once, on its first bar (no more mutual cancellation)", () => {
+  const rows = [
+    [100.5, 100.8, 100.2, 100.4],
+    [100.4, 100.6, 100.0, 100.3],
+    [100.3, 100.5, 100.0, 100.4], // equal low
+    [100.4, 101.0, 100.3, 100.9],
+    [100.9, 101.2, 100.6, 101.0],
+  ];
+  const map = buildLiquidityMap(mkBars(rows), CFG);
+  assert.equal(map.levels.lows.length, 1);
+  assert.equal(map.levels.lows[0].price, 100.0);
+  assert.equal(map.levels.lows[0].touches, 1);
+  assert.equal(map.levels.lows[0].born, 1);
+});
+
+test("HTF feed: seeded levels enter the map as aged levels, survive the per-side cap and qualify the sweep", () => {
+  const seed = { lows: [{ price: 98.0, touches: 1 }, { price: 99.7, touches: 2 }], highs: [] };
+  const map = buildLiquidityMap(mkBars(SWEEP_RECLAIM), CFG, { seed });
+  const deep = map.levels.lows.find((l) => l.price === 98.0);
+  assert.ok(deep?.seeded);
+  assert.ok(!map.levels.lows.some((l) => l.price === 99.7), "the seeded 99.7 was swept by the 99.5 run");
+  assert.equal(map.blocks[0].qualified, true, "sweeping an aged/x2 HTF level qualifies the LB");
+
+  // seedFromMap: nearest per side, only levels born before the lower window, chains seeded ones
+  const htfBars = mkBars(SWEEP_RECLAIM, { step: 14400, start: 1756000000 });
+  const htfMap = buildLiquidityMap(htfBars, CFG, { seed: { lows: [{ price: 90, touches: 3 }], highs: [] } });
+  const picked = seedFromMap(htfMap, htfBars, { before: 1756000000 + 3 * 14400, price: 100, cfg: { ...CFG, seed_levels: 2 } });
+  assert.deepEqual(picked.lows.map((l) => l.price), [90]); // 100.0 was born at bar 1 (< before) but swept; 90 is the seeded one
+  assert.equal(picked.highs.length <= 2, true);
+});
+
+test("6B 2026-09-04 (real bars): the pocket floor 1.3474 is a x4 intact level on the 1h via the daily feed, Friday's 1.3476 is a poke, no bull LB is born", () => {
+  const fx = JSON.parse(readFileSync(new URL("./fixtures/6b_2026-09-04.json", import.meta.url), "utf-8"));
+  const cfg = MARCO_DEFAULTS;
+  const reads = {};
+  for (const tf of ["W", "D", "60"]) {
+    const bars = fx.bars[tf];
+    const src = tf === "D" ? reads.W : tf === "W" ? null : reads.D;
+    const seed = src ? seedFromMap(src.map, src.bars, { before: bars[0].time, price: bars.at(-1).close, cfg }) : null;
+    const map = buildLiquidityMap(bars, cfg, { seed });
+    reads[tf] = { bars, map, story: storyRead(map, bars, cfg) };
+  }
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
+  assert.ok(reads.D.map.levels.lows.some((l) => near(l.price, 1.3474, 0.0001)), "the daily carries the Aug-13 low");
+  const floor = reads["60"].map.levels.lows.find((l) => near(l.price, 1.3474, 0.0001));
+  assert.ok(floor, "the 1h inherits it");
+  assert.ok(floor.touches >= 3, `x${floor.touches} — Aug 13, Sep 2, Sep 4 all respected it`);
+  assert.ok(!reads["60"].map.blocks.some((b) => !b.dead && b.side === "bull" && near(b.bot, 1.3476, 0.0003)), "no bull LB from the 1.3476 stab");
+  const poke = [...reads["60"].map.events].reverse().find((e) => e.type === "low_poke");
+  assert.ok(poke && near(poke.floor, 1.3474, 0.0001) && near(poke.ext, 1.3476, 0.0001));
+  assert.notEqual(reads["60"].story.mode, "buy_story");
+  assert.match(reads["60"].story.read, /inducement into the pocket/);
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-06 (user): the intraweek layer — targets belong to the trigger,
+// ladders are clusters, a stale story is a lean, notes speak to the week's bias.
+
+function fixtureReads(name, cfg = MARCO_DEFAULTS) {
+  const fx = JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf-8"));
+  const reads = {};
+  for (const tf of ["W", "D", "240", "60"]) {
+    const bars = fx.bars[tf];
+    const src = tf === "D" ? reads.W : tf === "W" ? null : reads.D;
+    const seed = src ? seedFromMap(src.map, src.bars, { before: bars[0].time, price: bars.at(-1).close, cfg }) : null;
+    const map = buildLiquidityMap(bars, cfg, { seed });
+    reads[tf] = { bars, map, story: storyRead(map, bars, cfg) };
+  }
+  return reads;
+}
+
+test("clusterTargets: levels within tolerance are one draw (near edge, far edge, summed taps); duplicates across timeframes count once", () => {
+  const list = [
+    { price: 103, touches: 1 },
+    { price: 100.5, touches: 2, kind: "lb", zone: [100.5, 101] },
+    { price: 100, touches: 1 },
+    { price: 100.5, touches: 2 }, // the same level from the other timeframe
+  ];
+  const out = clusterTargets(list, 1, 1);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].price, 100);
+  assert.equal(out[0].far, 100.5);
+  assert.equal(out[0].touches, 3);
+  assert.equal(out[0].kind, "lb");
+  assert.equal(out[0].members, 2);
+  assert.equal(out[1].price, 103);
+  // short side: nearest-first means descending
+  const down = clusterTargets(list, 1, -1);
+  assert.equal(down[0].price, 103);
+});
+
+test("intraweek: week targets are distinct clusters, and each trigger's target is the first rung beyond ITS entry that clears the min RR", () => {
+  const cfg = MARCO_DEFAULTS;
+  const reads = fixtureReads("mnq_2026-09-04", cfg);
+  const bias = resolveBias(reads.W.story, reads.D.story);
+  assert.equal(bias.bias_word, "long");
+  const { intraweek, triggers } = intraweekLayer(reads, bias, cfg);
+  const dAtr = atrSeries(reads.D.bars, cfg.atr_length).at(-1);
+  const tol = dAtr * cfg.eq_tolerance_atr;
+  for (let i = 1; i < intraweek.ladder.length; i++) {
+    assert.ok(intraweek.ladder[i].price - intraweek.ladder[i - 1].far > tol, "consecutive clusters are further apart than the tolerance");
+  }
+  assert.ok(intraweek.targets.every((t) => t.atr_weeks !== null), "week targets are annotated in weekly ATRs");
+  const all = [...triggers["240"], ...triggers["60"]].filter((t) => t.stop !== null && t.target !== null);
+  assert.ok(all.length >= 3);
+  for (const t of all) {
+    assert.ok(t.target > t.trigger, "a long trigger's target sits beyond its own entry");
+    assert.ok(t.rr >= cfg.target_min_rr || /no target on the ladder/.test(t.note ?? ""), `RR ${t.rr} at ${t.trigger} clears min RR or is flagged`);
+  }
+  const stepped = all.find((t) => t.targets && t.targets.length > 1);
+  assert.ok(stepped, "a far-stop sweep trigger steps up the ladder");
+  assert.ok(stepped.targets[0].rr < cfg.target_min_rr);
+  assert.equal(stepped.target, stepped.targets.at(-1).price);
+  assert.match(stepped.note, /target moved to/);
+  const kept = all.find((t) => t.targets && t.targets.length === 1);
+  assert.ok(kept, "a trigger whose T1 already clears the min RR keeps T1");
+});
+
+test("intraweek: a target beyond a weekly range says refine the stop instead; the phase note speaks to the week's bias (6B)", () => {
+  const cfg = MARCO_DEFAULTS;
+  const reads = fixtureReads("6b_2026-09-04", cfg);
+  const bias = resolveBias(reads.W.story, reads.D.story);
+  assert.equal(bias.bias_word, "short");
+  const { intraweek, triggers } = intraweekLayer(reads, bias, cfg);
+  assert.equal(intraweek.phase, "aligned");
+  assert.equal(intraweek.local_regime, "daily_only");
+  assert.match(intraweek.local_read, /trigger timeframe agrees/);
+  assert.doesNotMatch(intraweek.local_read, /counter-trend/);
+  assert.ok(Math.abs(intraweek.primary_target - 1.3474) < 0.0001, "the pocket floor is the week's first target");
+  const far = [...triggers["240"], ...triggers["60"]].find((t) => t.targets && t.targets.at(-1).atr_weeks > 1);
+  assert.ok(far, "a wide-stop sweep reaches a target beyond a weekly range");
+  assert.match(far.note, /refine the stop on a lower-TF LB/);
+});
+
+test("resolveBias: a stale trap plus a mere continuation on the other side is a lean, not 'aligned'", () => {
+  const w = { mode: "down_continuation", direction: -1, fresh: true, targets_below: [{ price: 90, touches: 1 }], lb: null };
+  const dStale = { mode: "sell_story", direction: -1, fresh: false, targets_below: [{ price: 95, touches: 2 }], lb: { alive: true, zone: [100, 101] } };
+  const r = resolveBias(w, dStale);
+  assert.notEqual(r.regime, "aligned");
+  assert.equal(r.regime, "daily_only");
+  assert.equal(r.stale, true);
+  assert.equal(r.bias, -1);
+  assert.match(r.note, /stale/);
+  const dFresh = { ...dStale, fresh: true };
+  const live = resolveBias(w, dFresh);
+  assert.equal(live.regime, "aligned");
+  assert.equal(live.stale, false);
 });
