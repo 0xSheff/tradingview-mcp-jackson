@@ -11,15 +11,41 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
-import { loadRules, loadWatchlist } from "./config.js";
+import { loadRules, loadWatchlist, loadContracts, contractSpec } from "./config.js";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../");
 const WEEKLY_DIR = join(PROJECT_ROOT, "briefs", "weekly");
 
 export const MARCO_DEFAULTS = {
   timeframes: ["15", "60"],
-  bars_to_fetch: 400,
+  // Ask for more than any chart holds: the data layer returns
+  // min(requested, loaded), so this means "take the whole loaded series"
+  // rather than truncating it. Measured 2026-09-09: MNQ 60m held 937 bars
+  // while the old 400 threw away 537 of them, and 5m held only 300-425 no
+  // matter what was asked. Depth is therefore set by what TradingView has
+  // loaded per resolution, never by this number. [CALIBRATION]
+  bars_to_fetch: 5000,
   watchlist_section: "marco",
+
+  // --- daily morning run (docs/MARCO.md, 2026-09-09 calibration) ---
+  // Marco's own cascade: H4 context -> H1 the main intraday read -> M15
+  // refinement -> M5 the entry.
+  daily_timeframes: ["240", "60", "15", "5"],
+  // The read is worthless below these, so a key timeframe that comes up
+  // short fails rather than producing a thin analysis with a footnote: the
+  // value is in analysis done on sufficient data [user, 2026-09-09]. The
+  // floor is set by zone_max_age (300) + story_lookback (60): with less
+  // than that, the oldest zones are an artifact of the window edge.
+  key_timeframes: ["240", "60"],
+  min_bars: { 240: 360, 60: 360, 15: 300, 5: 200 },
+  // A key timeframe that is short is usually still loading — wait and
+  // refetch before giving up.
+  history_retries: 2,
+  history_retry_ms: 1500,
+  // Mirrors the journal strategy's max_risk_per_trade; the journal is the
+  // authority, this is the copy the engine sizes against. Override in
+  // rules.json -> marco.max_risk_per_trade.
+  max_risk_per_trade: 250,
 
   // detection — every number is a [CALIBRATION] (docs/MARCO.md §6)
   pivot_len: 3, // swing = strictly lowest/highest of N bars each side
@@ -1021,7 +1047,7 @@ export function falseReactions(map, price, direction, { max = 3 } = {}) {
 }
 
 /** One timeframe's full read: story + zones + levels + the 10 a.m. gate. */
-export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = null } = {}) {
+export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = null, counter = false } = {}) {
   if (!Array.isArray(bars) || bars.length < cfg.pivot_len * 2 + 10) {
     return { error: "not enough bars", bars: bars?.length ?? 0 };
   }
@@ -1084,6 +1110,11 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = n
     bias_source: biasSource,
     blocks,
     triggers: triggerSetups(map, bars, cfg, { direction: dir }),
+    // Counter-bias entries. On any other day these zones are inducement and
+    // must NOT be rendered as tradeable, so this is opt-in: only the daily
+    // run asks for it, and only Mon-Tue, when the strategy's early-week
+    // counter-trend allowance is live (docs/MARCO.md §3).
+    counter_triggers: counter && dir ? triggerSetups(map, bars, cfg, { direction: -dir, max: 2 }) : null,
     false_reactions: falseReactions(map, story.price, dir),
     liquidity: {
       intact_above: story.intact_above,
@@ -1610,7 +1641,7 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = 
       for (const tf of tfs) {
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
-        const { bars } = await data.getOhlcv({ count: cfg.bars_to_fetch });
+        const { bars } = await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch });
         const read = analyzeMarco(bars, cfg, {
           bias: manualBias !== null ? manualBias : useWeekly ? wk?.bias?.bias || null : null,
           seed: htfMap ? seedFromMap(htfMap, htfBars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg }) : null,
@@ -1655,6 +1686,188 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = 
     methodology: "docs/MARCO.md — Accettone liquidity blocks",
     rules_path: loadedFrom,
     config: cfg,
+    results,
+  };
+}
+
+/**
+ * Attach the dollar risk of one contract to each trigger, and flag the ones
+ * the per-trade cap rules out. A symbol with no verified contract spec gets
+ * `risk_usd: null` and says so — never a guessed figure, because the cap is
+ * what decides whether a setup is takeable at all (docs/MARCO.md §5).
+ */
+function attachRisk(triggers, spec, cap) {
+  if (!Array.isArray(triggers)) return triggers;
+  for (const t of triggers) {
+    if (!spec) {
+      t.risk_usd = null;
+      t.over_cap = null;
+      t.risk_note = "no contract spec — risk not computed";
+    } else if (t.stop == null || t.trigger == null) {
+      t.risk_usd = null;
+      t.over_cap = null;
+      t.risk_note = "no stop anchor — risk not computable";
+    } else {
+      t.risk_usd = round(Math.abs(t.trigger - t.stop) * spec.usd_per_point);
+      t.over_cap = cap != null && t.risk_usd > cap;
+      if (t.over_cap) {
+        t.risk_note =
+          `$${t.risk_usd} > cap $${cap} at size 1 — refine the entry on a lower-TF LB or pass; never resize the stop`;
+      }
+    }
+  }
+  return triggers;
+}
+
+/**
+ * The daily morning run (docs/MARCO.md — "the weekend sets direction, the
+ * morning sets the setup", 2026-09-09). Direction comes from the weekend
+ * brief; everything actionable — triggers, stops, RR, dollar risk, the cap
+ * check, the 10am gate — is computed live on Marco's own cascade the
+ * morning it is used. Counter-trend triggers appear on Monday and Tuesday
+ * only, because that is when the allowance is live.
+ */
+export async function runMarcoDaily({ rules_path, symbols, timeframes, today } = {}) {
+  let rules = {};
+  try {
+    rules = loadRules(rules_path).rules;
+  } catch {
+    /* rules.json is optional — defaults are fine */
+  }
+  const cfg = mergeConfig(rules);
+  const { contracts, path: contractsPath } = loadContracts();
+  const tfs = timeframes?.length ? timeframes : cfg.daily_timeframes;
+  const watchlist = symbols?.length ? symbols : loadWatchlist(cfg.watchlist_section).watchlist;
+  if (!watchlist.length) {
+    throw new Error(`watchlists.json "${cfg.watchlist_section}" is empty. Add at least one symbol.`);
+  }
+
+  const now = today ? new Date(today) : new Date();
+  const dow = now.getDay(); // 0 Sun … 6 Sat
+  const counterOk = dow === 1 || dow === 2;
+
+  const weekly = loadLatestWeekly();
+  if (!weekly) {
+    throw new Error(
+      "No weekly brief found in briefs/weekly/. The daily run takes its direction from the weekend brief — generate it first.",
+    );
+  }
+  const weeklyFor = (symbol) => weekly?.symbols?.find((s) => s.symbol === symbol && !s.error) ?? null;
+
+  let originalSymbol;
+  let originalTimeframe;
+  try {
+    const state = await chart.getState();
+    originalSymbol = state.symbol;
+    originalTimeframe = state.resolution;
+  } catch {
+    /* chart state is a nicety, not a requirement */
+  }
+
+  const results = [];
+  for (const symbol of watchlist) {
+    try {
+      const wk = weeklyFor(symbol);
+      if (!wk) {
+        results.push({ symbol, skipped: `not in the ${weekly.week} weekly brief — no direction to trade from` });
+        continue;
+      }
+      const spec = contractSpec(contracts, symbol);
+      await chart.setSymbol({ symbol });
+      await sleep(900);
+
+      const perTf = {};
+      let htfBars = null;
+      let short = null;
+
+      for (const tf of tfs) {
+        await chart.setTimeframe({ timeframe: tf });
+        await sleep(900);
+
+        // A key timeframe that comes up short is usually still loading:
+        // wait and refetch before failing. Depth is never annotated away —
+        // either the analysis stands on enough bars or it is not produced.
+        const isKey = (cfg.key_timeframes ?? []).map(String).includes(String(tf));
+        const need = cfg.min_bars?.[tf] ?? 0;
+        let bars = (await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars;
+        for (let i = 0; isKey && bars.length < need && i < (cfg.history_retries ?? 0); i++) {
+          await sleep(cfg.history_retry_ms ?? 1500);
+          bars = (await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars;
+        }
+        if (bars.length < need) {
+          if (isKey) {
+            short = `${tf}m has ${bars.length} bars, needs ${need} — the chart has not loaded enough history for a trustworthy read`;
+            break;
+          }
+          perTf[tf] = { error: `insufficient history: ${bars.length} bars, needs ${need}` };
+          continue;
+        }
+
+        if (tf === String(cfg.htf?.timeframe)) htfBars = bars;
+        const htfMap = htfBars ? buildLiquidityMap(htfBars, cfg) : null;
+        const read = analyzeMarco(bars, cfg, {
+          bias: wk.bias.bias || null,
+          counter: counterOk,
+          seed:
+            htfMap && tf !== String(cfg.htf?.timeframe)
+              ? seedFromMap(htfMap, htfBars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg })
+              : null,
+        });
+        if (!read.error) {
+          read.bars_analyzed = bars.length;
+          attachRisk(read.triggers, spec, cfg.max_risk_per_trade);
+          attachRisk(read.counter_triggers, spec, cfg.max_risk_per_trade);
+          read.alignment = alignmentOf(read.story.direction, wk.bias.bias);
+        }
+        perTf[tf] = read;
+      }
+
+      if (short) {
+        results.push({ symbol, error: short });
+        continue;
+      }
+
+      const quote = await data.getQuote({});
+      results.push({
+        symbol,
+        quote,
+        contract: spec ? { usd_per_point: spec.usd_per_point, journal: spec.journal } : null,
+        weekly: {
+          week: weekly.week,
+          bias: wk.bias.bias_word,
+          regime: wk.bias.regime,
+          invalidation: wk.bias.invalidation,
+          primary_target: wk.bias.primary_target,
+        },
+        timeframes: perTf,
+      });
+    } catch (err) {
+      results.push({ symbol, error: err.message });
+    }
+  }
+
+  try {
+    if (originalSymbol) {
+      await chart.setSymbol({ symbol: originalSymbol });
+      await sleep(600);
+    }
+    if (originalTimeframe) await chart.setTimeframe({ timeframe: originalTimeframe });
+  } catch {
+    /* best-effort restore */
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    trading_day: now.toISOString().slice(0, 10),
+    weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dow],
+    counter_trend_open: counterOk,
+    counter_trend_note: counterOk
+      ? "Mon–Tue intraday only, nearest target only, never held against the global bias — occupies a concurrent slot"
+      : "closed — counter-trend entries are Mon–Tue only",
+    direction_from: `briefs/weekly/${weekly.week} (global layer)`,
+    risk_cap: cfg.max_risk_per_trade,
+    contracts_path: contractsPath,
+    methodology: "docs/MARCO.md — Accettone liquidity blocks",
     results,
   };
 }
@@ -1718,4 +1931,62 @@ export function compactMarcoBrief(brief) {
           },
     ),
   };
+}
+
+/**
+ * Compact render of the daily run — one block per symbol, each trigger on
+ * its own line with the entry model, stop, dollar risk and RR, so a line
+ * maps straight onto a journal setup rung (see the K-indexed format in
+ * .claude/skills/journal-weekly-plan/SKILL.md).
+ */
+export function compactMarcoDaily(daily) {
+  const r2 = (n) => (n == null ? null : Math.round(n * 100) / 100);
+  const money = (g) =>
+    g.risk_usd == null ? g.risk_note ?? "risk n/a" : `$${Math.round(g.risk_usd)}${g.over_cap ? " ⚠ OVER CAP" : ""}`;
+  const trig = (g) => {
+    const where =
+      g.kind === "tap"
+        ? `tap ${g.trigger} (LB ${g.stop_anchor?.[0]}–${g.stop_anchor?.[1]})`
+        : `sweep ${g.side === "long" ? "<" : ">"} ${g.trigger}${g.confirmed ? ` x${g.touches}` : " unconf"}`;
+    if (g.stop == null) return `      ${g.side} ${where} — no stop anchor, not takeable`;
+    const flags = [g.confirmed && g.kind === "tap" ? "Q" : null, g.tapped ? "tapped" : null].filter(Boolean).join(" ");
+    return `      ${g.side} ${where}${flags ? ` [${flags}]` : ""} · stop ${g.stop} · T ${g.target ?? "—"} · RR ${r2(g.rr) ?? "—"} · ${money(g)}`;
+  };
+
+  const out = [
+    `Marco daily — ${daily.trading_day} (${daily.weekday})`,
+    `Direction from ${daily.direction_from} · risk cap $${daily.risk_cap} at size 1`,
+    `Counter-trend: ${daily.counter_trend_note}`,
+    "",
+  ];
+
+  for (const r of daily.results) {
+    if (r.skipped) { out.push(`## ${r.symbol} — skipped: ${r.skipped}`, ""); continue; }
+    if (r.error) { out.push(`## ${r.symbol} — ERROR: ${r.error}`, ""); continue; }
+    const inv = r.weekly.invalidation;
+    out.push(`## ${r.symbol}${r.contract ? ` (${r.contract.journal})` : ""} — ${r.quote?.last ?? "?"}`);
+    out.push(`   W ${r.weekly.bias}/${r.weekly.regime}${inv ? ` · inval ${inv.level} ${inv.rule}` : ""}${r.contract ? "" : " · ⚠ NO CONTRACT SPEC — no dollar risk"}`);
+
+    // The 10am gate is a property of the symbol, not of each timeframe.
+    const gate = Object.values(r.timeframes).map((t) => t.h4_model).find((h) => h?.available);
+    if (gate) {
+      out.push(`   H4 gate (${gate.h4_date}, ${gate.phase}): H ${gate.h4_high} / L ${gate.h4_low}`);
+      out.push(`     longs: ${gate.longs}`);
+      out.push(`     shorts: ${gate.shorts}`);
+      if (gate.note) out.push(`     ${gate.note}`);
+    }
+
+    for (const [tf, t] of Object.entries(r.timeframes)) {
+      if (t.error) { out.push(`   ${tf}: ${t.error}`); continue; }
+      const story = t.story.read.split(" — ")[0];
+      out.push(`   ${tf} · ${t.bars_analyzed} bars · ${t.alignment} · ${story}`);
+      for (const g of t.triggers ?? []) out.push(trig(g));
+      if (t.counter_triggers?.length) {
+        out.push(`     counter-trend (allowance open today):`);
+        for (const g of t.counter_triggers) out.push(trig(g));
+      }
+    }
+    out.push("");
+  }
+  return out.join("\n");
 }

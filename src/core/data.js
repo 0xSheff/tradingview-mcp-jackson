@@ -63,8 +63,13 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
   `;
 }
 
-export async function getOhlcv({ count, summary } = {}) {
-  const limit = Math.min(count || 100, MAX_OHLCV_BARS);
+// `max` lifts the default cap for callers that consume bars locally instead
+// of returning them over MCP: the 500 default exists to bound a tool
+// response, but the analysis engine reads the whole loaded series and
+// truncating it silently corrupts build-up counts and zone ages
+// (measured 2026-09-10: MNQ 60m held 937 bars, the cap returned 500).
+export async function getOhlcv({ count, summary, max } = {}) {
+  const limit = Math.min(count || 100, max || MAX_OHLCV_BARS);
   let data;
   try {
     data = await evaluate(`

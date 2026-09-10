@@ -357,6 +357,45 @@ pullback, two continuations without a trap are no bias. Chosen after the
 author's winning longs. Implemented in `resolveBias` (`aligned` /
 `counter_trend` / `pullback` / `daily_only` / `weekly_only` / `no_bias`).
 
+**The weekend sets direction, the morning sets the setup [CALIBRATION,
+user, 2026-09-09, after the W37 mid-week review].** The weekend brief stops
+producing setups. It keeps only the global layer — the W/D (optionally H4)
+story, bias, invalidation, the big targets in weekly ATRs, and a new
+week-over-week delta ("what changed in the global picture") — plus the map
+of HTF zones price would have to reach for anything to become actionable.
+Triggers, stops, RR and counter-trend entries move to a **daily morning
+run**, computed live on 240/60/15/5 the morning they are used, and carrying
+the dollar risk at minimum size with the per-trade cap checked *before* a
+setup is written.
+
+W37 forced this: every setup the Sunday lock carried failed as written.
+MGC's long 4411.4–4462.8 needed a $537 stop against a $250 cap and the
+brief itself said "refine on 15m"; its early-week counter-trend triggers
+sat at 4533.5 / 4543.7 while Tuesday's actual high was 4488.7; 6E's two
+targets were both taken by Tuesday while neither of its entries was
+touched; MNQ's near pocket was run on day one without a held reclaim. The
+levels were not wrong — they were computed three days before the entry they
+described. Trigger selection is already nearest-first (`triggerSetups`,
+sorted by distance), so this is snapshot staleness, not a ranking bug: the
+zone that produced Tuesday's short was created by Tuesday's own high and
+could not exist in a Sunday list.
+
+The early-week counter-trend allowance therefore stops needing a special
+path. It is valid Monday–Tuesday and is now computed on those mornings, so
+there is nothing frozen to go stale and no flag to gate.
+
+Journal side: the sprint moves to `plan_horizon: "day"` — the journal's own
+default, which the W36–W37 sprint had overridden to `week`; the
+`morning-plan` ritual records that a weekly cadence degenerates into "from
+Tuesday on the plan already exists". The weekend touches the journal not at
+all — no `plan_start`, no lock. The first lock of the week is Monday
+morning, which also sidesteps `plan_get_active` resolving against
+`America/Chicago`, where an early Athens morning still reads as the
+previous trading date. Intraweek theses survive the daily boundary through
+the ritual's step 2½ (`plan_transfer_setup` / `plan_copy_setup`), chosen
+per setup rather than inherited. `plan_horizon` is fixed at `sprint_start`
+and there is no `sprint_update`, so the switch lands at a sprint kickoff.
+
 ## 4. Entry models
 
 ### 4.1 Zone tap (the base model)

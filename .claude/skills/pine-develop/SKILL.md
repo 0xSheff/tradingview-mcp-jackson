@@ -7,6 +7,12 @@ description: Full Pine Script development loop — write code, compile, fix erro
 
 You are developing a Pine Script indicator or strategy in TradingView. Follow this loop precisely.
 
+> **Destructive-edit warning.** `pine_new` does **not** create a separate script — and
+> `pine_save` overwrites whichever script is currently open in the Pine Editor. Before any
+> push/save cycle, back up the open script's source (`pine_get_source` to a local file) and
+> work in a dedicated sandbox script, never in a live indicator the trader depends on
+> (e.g. "Liq blocks", which carries the Marco zones).
+
 ## Step 1: Understand the Goal
 
 If not already clear, ask the user:

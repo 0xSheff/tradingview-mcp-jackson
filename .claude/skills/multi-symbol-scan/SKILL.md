@@ -16,6 +16,12 @@ Determine:
 
 ## Step 2: Run the Scan
 
+> **`batch_run` is broken as of 2026-09-09.** `action: "get_ohlcv"` returns
+> `JS evaluation error: Uncaught (in promise)` for every iteration, including a single
+> symbol on a single timeframe. `screenshot` and `get_strategy_results` are untested since
+> the breakage was found. Until it is fixed, use the **per-symbol loop** below as the
+> primary path; retest `batch_run` before relying on it.
+
 ### For Strategy Performance Comparison
 Use `batch_run` with action `get_strategy_results`:
 ```

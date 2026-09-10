@@ -72,3 +72,38 @@ export function loadWatchlist(section = "primary", watchlistPath) {
       candidates.map((p) => `  - ${p}`).join("\n"),
   );
 }
+
+/**
+ * Load contracts.json — per-instrument point value used for risk sizing.
+ * Optional: a missing file yields an empty map, and callers must treat a
+ * missing spec as "no dollar figure available" rather than substituting a
+ * guess (docs/MARCO.md §5 — the per-trade cap decides takeability, so a
+ * wrong figure is worse than none).
+ */
+export function loadContracts(contractsPath) {
+  const candidates = [
+    contractsPath,
+    join(PROJECT_ROOT, "contracts.json"),
+    join(homedir(), ".tradingview-mcp", "contracts.json"),
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      let data;
+      try {
+        data = JSON.parse(readFileSync(p, "utf8"));
+      } catch (e) {
+        throw new Error(`Failed to parse contracts.json at ${p}: ${e.message}`);
+      }
+      return { contracts: data.contracts ?? {}, path: p };
+    }
+  }
+  return { contracts: {}, path: null };
+}
+
+/** Spec for a symbol, or null when absent or unverified. */
+export function contractSpec(contracts, symbol) {
+  const c = contracts?.[symbol];
+  if (!c || c.verified !== true || typeof c.usd_per_point !== "number") return null;
+  return c;
+}

@@ -13,9 +13,12 @@ because the journal's coach cannot read this repo's files.
 
 ## Preconditions
 
-- The trading-coach stack is up (`trading-coach` MCP server on `http://localhost:8080/mcp`,
-  registered in this repo's `.mcp.json`). If tools fail with "backend unreachable", the
-  journal's docker compose `full` profile is not running.
+- The trading-coach stack is up. The endpoint lives in this repo's `.mcp.json` — as of
+  2026-09-09 it is the Tailscale host `http://vadym-mach-wx9.taild8603c.ts.net:8080/mcp`,
+  not localhost; read `.mcp.json` rather than assuming. If tools fail with "backend
+  unreachable", the journal's docker compose `full` profile is not running; if they fail
+  with "Unable to connect", check the host is online first (`tailscale status`) — it has
+  flapped mid-session before.
 - A fresh weekly brief exists. If not, generate it (TradingView must be running with CDP):
   `node src/cli/index.js marco weekly --compact` — writes `briefs/weekly/<ISO week>.md` + `.json`.
 
@@ -98,30 +101,45 @@ trigger). Propose the mapping to the trader; do not silently pick a subset of tr
 - Skip it when the brief's own draw says the counter-bias zone holds intact build-up (the
   6E W37 case: shorting into x2 fuel above is shorting with the sellers).
 
-**`setup_description` — the brief context, rendered deterministically.** This is the one
-field the coach reads that the structured fields cannot carry. One compact template, same
-order every time; do not restate instrument, direction, key levels, targets or size:
+**`setup_description` — a compact line list, never prose.** This is the one field the coach
+reads that the structured fields cannot carry: the stop (no field exists for it), the entry
+model per rung, the $ risk, the RR, the invalidation, the no-entry zones. Write it as short
+scannable lines, one per rung, so the trader can place an order without reading a paragraph.
+Do not restate instrument, direction, key levels, targets or size — `K1/K2/K3` are positional
+indexes into `key_levels`, which is what keeps the levels out of the text.
 
 ```
-brief <ISO week>: weekly=<mode>, daily=<mode>, regime=<regime> — <one-line verdict note>;
-invalidation: <rule> <level>. Intraweek phase: <phase> — <local_read, shortened>.
-Trigger(s): <kind> <price> (<confirmed xN|unconfirmed><, tapped>), stop <stop> behind LB
-<bot>–<top>, RR <rr><, "T1 x gives RR y — target moved to z" when stepped>. Week targets
-≈<Nw>; global <levels> (≈<Nw>) = final draw for trailing only. False zones (pullback
-origins, never entries): <zone>; <zone>. <thin-zone / refine-on-lower-TF note>
+<weekly mode>/<regime> · inval <level> <Wclose|Dclose>
+K1 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n>
+K2 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n>
+skip <level> <model> — $<risk> > cap
+no-entry <zone> · <zone>
+global <levels> (≈<Nw>) = final draw only
+<one short sentence of context>
 ```
 
-Example (from 2026-W37 MGC):
+Example (2026-W37 MGC; invalidation is 4016 per the brief — the 4036.5 that appeared in the
+old prose example and in the W37 locked plan was wrong):
 
 ```
-brief 2026-W37: weekly=buy_story, daily=buy_story, regime=aligned — weekly and daily agree,
-every move against the bias is false; invalidation: weekly close below 4036.5. Intraweek
-phase: aligned (D/4h buy). Triggers: tap 1h LB 4411.4–4462.8 (stop 4409.1 = $537 > cap —
-refine on 15m); tap D/240 LB 4329.3–4365.2 Q (stop 4325.1 = $400 — refine). Week targets
-≈0.3w / 0.9w; global 5007.8 (≈2.1w), 5752.3 (≈5.2w) = final draw for trailing, not the
-week's yardstick. False zones (pullback origins, never entries): bear LB 4521.5–4543.7 Q;
-4672.4–4680.6; 4690–4697.7.
+buy_story/aligned · inval 4016 Wclose
+K1 tap · stop 4409.1 · $537 > cap — refine on 15m
+K2 tap · stop 4325.1 · $400 — refine on 15m
+no-entry 4521.5–4543.7 Q · 4672.4–4680.6 · 4690–4697.7
+global 5007.8 (≈2.1w) · 5752.3 (≈5.2w) = final draw only
+Week targets ≈0.3w / 0.9w; weekly and daily agree, every move against the bias is false.
 ```
+
+Rules that make the list work:
+
+- **The entry model goes on every rung line.** `tap` means a resting limit into the zone,
+  stop beyond the zone extreme; `sweep+reclaim` means wait for the run of the level *and* the
+  reclaim, stop beyond the run extreme. Never let the two blur — on 2026-09-09 a 6E setup was
+  typed `sweep-trigger` but carried a tap-style stop 2.7 ticks under the low, and the
+  resulting R figure was a fiction that only a limit order would have earned.
+- **Put the primary rung's RR in `planned_r`**, not only in the text — it is a real field.
+- **One closing sentence of context**, and only one: why this bias, what changed. Deeper
+  reasoning belongs in the chat with the trader, not in the journal.
 
 ## Step 4 — Summary, go, lock
 
@@ -146,5 +164,5 @@ lock is irreversible for the period; mid-week changes are addenda.
   bias, or a no-bias symbol.
 - Never put the global targets into `targets` — they are the yardstick the week cannot meet
   (W36: 6E 1.21155 ≈535 pips from the entry).
-- Never paste the whole brief into `setup_description` — the template line is the cap;
-  the coach's prompt budget is shared with everything else it reads.
+- Never paste the whole brief into `setup_description`, and never revert to prose — the line
+  list is the cap; the coach's prompt budget is shared with everything else it reads.

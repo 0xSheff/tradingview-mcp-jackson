@@ -60,6 +60,28 @@ register("marco", {
       },
     ],
     [
+      "daily",
+      {
+        description:
+          'Morning run: direction from the weekend brief, setups computed live on 240/60/15/5 with dollar risk and the per-trade cap',
+        options: {
+          rules: commonOptions.rules,
+          tf: commonOptions.tf,
+          compact: commonOptions.compact,
+          today: { type: "string", description: "Override today's date (YYYY-MM-DD) — controls the Mon–Tue counter-trend gate" },
+        },
+        handler: async ({ rules, tf, compact, today }, positionals) => {
+          const result = await core.runMarcoDaily({
+            rules_path: rules,
+            timeframes: tf,
+            today,
+            symbols: positionals?.length ? positionals : undefined,
+          });
+          return compact ? core.compactMarcoDaily(result) : result;
+        },
+      },
+    ],
+    [
       "scan",
       {
         description: "Accettone read of a single symbol: tv marco scan COMEX_MINI:MGC1!",

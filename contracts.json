@@ -1,0 +1,27 @@
+{
+  "_note": "Contract specs for risk sizing. `usd_per_point` is what ONE contract gains or loses when the quoted price moves by 1.00, so risk = |entry - stop| * usd_per_point for every instrument, FX included. `journal` is the instrument name used in the trading-coach journal. A symbol that is absent, or present with verified:false, is never used for risk maths — the engine reports 'no contract spec' instead of guessing, because a wrong dollar figure is worse than no figure when the per-trade cap decides whether a setup is takeable.",
+  "_verification": "The three verified entries were checked on 2026-09-09 against dollar figures the W37 brief and locked plan had already computed independently: MGC 53.7 pts = $537, MNQ 65.85 pts = $132, 6B 0.00193 = $119 (same 62500-per-point family as 6E's 125000).",
+  "contracts": {
+    "CME_MINI:MNQ1!": {
+      "journal": "MNQ",
+      "description": "Micro E-mini Nasdaq-100",
+      "usd_per_point": 2,
+      "tick": 0.25,
+      "verified": true
+    },
+    "COMEX_MINI:MGC1!": {
+      "journal": "MGC",
+      "description": "Micro Gold (10 oz)",
+      "usd_per_point": 10,
+      "tick": 0.1,
+      "verified": true
+    },
+    "CME:6E1!": {
+      "journal": "6E",
+      "description": "Euro FX (EUR 125,000)",
+      "usd_per_point": 125000,
+      "tick": 0.00005,
+      "verified": true
+    }
+  }
+}
