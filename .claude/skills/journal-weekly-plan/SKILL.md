@@ -101,33 +101,43 @@ trigger). Propose the mapping to the trader; do not silently pick a subset of tr
 - Skip it when the brief's own draw says the counter-bias zone holds intact build-up (the
   6E W37 case: shorting into x2 fuel above is shorting with the sellers).
 
-**`setup_description` — a compact line list, never prose.** This is the one field the coach
+**`setup_description` — a compact bullet list, never prose.** This is the one field the coach
 reads that the structured fields cannot carry: the stop (no field exists for it), the entry
 model per rung, the $ risk, the RR, the invalidation, the no-entry zones. Write it as short
-scannable lines, one per rung, so the trader can place an order without reading a paragraph.
+scannable bullets, one per rung, so the trader can place an order without reading a paragraph.
 Do not restate instrument, direction, key levels, targets or size — `K1/K2/K3` are positional
 indexes into `key_levels`, which is what keeps the levels out of the text.
 
 ```
 <weekly mode>/<regime> · inval <level> <Wclose|Dclose>
-K1 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n>
-K2 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n>
-skip <level> <model> — $<risk> > cap
-no-entry <zone> · <zone>
-global <levels> (≈<Nw>) = final draw only
-<one short sentence of context>
+- K1 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n> · <why, ≤6 words>
+- K2 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n> · <why, ≤6 words>
+- skip: <level> <model> · $<risk> > cap
+- no-entry: <zone> · <zone>
+- global: <levels> (≈<Nw>) final draw only
+- replaces: <what this supersedes — addenda only>
+- timing: <gate / event, if any>
 ```
 
-Example (2026-W37 MGC; invalidation is 4016 per the brief — the 4036.5 that appeared in the
-old prose example and in the W37 locked plan was wrong):
+One line per bullet, `·` between fields, fixed labels (`skip:`, `no-entry:`, `global:`,
+`replaces:`, `timing:`), each at most once, dropped when empty. **No closing sentence or
+paragraph** — the reasoning behind a rung lives in the chat and the retro, not here. Trader
+feedback 2026-09-10: the 09.09 and 10.09 addenda ended in a paragraph of numbers and were hard
+to read. On a locked plan an addendum item cannot be edited — the 10.09 pair was rewritten as a
+new addendum and the old items retired with `superseding_plan_item_id` pointing at the new ones.
+
+Example (the 2026-09-10 6E addendum, rewritten in the format; invalidation levels come from
+the brief — the 4036.5 that once appeared for MGC was wrong, the brief says 4016):
 
 ```
-buy_story/aligned · inval 4016 Wclose
-K1 tap · stop 4409.1 · $537 > cap — refine on 15m
-K2 tap · stop 4325.1 · $400 — refine on 15m
-no-entry 4521.5–4543.7 Q · 4672.4–4680.6 · 4690–4697.7
-global 5007.8 (≈2.1w) · 5752.3 (≈5.2w) = final draw only
-Week targets ≈0.3w / 0.9w; weekly and daily agree, every move against the bias is false.
+buy_story/aligned · inval 1.13635 Wclose
+- K1 tap · stop 1.16105 · $132 · RR 2.1 · Q bull LB from the ECB stab, stop under K2
+- K2 sweep+reclaim (5m) · stop under the run extreme · max 20 pips = $250 · x5 floor intact
+- skip: sweep K2 at engine anchor 1.158714 · $298 > cap
+- no-entry: 1.1642–1.1643 · 1.1652–1.16565 (4h bear LB) · 1.1668–1.1672
+- global: 1.19235 (≈2.4w) final draw only
+- replaces: 09.09 K1 1.16235 (run, no reclaim, untraded) · 09.09 K2 1.16015 alive
+- timing: H4 gate reads 17:00 · ECB presser 15:45 no entry
 ```
 
 Rules that make the list work:
@@ -138,8 +148,8 @@ Rules that make the list work:
   typed `sweep-trigger` but carried a tap-style stop 2.7 ticks under the low, and the
   resulting R figure was a fiction that only a limit order would have earned.
 - **Put the primary rung's RR in `planned_r`**, not only in the text — it is a real field.
-- **One closing sentence of context**, and only one: why this bias, what changed. Deeper
-  reasoning belongs in the chat with the trader, not in the journal.
+- **No closing sentence.** What changed goes on the `replaces:` bullet, an event or gate on
+  `timing:`; deeper reasoning belongs in the chat with the trader, not in the journal.
 
 ## Step 4 — Summary, go, lock
 
