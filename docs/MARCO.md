@@ -710,3 +710,8 @@ primary = zone bottom, final = zone top.
   [CALIBRATION] tag distinction.
 - Transcripts live outside the repo (scratchpad); this file is the distilled
   record. Re-derive from the video IDs above if needed.
+- Cases from the Inter Equity Discord/Instagram and the user's own markups, with
+  the engine read on the same bars, live in `docs/MARCO-CASES.md` — principles,
+  approved-but-unbuilt changes, rule candidates and the engine-gap table. The
+  procedure is the `marco-case-review` skill. A rule enters this file only after
+  it is built (engine + Pine together, §7).
