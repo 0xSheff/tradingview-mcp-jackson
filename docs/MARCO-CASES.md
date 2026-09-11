@@ -51,9 +51,15 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
    HTF lows is "lows respecting lows" `[SOURCE, V6]` even when no single bar is a
    strict swing — the engine misses those (see *Engine gaps*); the eye must not.
 
-## Approved changes (not built yet)
+## Approved changes
 
-- **Intraday brief format** (user, 2026-09-10). Per instrument, in this order:
+All four below were **built on 2026-09-11** (`src/core/marco_grid.js`, wired into
+`marco daily`; tests in `tests/marco_grid.test.js`; rules restated in
+`docs/MARCO.md` §3.1 and §6). Two things were learned in the build and are
+recorded under *Rule candidates* → pocket flag.
+
+- **Intraday brief format** (user, 2026-09-10; built — `renderDailyMarkdown`,
+  `marco daily --compact`, `briefs/daily/<date>.md`). Per instrument, in this order:
   1. global reminder — W/D bias, big targets (≈Nw), invalidation, one line;
   2. H4 grid — **current levels only** (user, 2026-09-11, after the first rendered
      brief): the lower edge, the upper edge, and the ladder between them — one line
@@ -72,11 +78,13 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
   6. timing — NY session only (V5), the 10 a.m. H4 gate.
   Target: `marco daily` renders this; engine trigger rows map into the scenarios.
 - **Clip the LTF layer to the H4 grid** (user, 2026-09-10; sharpened from "print the
-  HTF range above the LTF setups"). LTF targets beyond an H4 edge are replaced by the
+  HTF range above the LTF setups"; built — `h4Grid` + `clipToGrid`). LTF targets beyond an H4 edge are replaced by the
   edge; an LTF story whose draw lies outside the grid against the bias is labelled
   *noise* (D1's "trap city"), not merely "against"; the LTF local frame is always the
   sub-range between the H4 edges.
-- **Contract roll detection** (user, 2026-09-11). On 2026-09-11 `6E1!` rolled from
+- **Contract roll detection** (user, 2026-09-11; built — `detectRoll`, `shiftPrices`,
+  `basisBars`, `--shift SYMBOL=offset`; `quote_get` with a foreign symbol now errors
+  instead of mislabelling the chart's series). On 2026-09-11 `6E1!` rolled from
   6EU6 to 6EZ6 overnight and TradingView back-adjusted the whole series by +40.5
   pips: every level the engine printed moved, while the W37 brief's targets,
   invalidation and HTF zones — and the journal's locked 6E plan — stayed in
@@ -91,24 +99,33 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
   returns the chart symbol (6EU2026 and 6EZ2026 came back identical) — fix it, and
   do not use it to detect the front contract until then.
 
-## Rule candidates (proposed, not confirmed)
+## Rule candidates
 
-- **Ladder split** (from U1). Print two lists instead of one "targets": (a) liquidity
+- **Ladder split** (from U1; **built 2026-09-11** — `storyRead` marks counter-side
+  zones `pullback_origin` / `extreme`, the reads print "(LB, pullback origin)" vs
+  "(LB, range extreme)"). Print two lists instead of one "targets": (a) liquidity
   targets = intact levels / build-ups + the range extreme (kept even when the extreme
   is an LB — this preserves the V6 check in §7.2); (b) pullback origins = alive
   counter-bias LB zones on the path: partial before the false reaction, extreme = what
   continuation must run. Stop printing an LB zone bottom (= swept level) as a target.
-- **Pocket flag on entries** `[CALIBRATION, user-raised, 2026-09-10]`. Two tiers on
-  existing parameters: within `eq_tolerance` above an intact build-up → poke, no LB
+- **Pocket flag on entries** `[CALIBRATION, user-raised, 2026-09-10]` — **built
+  2026-09-11** (`flagPocket`, and the grid-level tier in `clipToGrid`). Two tiers on
+  existing parameters: within `eq_tolerance` above an intact level → poke, no LB
   (existing §2.3 rule); within `respect_tolerance_atr` (0.75 ATR) → the LB is born but
-  flagged `pocket`: its tap is downgraded ("no entry until the build-up is run"), the
-  build-up gains a respect tap, and the sweep trigger at the build-up becomes the
-  preferred entry. The brief renders the LB tap as the inducement leg of the deeper
-  scenario, not as an entry. Early week (Mon–Tue) the counter-trend allowance may
-  name that build-up as the nearest counter-trend target explicitly. U1 numbers: 6E
-  4h ATR 18 pips, eq_tol 4.5, respect 13.5; today's low 1.1593 sat 5.5 pips above the
+  flagged `pocket`: its tap is downgraded ("no entry until the floor is run") and the
+  sweep trigger at the floor becomes the preferred entry. The brief renders the LB
+  tap as the inducement leg of the deeper scenario, not as an entry. U1 numbers: 6E
+  4h ATR 18 pips, eq_tol 4.5, respect 13.5; the low 1.1593 sat 5.5 pips above the
   1.15875 shelf — the poke rule missed by one pip and the brief printed the LB tap
-  first.
+  first. **Learned in the build (first live run, 2026-09-11):** (1) the floor must
+  be a *level* of liquidity — a deeper same-side LB extreme is the V6 stop
+  refinement, not a pocket (MGC's nested 4341.3–4351.2 inside the daily
+  4329.3–4365.2; MNQ's 29038 above the Sep-4 LB 28927.25) — the first version
+  flagged both and called every refinement inducement; (2) the H4 grid's tolerance
+  governs LTF taps: the 6E 15m LB 1.16405–1.16455 was not a pocket by the 15m's own
+  ATR but sits 12 pips above the 4h floor 1.16285, so the grid marks it. Not built:
+  "the build-up gains a respect tap" — that would touch the map's counts (state, and
+  therefore the Pine), so the tap count stays as the map has it.
 - **Shelf promotion** (§7.1 open idea, now four examples). A non-pivot bar low that
   later bar lows respect ≥ `min_touches` times within `eq_tolerance` becomes a level.
   See *Engine gaps*.

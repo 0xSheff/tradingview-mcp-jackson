@@ -63,21 +63,30 @@ register("marco", {
       "daily",
       {
         description:
-          'Morning run: direction from the weekend brief, setups computed live on 240/60/15/5 with dollar risk and the per-trade cap',
+          'Morning run: direction from the weekend brief, the H4 grid and scenarios A/B/C/D computed live on 240/60/15/5 with dollar risk, the per-trade cap and contract-roll detection; writes briefs/daily/<date>.md + .json',
         options: {
           rules: commonOptions.rules,
           tf: commonOptions.tf,
           compact: commonOptions.compact,
           today: { type: "string", description: "Override today's date (YYYY-MM-DD) — controls the Mon–Tue counter-trend gate" },
+          shift: {
+            type: "string",
+            multiple: true,
+            description:
+              "Manual weekly-layer shift after a contract roll the basis chain could not see: SYMBOL=offset (e.g. CME:6E1!=0.00405), repeatable",
+          },
+          out: { type: "string", description: "Output directory (default: briefs/daily)" },
         },
-        handler: async ({ rules, tf, compact, today }, positionals) => {
+        handler: async ({ rules, tf, compact, today, shift, out }, positionals) => {
           const result = await core.runMarcoDaily({
             rules_path: rules,
             timeframes: tf,
             today,
+            shift,
+            out_dir: out,
             symbols: positionals?.length ? positionals : undefined,
           });
-          return compact ? core.compactMarcoDaily(result) : result;
+          return compact ? core.renderDailyMarkdown(result) : result;
         },
       },
     ],

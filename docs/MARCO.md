@@ -396,6 +396,70 @@ the ritual's step 2½ (`plan_transfer_setup` / `plan_copy_setup`), chosen
 per setup rather than inherited. `plan_horizon` is fixed at `sprint_start`
 and there is no `sprint_update`, so the switch lands at a sprint kickoff.
 
+**The H4 grid — the nested morning read [CALIBRATION, user, 2026-09-10/11].**
+The morning run is one read nested three deep, not four reads side by side.
+W/D set direction, invalidation and the big targets. The H4 is the *grid*:
+on each side of price the nearest untaken liquidity — an alive same-side LB
+extreme or a build-up (≥ `min_touches`) — is the edge, and the edge extends
+outward through anything (any level, any LB extreme) within
+`respect_tolerance_atr` beyond it, so a shelf under an LB (6E 1.16285 under
+1.16335) or a nested LB inside the daily LB (MGC 4341.3 inside 4329.3) is one
+edge. Single-touch levels between price and an edge are rungs (partials);
+what lies past an edge is "beyond" — where the grid redraws to on the bias
+side, where continuation goes on the other. A side with no strong candidate
+falls back to its nearest level, flagged weak. The 1h/15m/5m reads live
+*inside* the grid: their targets past an edge are clipped to it, a story
+against the bias inside the grid is `noise` (docs/MARCO-CASES.md D1, "trap
+city"), never merely "against", and their local frame is the sub-range
+between the edges. Price leaving the grid is an H4 event — the grid redraws
+and the lower reads are re-derived; it is never an LTF scenario.
+
+Scenarios are events at the edges, rendered with ready answers: **A** the
+nearest bias-side LB tap (over the cap, the nested same-side LB inside the
+zone is named as the refinement, V6); **B** the run of the bias-side edge —
+the level sweep there, or the next LTF bias-side trap inside the grid that
+clears `target_min_rr` and the cap, or the edge itself when it is an LB
+extreme; **C** the grid break (a 4h trade past the edge's buffered stop
+without a reclaim) — a redraw, not a trade; **D** the counter edge (run +
+reclaim → pullback origin; run without reclaim → continuation to the next
+rung beyond). Then what is not done (counter-bias LBs are pullback origins,
+nothing mid-grid without an event), partials, the 1h conditions per
+scenario (the reclaim structure, the 1h LB for the stop) and the timing
+line in exchange and local time. The brief order itself was chosen by the
+user (docs/MARCO-CASES.md → Approved changes).
+
+**Pocket flag on entries [CALIBRATION, user-raised 2026-09-10, built
+2026-09-11].** Two tiers on existing parameters. Within `eq_tolerance_atr`
+of a deeper intact level the map already prints no LB (pocket floor, §2.3).
+Within `respect_tolerance_atr` the LB exists but is *inside the pocket*: its
+tap is inducement — the buyers parked there are the fuel for the run of the
+floor — so the tap is downgraded ("no entry until the floor is run") and the
+sweep trigger at the floor is the preferred entry. The floor must be a
+*level* of liquidity; a deeper same-side LB extreme is the V6 stop
+refinement, not a trap. The H4 grid's tolerance governs the lower
+timeframes: a 15m LB whose extreme sits within the H4 respect distance of a
+level edge is inducement whatever the 15m ATR says (6E 15m 1.16405 inside
+the 4h pocket 1.16285–1.16515, 2026-09-11).
+
+**Ladder split [CALIBRATION, user, 2026-09-10].** A counter-bias LB on the
+path is a pullback origin, not liquidity: its near edge is a partial before
+the false reaction, its extreme is what continuation must run. Only the
+range extreme — the furthest such zone, "the overall highs" (V3) — is a
+target, and then its far edge is the final one. The story read prints
+"(LB, pullback origin)" versus "(LB, range extreme)"; never an LB zone
+bottom as liquidity (the 1.1668 correction, docs/MARCO-CASES.md U1). The V6
+check in §7.2 still holds: the top's bearish LB is the range extreme.
+
+**Contract roll [CALIBRATION, user, 2026-09-11].** Every brief records its
+price basis (the last 30 closed exec-TF bars); the next run re-reads the
+same bars from the chart. A constant difference on every shared bar is a
+roll with back-adjustment (6E1! U6→Z6, +40.5 pips, 2026-09-11): the weekly
+layer is shifted by the offset, the brief prints a roll note (redraw your
+lines and the journal plan by the same amount) and the new basis is
+stamped; a varying difference is a data problem, not a roll, and is said
+so. `--shift SYMBOL=offset` applies a manual shift while no stored basis
+exists yet.
+
 ## 4. Entry models
 
 ### 4.1 Zone tap (the base model)
@@ -524,6 +588,11 @@ Everything below is ours to tune — the videos show it by eye only.
 | A trigger's target steps to the next cluster below this RR (§3.1) | `target_min_rr` | 1.5 (the journal's min RR) |
 | Week-target clusters: D/4h levels closer than this are one draw | `eq_tolerance_atr` on the daily ATR (reused) | 0.25 ATR |
 | "Aligned" needs a live story; a stale trap + continuation is a lean | `story_fresh_bars` (reused) | 16 bars |
+| The H4 grid edge: the nearest alive LB extreme or build-up, chained through anything within this distance beyond it (§3.1) | `respect_tolerance_atr` (reused) | 0.75 ATR |
+| Pocket flag: a bias-side LB tap whose extreme sits this close above a deeper *level* is inducement (§3.1); the poke tier below it prints no LB | `respect_tolerance_atr` / `eq_tolerance_atr` (reused) | 0.75 / 0.25 ATR |
+| Scenario B inside the grid: an LTF sweep needs this RR and must fit the cap (§3.1) | `target_min_rr`, `max_risk_per_trade` (reused) | 1.5, $250 |
+| Contract roll: every shared basis bar differs by one constant, within this tolerance (§3.1) | half a tick (`contracts.json`) | — |
+| The timing line's local clock (§3.1) | `local_tz` | Europe/Athens |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
 09:55 replay experiment (§7.1): 1-tick zones made R math absurd, extremes
@@ -583,6 +652,17 @@ tuning any default:
     the early-week counter-trend setups. Writes `briefs/weekly/<ISO week>.md` and
     `.json`; `marco brief`/`scan` read the latest `.json` and stamp every
     intraday story `aligned` / `against` the weekly bias.
+  - `node src/cli/index.js marco daily [--compact] [--shift SYM=offset]` —
+    the morning run (§3.1): direction from the weekend brief, the H4 grid
+    (`h4Grid`), the 1h/15m/5m reads clipped to it (`clipToGrid`), the
+    pocket flag (`flagPocket`), scenarios A/B/C/D (`dailyScenarios`), the
+    contract-roll check (`detectRoll`, `shiftPrices`, `basisBars`) and the
+    approved brief (`renderDailyMarkdown`) — all pure, in
+    `src/core/marco_grid.js`, tested in `tests/marco_grid.test.js`. Writes
+    `briefs/daily/<date>.md` + `.json` (gitignored); the `.json` carries the
+    basis the next run compares against. These are reads over the same
+    map — no new state and no new parameter — so the Pine indicator is
+    unchanged.
   - Optional overrides live in `rules.json` → `marco` (gitignored, optional).
 - **`tests/marco.test.js`** (`npm run test:marco`) — fixture scenarios for
   every §§2–4 rule: sweep+reclaim, breakdown, build-up qualification,

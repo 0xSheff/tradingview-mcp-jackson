@@ -100,6 +100,11 @@ ChrisFX, CLS, EMA/RSI or the regular morning-brief reads.**
   liquidity story, LB zones and the 10 a.m. gate per symbol. Render per the
   `instruction` field. Allow a generous timeout for a live scan.
 - **Single symbol:** `node src/cli/index.js marco scan COMEX_MINI:MGC1! --tf 15`
+- **Morning brief:** `node src/cli/index.js marco daily --compact` — the nested
+  read (W/D direction → H4 grid → 1h inside it) with scenarios A/B/C/D and
+  contract-roll detection; writes `briefs/daily/<date>.md`. The case log and
+  the brief format live in `docs/MARCO-CASES.md`; the case procedure is the
+  `marco-case-review` skill.
 - **Indicator:** `scripts/marco_liquidity_blocks.pine`, saved on TradingView
   as the user's script "Liq blocks". It mirrors the exact state machine in
   `src/core/marco.js` — change defaults in both or neither.

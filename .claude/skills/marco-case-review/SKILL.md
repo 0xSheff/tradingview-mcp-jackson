@@ -19,6 +19,11 @@ to the rulebook or the engine.
    and *Engine gaps* say what has already been settled, so it is not re-argued.
 3. Check the latest weekly brief for the instrument: `briefs/weekly/<ISO week>.md`
    (gitignored; regenerate with `marco weekly` if missing and TradingView is up).
+4. For a case about the current day, run the morning brief first —
+   `node src/cli/index.js marco daily --compact` — and compare the user's markup
+   with its H4 grid and scenarios in `briefs/daily/<date>.md`. A contract roll is
+   detected against the previous run's basis; the first run after a roll with no
+   stored basis takes `--shift SYMBOL=offset` (the constant bar-to-bar difference).
 
 ## Per case
 

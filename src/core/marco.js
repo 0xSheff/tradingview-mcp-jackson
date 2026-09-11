@@ -12,9 +12,22 @@ import { fileURLToPath } from "node:url";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
 import { loadRules, loadWatchlist, loadContracts, contractSpec } from "./config.js";
+import {
+  h4Grid,
+  flagPocket,
+  clipToGrid,
+  detectRoll,
+  shiftPrices,
+  basisBars,
+  dailyScenarios,
+  renderDailyMarkdown,
+} from "./marco_grid.js";
+
+export { h4Grid, flagPocket, clipToGrid, detectRoll, shiftPrices, basisBars, dailyScenarios, renderDailyMarkdown };
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../");
 const WEEKLY_DIR = join(PROJECT_ROOT, "briefs", "weekly");
+const DAILY_DIR = join(PROJECT_ROOT, "briefs", "daily");
 
 export const MARCO_DEFAULTS = {
   timeframes: ["15", "60"],
@@ -46,6 +59,9 @@ export const MARCO_DEFAULTS = {
   // authority, this is the copy the engine sizes against. Override in
   // rules.json -> marco.max_risk_per_trade.
   max_risk_per_trade: 250,
+  // The trader's clock for the timing line of the daily brief (the gate is
+  // defined in exchange time, h4.exchange_tz). Override in rules.json.
+  local_tz: "Europe/Athens",
 
   // detection — every number is a [CALIBRATION] (docs/MARCO.md §6)
   pivot_len: 3, // swing = strictly lowest/highest of N bars each side
@@ -542,24 +558,38 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
 
   // targets = intact levels plus alive opposite-side LB zones beyond price —
   // "all the way back at the highs" (V6) is a tap into the top's bearish LB
-  const zoneTargets = (side, dir) =>
-    map.blocks
+  // Ladder split (docs/MARCO-CASES.md, U1 — built 2026-09-11): a counter-side
+  // LB on the path is a pullback origin, not liquidity — its near edge is a
+  // partial before the false reaction. Only the range extreme (the furthest
+  // zone, "the overall highs") is a target, and its far edge is the final one.
+  const zoneTargets = (side, dir) => {
+    const zs = map.blocks
       .filter((b) => !b.dead && b.side === side && (dir > 0 ? b.bot > price : b.top < price))
-      .map((b) => ({
-        price: round(dir > 0 ? b.bot : b.top),
-        touches: b.sweptTouches ?? 1,
-        buildup: b.qualified,
-        bars_ago: n - 1 - b.born,
-        kind: "lb",
-        zone: [round(b.bot), round(b.top)],
-      }));
+      .sort((a, b) => (dir > 0 ? a.bot - b.bot : b.top - a.top));
+    return zs.map((b, i) => ({
+      price: round(dir > 0 ? b.bot : b.top),
+      touches: b.sweptTouches ?? 1,
+      buildup: b.qualified,
+      bars_ago: n - 1 - b.born,
+      kind: "lb",
+      zone: [round(b.bot), round(b.top)],
+      role: i === zs.length - 1 ? "extreme" : "pullback_origin",
+      extreme: round(dir > 0 ? b.top : b.bot),
+    }));
+  };
   const targetsAbove = [...above.map((l) => ({ ...l, kind: "level" })), ...zoneTargets("bear", 1)].sort(
     (a, b) => a.price - b.price,
   );
   const targetsBelow = [...below.map((l) => ({ ...l, kind: "level" })), ...zoneTargets("bull", -1)].sort(
     (a, b) => b.price - a.price,
   );
-  const tgtTxt = (arr) => arr.slice(0, 3).map((t) => (t.kind === "lb" ? `${t.price} (LB)` : `${t.price}`)).join(", ");
+  const tgtTxt = (arr) =>
+    arr
+      .slice(0, 3)
+      .map((t) =>
+        t.kind !== "lb" ? `${t.price}` : t.role === "extreme" ? `${t.price}–${t.extreme} (LB, range extreme)` : `${t.price} (LB, pullback origin)`,
+      )
+      .join(", ");
 
   const recent = map.events.filter((e) => n - 1 - e.bar <= cfg.story_lookback);
   const lastOf = (...types) => [...recent].reverse().find((e) => types.includes(e.type)) ?? null;
@@ -1047,7 +1077,7 @@ export function falseReactions(map, price, direction, { max = 3 } = {}) {
 }
 
 /** One timeframe's full read: story + zones + levels + the 10 a.m. gate. */
-export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = null, counter = false } = {}) {
+export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = null, counter = false, withMap = false } = {}) {
   if (!Array.isArray(bars) || bars.length < cfg.pivot_len * 2 + 10) {
     return { error: "not enough bars", bars: bars?.length ?? 0 };
   }
@@ -1102,14 +1132,25 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = n
     .sort((a, b) => (a.status === b.status ? a.age_bars - b.age_bars : a.status === "intact" ? -1 : 1))
     .slice(0, 8);
 
+  const triggers = triggerSetups(map, bars, cfg, { direction: dir });
+  // pocket flag on entries (docs/MARCO-CASES.md — built 2026-09-11): a
+  // bias-side LB whose extreme sits within respect_tolerance of a deeper
+  // level or LB extreme is inside the pocket — its tap is inducement
+  const pockets = flagPocket(triggers, map, bars, cfg, dir);
+  for (const b of blocks) {
+    const ext = b.side === "bull" ? b.zone[0] : b.zone[1];
+    if (b.role === "entry" && pockets.has(ext)) b.pocket = pockets.get(ext);
+  }
+
   return {
     bars_analyzed: n,
     last_price: story.price,
-    story: { mode: story.mode, direction: story.direction, read: story.read, lb: story.lb, draw: story.draw },
+    story: { mode: story.mode, direction: story.direction, fresh: story.fresh, read: story.read, lb: story.lb, draw: story.draw },
     bias_used: dir,
     bias_source: biasSource,
     blocks,
-    triggers: triggerSetups(map, bars, cfg, { direction: dir }),
+    triggers,
+    ...(withMap ? { map } : {}),
     // Counter-bias entries. On any other day these zones are inducement and
     // must NOT be rendered as tradeable, so this is opt-in: only the daily
     // run asks for it, and only Mon-Tue, when the strategy's early-week
@@ -1504,7 +1545,17 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
         )
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 4);
-      results.push({ symbol, price, bias, intraweek, triggers, false_reactions, htf_zones });
+      results.push({
+        symbol,
+        price,
+        bias,
+        intraweek,
+        triggers,
+        false_reactions,
+        htf_zones,
+        // the price basis a later run compares against (contract roll detection)
+        basis: { [execTf]: basisBars(reads[execTf].bars) },
+      });
     } catch (err) {
       results.push({ symbol, error: err.message });
     }
@@ -1720,14 +1771,51 @@ function attachRisk(triggers, spec, cap) {
 }
 
 /**
- * The daily morning run (docs/MARCO.md — "the weekend sets direction, the
- * morning sets the setup", 2026-09-09). Direction comes from the weekend
- * brief; everything actionable — triggers, stops, RR, dollar risk, the cap
- * check, the 10am gate — is computed live on Marco's own cascade the
- * morning it is used. Counter-trend triggers appear on Monday and Tuesday
- * only, because that is when the allowance is live.
+ * Latest daily brief on disk (by file name), or null. `before` = a trading
+ * day: a same-day re-run compares against the previous day's run, not
+ * against itself — "since the last check" must span a night.
  */
-export async function runMarcoDaily({ rules_path, symbols, timeframes, today } = {}) {
+export function loadLatestDaily(dir = DAILY_DIR, { before = null } = {}) {
+  if (!existsSync(dir)) return null;
+  const files = readdirSync(dir)
+    .filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f) && (!before || f.slice(0, 10) < before))
+    .sort();
+  if (!files.length) return null;
+  try {
+    return JSON.parse(readFileSync(join(dir, files[files.length - 1]), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** `--shift SYMBOL=offset` (repeatable) → Map. */
+function parseShift(shift) {
+  const out = new Map();
+  for (const s of Array.isArray(shift) ? shift : shift ? [shift] : []) {
+    const at = String(s).lastIndexOf("=");
+    if (at <= 0) throw new Error(`--shift expects SYMBOL=offset, got "${s}"`);
+    const sym = s.slice(0, at);
+    const off = Number(s.slice(at + 1));
+    if (!Number.isFinite(off)) throw new Error(`--shift ${sym}: "${s.slice(at + 1)}" is not a number`);
+    out.set(sym, off);
+  }
+  return out;
+}
+
+/**
+ * The daily morning run (docs/MARCO.md — "the weekend sets direction, the
+ * morning sets the setup", 2026-09-09; the nested read and the approved
+ * brief format, docs/MARCO-CASES.md, 2026-09-10/11). Direction comes from
+ * the weekend brief; everything actionable — the H4 grid, the LTF reads
+ * clipped to it, scenarios A/B/C/D, stops, RR, dollar risk, the cap check,
+ * the 10am gate — is computed live on Marco's own cascade the morning it is
+ * used. Counter-trend triggers appear on Monday and Tuesday only. Every run
+ * records its price basis and compares the same bars against the previous
+ * run (or the weekly brief) so a contract roll with back-adjustment shifts
+ * the weekly layer instead of silently misplacing it. Writes
+ * briefs/daily/<date>.json + .md.
+ */
+export async function runMarcoDaily({ rules_path, symbols, timeframes, today, shift, out_dir } = {}) {
   let rules = {};
   try {
     rules = loadRules(rules_path).rules;
@@ -1736,7 +1824,8 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today } =
   }
   const cfg = mergeConfig(rules);
   const { contracts, path: contractsPath } = loadContracts();
-  const tfs = timeframes?.length ? timeframes : cfg.daily_timeframes;
+  const tfs = (timeframes?.length ? timeframes : cfg.daily_timeframes).map(String);
+  const execTf = String(cfg.htf?.timeframe ?? "240");
   const watchlist = symbols?.length ? symbols : loadWatchlist(cfg.watchlist_section).watchlist;
   if (!watchlist.length) {
     throw new Error(`watchlists.json "${cfg.watchlist_section}" is empty. Add at least one symbol.`);
@@ -1753,6 +1842,10 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today } =
     );
   }
   const weeklyFor = (symbol) => weekly?.symbols?.find((s) => s.symbol === symbol && !s.error) ?? null;
+  const dailyDir = out_dir ? resolve(out_dir) : DAILY_DIR;
+  const prevDaily = loadLatestDaily(dailyDir, { before: now.toISOString().slice(0, 10) });
+  const prevFor = (symbol) => prevDaily?.results?.find((s) => s.symbol === symbol && !s.error) ?? null;
+  const manualShift = parseShift(shift);
 
   let originalSymbol;
   let originalTimeframe;
@@ -1767,8 +1860,8 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today } =
   const results = [];
   for (const symbol of watchlist) {
     try {
-      const wk = weeklyFor(symbol);
-      if (!wk) {
+      const wk0 = weeklyFor(symbol);
+      if (!wk0) {
         results.push({ symbol, skipped: `not in the ${weekly.week} weekly brief — no direction to trade from` });
         continue;
       }
@@ -1776,18 +1869,17 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today } =
       await chart.setSymbol({ symbol });
       await sleep(900);
 
-      const perTf = {};
-      let htfBars = null;
+      // 1. fetch every timeframe first — the roll check needs the exec TF
+      // before anything is read off the weekly layer
+      const barsBy = {};
       let short = null;
-
       for (const tf of tfs) {
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
-
         // A key timeframe that comes up short is usually still loading:
         // wait and refetch before failing. Depth is never annotated away —
         // either the analysis stands on enough bars or it is not produced.
-        const isKey = (cfg.key_timeframes ?? []).map(String).includes(String(tf));
+        const isKey = (cfg.key_timeframes ?? []).map(String).includes(tf);
         const need = cfg.min_bars?.[tf] ?? 0;
         let bars = (await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars;
         for (let i = 0; isKey && bars.length < need && i < (cfg.history_retries ?? 0); i++) {
@@ -1799,47 +1891,112 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today } =
             short = `${tf}m has ${bars.length} bars, needs ${need} — the chart has not loaded enough history for a trustworthy read`;
             break;
           }
-          perTf[tf] = { error: `insufficient history: ${bars.length} bars, needs ${need}` };
+          barsBy[tf] = { error: `insufficient history: ${bars.length} bars, needs ${need}` };
           continue;
         }
+        barsBy[tf] = bars;
+      }
+      if (short) {
+        results.push({ symbol, error: short });
+        continue;
+      }
+      const execBars = Array.isArray(barsBy[execTf]) ? barsBy[execTf] : null;
 
-        if (tf === String(cfg.htf?.timeframe)) htfBars = bars;
-        const htfMap = htfBars ? buildLiquidityMap(htfBars, cfg) : null;
+      // 2. contract roll: the same bars, read against the last stored basis
+      const prev = prevFor(symbol);
+      const ref = prev?.basis?.[execTf]
+        ? { bars: prev.basis[execTf], from: `daily ${prevDaily.trading_day}`, carried: prev.weekly_shift ?? 0 }
+        : wk0.basis?.[execTf]
+          ? { bars: wk0.basis[execTf], from: `weekly ${weekly.week}`, carried: 0 }
+          : null;
+      let roll = { status: "unknown", offset: 0, note: "no stored basis to compare against — this run records one" };
+      let weeklyShift = ref?.carried ?? 0;
+      if (ref && execBars) {
+        const r = detectRoll(ref.bars, execBars, { tick: spec?.tick ?? null });
+        roll = { ...r, compared_to: ref.from };
+        if (r.status === "rolled") {
+          weeklyShift = round((ref.carried ?? 0) + r.offset);
+          roll.note = `the ${execTf}m series moved by ${r.offset > 0 ? "+" : ""}${r.offset} on every shared bar since ${ref.from} — a contract roll with back-adjustment.`;
+        } else if (r.status === "inconsistent") {
+          roll.note = `the ${execTf}m bars differ from ${ref.from} by a varying amount (spread ${r.spread}) — a data problem, not a roll; the weekly layer is used as stored.`;
+        } else if (r.status === "same") {
+          roll.note = `same basis as ${ref.from}${weeklyShift ? ` (carrying the earlier shift ${weeklyShift})` : ""}.`;
+        } else {
+          roll.note = `too few shared bars with ${ref.from} to compare.`;
+        }
+      }
+      if (manualShift.has(symbol)) {
+        weeklyShift = manualShift.get(symbol);
+        roll = { status: "rolled", offset: weeklyShift, compared_to: "manual --shift", note: `manual shift ${weeklyShift} applied to the weekly layer (--shift).` };
+      }
+      const wk = weeklyShift ? shiftPrices(wk0, weeklyShift) : wk0;
+      const bias = wk.bias.bias || null;
+
+      // 3. one read per timeframe, the exec TF seeding the rest
+      const perTf = {};
+      const htfMap = execBars ? buildLiquidityMap(execBars, cfg) : null;
+      for (const tf of tfs) {
+        const bars = barsBy[tf];
+        if (!Array.isArray(bars)) {
+          perTf[tf] = bars ?? { error: "no bars" };
+          continue;
+        }
         const read = analyzeMarco(bars, cfg, {
-          bias: wk.bias.bias || null,
+          bias,
           counter: counterOk,
+          withMap: tf === execTf,
           seed:
-            htfMap && tf !== String(cfg.htf?.timeframe)
-              ? seedFromMap(htfMap, htfBars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg })
+            htfMap && tf !== execTf
+              ? seedFromMap(htfMap, execBars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg })
               : null,
         });
         if (!read.error) {
           read.bars_analyzed = bars.length;
           attachRisk(read.triggers, spec, cfg.max_risk_per_trade);
           attachRisk(read.counter_triggers, spec, cfg.max_risk_per_trade);
-          read.alignment = alignmentOf(read.story.direction, wk.bias.bias);
+          read.alignment = alignmentOf(read.story.direction, bias);
         }
         perTf[tf] = read;
       }
 
-      if (short) {
-        results.push({ symbol, error: short });
-        continue;
+      // 4. the H4 grid, the LTF reads clipped to it, the scenarios
+      let grid = null;
+      const rExec = perTf[execTf];
+      if (rExec && !rExec.error && rExec.map && execBars) {
+        let sinceBar = null;
+        if (prevDaily?.generated_at) {
+          const prevSec = Date.parse(prevDaily.generated_at) / 1000;
+          const idx = execBars.findIndex((b) => b.time > prevSec);
+          sinceBar = idx < 0 ? execBars.length - 1 : Math.max(0, idx - 1);
+        }
+        grid = h4Grid(rExec.map, execBars, cfg, { bias: bias ?? 0, sinceBar });
+        for (const tf of tfs) if (tf !== execTf) clipToGrid(perTf[tf], grid, bias);
       }
+      if (rExec) delete rExec.map;
+      const scenarios =
+        grid && bias ? dailyScenarios({ grid, reads: perTf, bias, cfg, tfs, spec, cap: cfg.max_risk_per_trade }) : null;
 
       const quote = await data.getQuote({});
+      const primary = wk.bias.targets?.find((t) => t.price === wk.bias.primary_target) ?? null;
       results.push({
         symbol,
         quote,
         contract: spec ? { usd_per_point: spec.usd_per_point, journal: spec.journal } : null,
+        roll,
+        weekly_shift: weeklyShift,
         weekly: {
           week: weekly.week,
           bias: wk.bias.bias_word,
           regime: wk.bias.regime,
+          stale: wk.bias.stale === true,
           invalidation: wk.bias.invalidation,
           primary_target: wk.bias.primary_target,
+          primary_atr_weeks: primary?.atr_weeks ?? null,
         },
+        grid,
+        scenarios,
         timeframes: perTf,
+        basis: execBars ? { [execTf]: basisBars(execBars) } : {},
       });
     } catch (err) {
       results.push({ symbol, error: err.message });
@@ -1856,7 +2013,7 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today } =
     /* best-effort restore */
   }
 
-  return {
+  const result = {
     generated_at: new Date().toISOString(),
     trading_day: now.toISOString().slice(0, 10),
     weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dow],
@@ -1867,10 +2024,21 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today } =
     direction_from: `briefs/weekly/${weekly.week} (global layer)`,
     risk_cap: cfg.max_risk_per_trade,
     contracts_path: contractsPath,
-    methodology: "docs/MARCO.md — Accettone liquidity blocks",
+    timeframes: tfs,
+    exec_timeframe: execTf,
+    exchange_tz: cfg.h4?.exchange_tz ?? "America/New_York",
+    local_tz: cfg.local_tz ?? null,
+    methodology: "docs/MARCO.md — Accettone liquidity blocks; docs/MARCO-CASES.md — the nested read and the brief format",
     results,
   };
+  mkdirSync(dailyDir, { recursive: true });
+  const jsonPath = join(dailyDir, `${result.trading_day}.json`);
+  const mdPath = join(dailyDir, `${result.trading_day}.md`);
+  writeFileSync(jsonPath, JSON.stringify(result, null, 2));
+  writeFileSync(mdPath, renderDailyMarkdown(result));
+  return { ...result, files: { json: jsonPath, markdown: mdPath } };
 }
+
 
 export function compactMarcoBrief(brief) {
   return {
@@ -1939,54 +2107,7 @@ export function compactMarcoBrief(brief) {
  * maps straight onto a journal setup rung (see the K-indexed format in
  * .claude/skills/journal-weekly-plan/SKILL.md).
  */
+/** The approved intraday brief (docs/MARCO-CASES.md → Approved changes). Kept under the old name for the CLI. */
 export function compactMarcoDaily(daily) {
-  const r2 = (n) => (n == null ? null : Math.round(n * 100) / 100);
-  const money = (g) =>
-    g.risk_usd == null ? g.risk_note ?? "risk n/a" : `$${Math.round(g.risk_usd)}${g.over_cap ? " ⚠ OVER CAP" : ""}`;
-  const trig = (g) => {
-    const where =
-      g.kind === "tap"
-        ? `tap ${g.trigger} (LB ${g.stop_anchor?.[0]}–${g.stop_anchor?.[1]})`
-        : `sweep ${g.side === "long" ? "<" : ">"} ${g.trigger}${g.confirmed ? ` x${g.touches}` : " unconf"}`;
-    if (g.stop == null) return `      ${g.side} ${where} — no stop anchor, not takeable`;
-    const flags = [g.confirmed && g.kind === "tap" ? "Q" : null, g.tapped ? "tapped" : null].filter(Boolean).join(" ");
-    return `      ${g.side} ${where}${flags ? ` [${flags}]` : ""} · stop ${g.stop} · T ${g.target ?? "—"} · RR ${r2(g.rr) ?? "—"} · ${money(g)}`;
-  };
-
-  const out = [
-    `Marco daily — ${daily.trading_day} (${daily.weekday})`,
-    `Direction from ${daily.direction_from} · risk cap $${daily.risk_cap} at size 1`,
-    `Counter-trend: ${daily.counter_trend_note}`,
-    "",
-  ];
-
-  for (const r of daily.results) {
-    if (r.skipped) { out.push(`## ${r.symbol} — skipped: ${r.skipped}`, ""); continue; }
-    if (r.error) { out.push(`## ${r.symbol} — ERROR: ${r.error}`, ""); continue; }
-    const inv = r.weekly.invalidation;
-    out.push(`## ${r.symbol}${r.contract ? ` (${r.contract.journal})` : ""} — ${r.quote?.last ?? "?"}`);
-    out.push(`   W ${r.weekly.bias}/${r.weekly.regime}${inv ? ` · inval ${inv.level} ${inv.rule}` : ""}${r.contract ? "" : " · ⚠ NO CONTRACT SPEC — no dollar risk"}`);
-
-    // The 10am gate is a property of the symbol, not of each timeframe.
-    const gate = Object.values(r.timeframes).map((t) => t.h4_model).find((h) => h?.available);
-    if (gate) {
-      out.push(`   H4 gate (${gate.h4_date}, ${gate.phase}): H ${gate.h4_high} / L ${gate.h4_low}`);
-      out.push(`     longs: ${gate.longs}`);
-      out.push(`     shorts: ${gate.shorts}`);
-      if (gate.note) out.push(`     ${gate.note}`);
-    }
-
-    for (const [tf, t] of Object.entries(r.timeframes)) {
-      if (t.error) { out.push(`   ${tf}: ${t.error}`); continue; }
-      const story = t.story.read.split(" — ")[0];
-      out.push(`   ${tf} · ${t.bars_analyzed} bars · ${t.alignment} · ${story}`);
-      for (const g of t.triggers ?? []) out.push(trig(g));
-      if (t.counter_triggers?.length) {
-        out.push(`     counter-trend (allowance open today):`);
-        for (const g of t.counter_triggers) out.push(trig(g));
-      }
-    }
-    out.push("");
-  }
-  return out.join("\n");
+  return renderDailyMarkdown(daily);
 }

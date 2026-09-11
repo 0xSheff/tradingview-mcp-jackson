@@ -256,8 +256,14 @@ export async function getQuote({ symbol } = {}) {
     (function() {
       var api = ${CHART_API};
       var sym = '${symbol || ''}';
-      if (!sym) { try { sym = api.symbol(); } catch(e) {} }
-      if (!sym) { try { sym = api.symbolExt().symbol; } catch(e) {} }
+      var chartSym = '';
+      try { chartSym = api.symbol(); } catch(e) {}
+      if (!chartSym) { try { chartSym = api.symbolExt().symbol; } catch(e) {} }
+      // this reads the chart's own series — a different symbol would come
+      // back mislabelled (6EU2026 and 6EZ2026 both returned 6E1!'s bars)
+      var tail = function (s) { return String(s || '').split(':').pop().toUpperCase(); };
+      if (sym && chartSym && tail(sym) !== tail(chartSym)) return { mismatch: true, chart_symbol: chartSym, requested: sym };
+      if (!sym) sym = chartSym;
       var ext = {};
       try { ext = api.symbolExt() || {}; } catch(e) {}
       var bars = ${BARS_PATH};
@@ -282,6 +288,12 @@ export async function getQuote({ symbol } = {}) {
       return quote;
     })()
   `);
+  if (data && data.mismatch) {
+    throw new Error(
+      `quote_get reads the chart's series only — the chart is on ${data.chart_symbol}, not ${data.requested}; ` +
+        'set the chart to that symbol first (chart_set_symbol) or pass no symbol',
+    );
+  }
   if (!data || (!data.last && !data.close)) throw new Error('Could not retrieve quote. The chart may still be loading.');
   return { success: true, ...data };
 }
