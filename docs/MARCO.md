@@ -428,6 +428,24 @@ scenario (the reclaim structure, the 1h LB for the stop) and the timing
 line in exchange and local time. The brief order itself was chosen by the
 user (docs/MARCO-CASES.md → Approved changes).
 
+**PENDING — the run before the reclaim [CALIBRATION, user, 2026-09-12].**
+An edge run within the last bars is not no-man's land, and it is not yet a
+direction either. If the run bar closed back through the level, the trap is
+in (the *yes* answer: the LB it left is the new edge, A/B are entries). If
+it closed beyond and the reclaim has not come, the map has consumed the
+level without printing an LB, and a naive grid would jump to the next rung
+in the very moment V6 calls the reaction structure ("just because we took
+the low does not mean buy right away"). The engine therefore exposes the
+unresolved sweep (`map.pending`: level, excursion extreme, bars since the
+run, bars left of `confirm_bars`), the grid keeps that side's edge at the run
+level with the excursion extreme as the kill, "what we wait for" answers
+**pending**, A becomes the reclaim itself (a 1h/15m close back through the
+level within the bars left → entry on the tap of the LB it leaves, stop
+beyond the extreme), B "the run deepens" (a new extreme moves the stop, no
+entry beyond the level), C the breakdown (no reclaim in time → the level is
+consumed, the grid redraws). A pending run of the *counter* edge is written
+into D: a close back = pullback origin, a miss = continuation.
+
 **Pocket flag on entries [CALIBRATION, user-raised 2026-09-10, built
 2026-09-11].** Two tiers on existing parameters. Within `eq_tolerance_atr`
 of a deeper intact level the map already prints no LB (pocket floor, §2.3).

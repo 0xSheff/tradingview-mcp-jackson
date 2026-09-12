@@ -18,6 +18,7 @@ import {
   renderDailyMarkdown,
   triggerSetups,
   storyRead,
+  buildLiquidityMap,
 } from "../src/core/marco.js";
 
 const CFG = { ...MARCO_DEFAULTS, pivot_len: 1, atr_length: 3, min_touches: 2, respect_tolerance_atr: 0.75, eq_tolerance_atr: 0.25, stop_buffer_atr: 0.1 };
@@ -289,4 +290,83 @@ test("dailyScenarios + renderDailyMarkdown: A is inducement when pocketed, B is 
   ]) {
     assert.ok(md.includes(needle), `brief is missing: ${needle}\n---\n${md}`);
   }
+});
+
+test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run level, the map exposes the sweep, the scenarios make the reclaim the event", () => {
+  // the sweep bar closes below the level; the next bar has not reclaimed yet
+  const rows = [
+    [101, 102, 100.8, 101.5],
+    [101.5, 102, 100.0, 101.0], // pivot low 100.0
+    [101, 103, 100.5, 102.5],
+    [102.5, 103.5, 101.5, 103],
+    [103, 103.2, 99.5, 99.8], // run of 100.0, close below → pending
+    [99.8, 100.5, 99.6, 99.9], // still below
+  ];
+  const bars = rows.map(([o, h, l, c], i) => ({ time: 1_756_200_000 + i * 900, open: o, high: h, low: l, close: c }));
+  const cfg = { ...MARCO_DEFAULTS, pivot_len: 1, atr_length: 3, confirm_bars: 2, min_touches: 2, min_level_age: 50 };
+  const map = buildLiquidityMap(bars, cfg);
+  assert.ok(map.pending.bull, "the unresolved sweep is exposed");
+  assert.equal(map.pending.bull.level, 100);
+  assert.equal(map.pending.bull.ext, 99.5);
+  assert.equal(map.pending.bull.run_bar, 4);
+  assert.equal(map.pending.bull.missed, 2);
+  assert.equal(map.pending.bull.bars_left, 1);
+  assert.equal(map.pending.bear, null);
+  assert.equal(map.blocks.length, 0, "no LB yet");
+  assert.equal(map.levels.lows.length, 0, "the level is consumed");
+
+  // the grid on a hand map with the same pending: the bias edge is the run level, not the next rung
+  const m = handMap();
+  m.levels.lows = m.levels.lows.filter((l) => l.price !== 99.6);
+  m.blocks = m.blocks.filter((b) => !(b.side === "bull" && b.bot === 98.6));
+  m.pending = { bull: { level: 99.6, touches: 2, ext: 99.1, run_bar: n - 3, missed: 2, bars_left: 2, qualified: true }, bear: null };
+  const g = h4Grid(m, BARS, CFG, { bias: 1 });
+  assert.equal(g.lower.edge, 99.6);
+  assert.equal(g.lower.floor_kind, "pending");
+  assert.equal(g.lower.kill, 99.1);
+  assert.equal(g.lower.pending.bars_since_run, 2);
+  assert.deepEqual(g.lower.pending.lb_if_reclaimed, [99.1, 99.6]);
+  assert.deepEqual(g.lower.beyond.map((r) => r.price), [98.2, 95]);
+  assert.equal(g.state, "pending_low");
+  assert.equal(g.upper.edge, 102.4);
+
+  const reads = {
+    240: {
+      story: { mode: "no_mans_land", direction: 0, fresh: null, read: "build-up phase" },
+      triggers: [],
+      false_reactions: [],
+      liquidity: { intact_above: [{ price: 101, touches: 1 }], intact_below: [] },
+      alignment: "none",
+    },
+    60: { story: { mode: "no_mans_land", direction: 0, read: "1h" }, triggers: [], false_reactions: [], liquidity: { intact_above: [], intact_below: [] }, alignment: "none" },
+  };
+  const sc = dailyScenarios({ grid: g, reads, bias: 1, cfg: CFG, tfs: ["240", "60"], spec: { usd_per_point: 100 }, cap: 250 });
+  assert.equal(sc.wait_for.answer, "pending");
+  assert.match(sc.wait_for.read, /low 99.6 x2 run 2 bars ago to 99.1 — reclaim not confirmed, 2 of 3 bars left/);
+  assert.equal(sc.A.label, "A — the reclaim (the event)");
+  assert.equal(sc.A.trigger, 99.6);
+  assert.equal(sc.A.stop, 98.9); // 99.1 − 0.1 ATR (ATR 2)
+  assert.equal(sc.A.target, 101);
+  assert.equal(sc.A.rr, 2);
+  assert.equal(sc.A.risk_usd, 70);
+  assert.equal(sc.B.label, "B — the run deepens");
+  assert.equal(sc.C.label, "Grid break — breakdown, redraw");
+  assert.match(sc.C.text, /within 2 bar\(s\)/);
+  assert.equal(sc.C.next_edge.price, 98.2);
+  assert.ok(sc.not_done[0].startsWith("no entries on the run itself"));
+  assert.match(sc.h1.conditions[0], /^A: a 1h\/15m close back above 99.6 within 2 4h bar\(s\)/);
+
+  const md = renderDailyMarkdown({
+    generated_at: "x",
+    trading_day: "2026-09-12",
+    weekday: "Sat",
+    counter_trend_note: "closed",
+    direction_from: "w",
+    risk_cap: 250,
+    timeframes: ["240", "60"],
+    results: [{ symbol: "T", quote: { last: 100 }, contract: { journal: "T" }, roll: { status: "unknown" }, weekly: { bias: "long", regime: "aligned", primary_target: 110, invalidation: null }, grid: g, scenarios: sc, timeframes: reads }],
+  });
+  assert.ok(md.includes("▼ 99.6 bias edge — PENDING: run to 99.1 2 bars ago, reclaim not confirmed (2 of 3 bars left)"), md);
+  assert.ok(md.includes("● 100 price — the run is unresolved (PENDING)"), md);
+  assert.ok(md.includes("Bias-side run + reclaim: **PENDING** (4h)"), md);
 });

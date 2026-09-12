@@ -313,7 +313,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           // LB (docs/MARCO.md §7.1 — the Oct-2023 NQ bottom)
           if (blk.side === "bull") {
             if (!pendBull) {
-              pendBull = { lvl: blk.bot, touches: 1, age: i - blk.extBar, ext: b.low, extBar: i, miss: 0 };
+              pendBull = { lvl: blk.bot, touches: 1, age: i - blk.extBar, ext: b.low, extBar: i, bar: i, miss: 0 };
             } else {
               pendBull.lvl = Math.min(pendBull.lvl, blk.bot);
               pendBull.age = Math.max(pendBull.age, i - blk.extBar);
@@ -321,7 +321,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
             events.push({ bar: i, type: "low_swept", level: blk.bot, touches: 1, from_lb: true });
           } else {
             if (!pendBear) {
-              pendBear = { lvl: blk.top, touches: 1, age: i - blk.extBar, ext: b.high, extBar: i, miss: 0 };
+              pendBear = { lvl: blk.top, touches: 1, age: i - blk.extBar, ext: b.high, extBar: i, bar: i, miss: 0 };
             } else {
               pendBear.lvl = Math.max(pendBear.lvl, blk.top);
               pendBear.age = Math.max(pendBear.age, i - blk.extBar);
@@ -368,7 +368,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           continue;
         }
         if (!pendBull) {
-          pendBull = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.low, extBar: i, miss: 0, buildup: lv.buildup ?? null };
+          pendBull = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.low, extBar: i, bar: i, miss: 0, buildup: lv.buildup ?? null };
         } else {
           if (lv.buildup != null && lv.touches >= pendBull.touches) pendBull.buildup = lv.buildup;
           pendBull.lvl = Math.min(pendBull.lvl, lv.price);
@@ -397,7 +397,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           continue;
         }
         if (!pendBear) {
-          pendBear = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.high, extBar: i, miss: 0, buildup: lv.buildup ?? null };
+          pendBear = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.high, extBar: i, bar: i, miss: 0, buildup: lv.buildup ?? null };
         } else {
           if (lv.buildup != null && lv.touches >= pendBear.touches) pendBear.buildup = lv.buildup;
           pendBear.lvl = Math.max(pendBear.lvl, lv.price);
@@ -513,7 +513,26 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
     }
   }
 
-  return { levels: { lows: lowLvls, highs: highLvls }, blocks, events, buildups };
+  // An unresolved sweep at the end of the series (docs/MARCO.md §3.1, the
+  // PENDING state): the level is consumed, the LB is not born yet — the
+  // reclaim within confirm_bars is the event, a miss is the breakdown.
+  const pending = (p, side) =>
+    p
+      ? {
+          side,
+          level: p.lvl,
+          touches: p.touches,
+          age: p.age,
+          ext: p.ext,
+          ext_bar: p.extBar,
+          run_bar: p.bar ?? p.extBar,
+          missed: p.miss,
+          bars_left: Math.max(0, cfg.confirm_bars + 1 - p.miss),
+          qualified: p.touches >= cfg.min_touches || p.age >= cfg.min_level_age,
+          buildup: p.buildup ?? null,
+        }
+      : null;
+  return { levels: { lows: lowLvls, highs: highLvls }, blocks, events, buildups, pending: { bull: pending(pendBull, "bull"), bear: pending(pendBear, "bear") } };
 }
 
 /**

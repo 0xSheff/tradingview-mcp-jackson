@@ -89,6 +89,34 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
   const sideOf = (side) => {
     const isLow = side === "below";
     const items = itemsOf(side);
+    // PENDING (docs/MARCO.md §3.1): the edge was run but the reclaim is not
+    // confirmed yet — the level is gone from the map, the LB is not born.
+    // The edge stays at the run level until the sweep resolves; everything
+    // on this side is what the grid falls back to on a breakdown.
+    const p = (map.pending ?? {})[isLow ? "bull" : "bear"] ?? null;
+    if (p) {
+      return {
+        edge: round(p.level),
+        anchor: { kind: "pending", price: round(p.level), touches: p.touches, buildup: p.touches >= cfg.min_touches },
+        cluster: [],
+        weak: false,
+        chained: false,
+        floor_kind: "pending",
+        rungs: [],
+        beyond: items.slice(0, 3),
+        kill: round(p.ext),
+        pending: {
+          level: round(p.level),
+          ext: round(p.ext),
+          touches: p.touches,
+          qualified: p.qualified,
+          bars_since_run: n - 1 - p.run_bar,
+          bars_left: p.bars_left,
+          confirm_bars: cfg.confirm_bars,
+          lb_if_reclaimed: isLow ? [round(p.ext), round(p.level)] : [round(p.level), round(p.ext)],
+        },
+      };
+    }
     const strong = items.filter((it) => it.kind === "lb" || it.buildup);
     const anchor = strong[0] ?? items[0] ?? null;
     if (!anchor) return { edge: null, anchor: null, cluster: [], weak: true, chained: false, floor_kind: null, rungs: [], beyond: [], kill: null };
@@ -151,6 +179,7 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
       ...(e.floor !== undefined ? { floor: round(e.floor), ext: round(e.ext) } : {}),
     }));
 
+  const inside = lower.edge !== null && upper.edge !== null && price > lower.edge && price < upper.edge;
   return {
     price: round(price),
     atr: round(atrNow),
@@ -158,7 +187,8 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
     bias,
     lower,
     upper,
-    inside: lower.edge !== null && upper.edge !== null && price > lower.edge && price < upper.edge,
+    inside,
+    state: lower.pending ? "pending_low" : upper.pending ? "pending_high" : inside ? "inside" : "outside",
     since,
   };
 }
@@ -373,16 +403,31 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
       .flatMap((tf) => (reads[tf]?.triggers ?? []).filter((t) => t.kind === kind && t.side === side && pred(t)).map((t) => ({ tf, ...t })))
       .sort((a, b) => a.distance - b.distance);
   const beyondPrice = (t) => t.target != null && (long ? t.target > grid.price : t.target < grid.price);
+  const pendBias = biasEdge.pending ?? null;
+  const pendCounter = counterEdge.pending ?? null;
+  const agoTxt = (k) => (k === 0 ? "this bar" : k === 1 ? "1 bar ago" : `${k} bars ago`);
 
-  // the one question
+  // the one question — three answers: yes (trap in), no (no-man's land),
+  // pending (the edge was run, the reclaim is not confirmed: V6 "just
+  // because we took the low does not mean buy right away")
   const storyDir = (s) => (s?.mode === "buy_story" ? 1 : s?.mode === "sell_story" ? -1 : 0);
   const eventIn = ["240", "60"].find((tf) => storyDir(reads[tf]?.story) === bias) ?? null;
-  const waitFor = {
-    answer: eventIn ? "yes" : "no",
-    read: eventIn ? reads[eventIn].story.read : reads["240"]?.story?.read ?? null,
-    timeframe: eventIn,
-    fresh: eventIn ? reads[eventIn].story.fresh : null,
-  };
+  const waitFor = pendBias
+    ? {
+        answer: "pending",
+        timeframe: "240",
+        fresh: true,
+        read:
+          `${long ? "low" : "high"} ${fmt(pendBias.level)}${pendBias.touches > 1 ? ` x${pendBias.touches}` : ""} run ${agoTxt(pendBias.bars_since_run)} to ${fmt(pendBias.ext)} — ` +
+          `reclaim not confirmed, ${pendBias.bars_left} of ${pendBias.confirm_bars} bars left: a close back ${long ? "above" : "below"} ${fmt(pendBias.level)} is the trap ` +
+          `(${long ? "bull" : "bear"} LB ${zoneTxt(pendBias.lb_if_reclaimed)}), a miss is the breakdown`,
+      }
+    : {
+        answer: eventIn ? "yes" : "no",
+        read: eventIn ? reads[eventIn].story.read : reads["240"]?.story?.read ?? null,
+        timeframe: eventIn,
+        fresh: eventIn ? reads[eventIn].story.fresh : null,
+      };
 
   // A — the nearest bias-side LB tap (240 first at equal distance). Over the
   // cap, the V6 refinement is a nested same-side LB inside the zone with a
@@ -418,9 +463,10 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
   );
   let B = atEdge ?? insideGrid ?? null;
   let Bkind = atEdge ? "edge" : insideGrid ? "inside" : null;
-  if (!B && biasEdge.edge !== null) {
+  if (!B && biasEdge.edge !== null && !pendBias) {
     // the edge is an LB extreme (or a level no sweep trigger reached): the
     // run of the edge itself, with the stop under the next LB beyond it
+    const floorItem = biasEdge.cluster.at(-1) ?? biasEdge.anchor;
     const nextLb = biasEdge.beyond.find((it) => it.kind === "lb") ?? null;
     const buf = (cfg.stop_buffer_atr ?? 0) * (grid.atr ?? 0);
     const stop = nextLb ? round(long ? nextLb.zone[0] - buf : nextLb.zone[1] + buf) : null;
@@ -436,8 +482,8 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
       stop_anchor: nextLb ? nextLb.zone : null,
       target,
       rr: risk && target !== null ? round(Math.abs(target - biasEdge.edge) / risk) : null,
-      confirmed: biasEdge.floor_kind === "level" ? (biasEdge.cluster.at(-1).touches ?? 1) >= (cfg.min_touches ?? 2) : false,
-      touches: biasEdge.cluster.at(-1).touches ?? 1,
+      confirmed: biasEdge.floor_kind === "level" ? (floorItem?.touches ?? 1) >= (cfg.min_touches ?? 2) : false,
+      touches: floorItem?.touches ?? 1,
       synthetic: true,
       risk_usd: risk !== null && spec ? round(risk * spec.usd_per_point) : null,
       over_cap: risk !== null && spec && cap != null ? risk * spec.usd_per_point > cap : null,
@@ -457,11 +503,55 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
     .filter((r, i, arr) => arr.findIndex((o) => Math.abs(o.price - r.price) <= eqTol) === i)
     .slice(0, 4);
 
+  // PENDING on the bias side: the reclaim is the event, the tap of the LB it
+  // leaves is the entry, the stop sits beyond the excursion extreme; a miss
+  // within confirm_bars is the breakdown (redraw)
+  let pendA = null;
+  let pendB = null;
+  let pendC = null;
+  if (pendBias) {
+    const buf = (cfg.stop_buffer_atr ?? 0) * (grid.atr ?? 0);
+    const entry = pendBias.level;
+    const stop = round(long ? pendBias.ext - buf : pendBias.ext + buf);
+    const target = partials[0]?.price ?? counterEdge.edge ?? null;
+    const risk = Math.abs(entry - stop);
+    const rr = target !== null && risk ? round(Math.abs(target - entry) / risk) : null;
+    const usd = spec ? round(risk * spec.usd_per_point) : null;
+    const over = usd != null && cap != null && usd > cap;
+    pendA = {
+      label: "A — the reclaim (the event)",
+      kind: "reclaim",
+      side,
+      trigger: entry,
+      stop,
+      stop_anchor: pendBias.lb_if_reclaimed,
+      target,
+      rr,
+      risk_usd: usd,
+      over_cap: over,
+      pending: true,
+      text:
+        `a 1h/15m close back ${long ? "above" : "below"} ${fmt(entry)} within ${pendBias.bars_left} 4h bar(s) → ${long ? "bull" : "bear"} LB ${zoneTxt(pendBias.lb_if_reclaimed)}: ` +
+        `entry on the tap of that zone, stop ${fmt(stop)} → T1 ${fmt(target)} (RR ${fmtRr(rr)})${usd != null ? ` · $${Math.round(usd)}${over ? " ⚠ over cap" : ""}` : ""}. ` +
+        `Not on the run itself — "just because we took the low does not mean buy right away" (V6).`,
+    };
+    pendB = {
+      label: "B — the run deepens",
+      text: `a new ${long ? "low" : "high"} beyond ${fmt(pendBias.ext)} while still pending moves the extreme and the stop with it; the trap completes only on the close back ${long ? "above" : "below"} ${fmt(entry)} — nothing to do ${long ? "below" : "above"} it.`,
+    };
+    pendC = {
+      label: "Grid break — breakdown, redraw",
+      text: `no close back ${long ? "above" : "below"} ${fmt(entry)} within ${pendBias.bars_left} bar(s) → the level is consumed without a trap; the grid redraws with ${biasEdge.beyond[0] ? itemTxt(biasEdge.beyond[0]) : "no level in view"} as the next ${long ? "lower" : "upper"} edge. No H1 scenario until then.`,
+      next_edge: biasEdge.beyond[0] ?? null,
+    };
+  }
+
   const counterZones = tfs
     .flatMap((tf) => (reads[tf]?.false_reactions ?? []).map((f) => ({ tf, ...f })))
     .filter((f, i, arr) => arr.findIndex((o) => o.zone[0] === f.zone[0] && o.zone[1] === f.zone[1]) === i)
     .slice(0, 4);
   const notDone = [
+    pendBias ? "no entries on the run itself — pattern trading (V6): the reclaim is the event" : null,
     counterZones.length
       ? `no ${long ? "shorts" : "longs"} from the counter-bias LBs ${counterZones.map((f) => `${zoneTxt(f.zone)} (${tfLabel(f.tf)})`).join(", ")} — pullback origins`
       : null,
@@ -472,7 +562,7 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
   const inH4Lb = A && A.tf !== "240" && reads["240"]?.blocks?.some((b) => b.role === "entry" && grid.price >= b.zone[0] && grid.price <= b.zone[1]);
   return {
     wait_for: waitFor,
-    A: A
+    A: pendA ?? (A
       ? {
           ...A,
           label: A.pocket ? "A — inducement, not an entry" : `A — tap of the bias-side LB${A.tf !== "240" ? ` (${tfLabel(A.tf)})` : ""}`,
@@ -486,8 +576,8 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
                   : ""
               }. Killed by a trade past ${fmt(A.stop)}.`,
         }
-      : { label: "A — no bias-side LB to tap", text: "no alive LB on the bias side below price" },
-    B: B
+      : { label: "A — no bias-side LB to tap", text: "no alive LB on the bias side below price" }),
+    B: pendB ?? (B
       ? {
           ...B,
           label: Bkind === "edge" ? "B — run of the bias-side edge (main)" : "B — the next LTF trap inside the grid",
@@ -498,8 +588,8 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
               : ` → stop ${fmt(B.stop)} (${long ? "under" : "over"} LB ${zoneTxt(B.stop_anchor)}) → T1 ${fmt(B.target)} (RR ${fmtRr(B.rr)})${money(B)}.`) +
             (B.over_cap ? " Over the cap at the H4 anchor — take the stop from the 1h/15m LB left by the reclaim." : ""),
         }
-      : { label: "B — no run to wait for", text: "no bias-side edge in view" },
-    C: {
+      : { label: "B — no run to wait for", text: "no bias-side edge in view" }),
+    C: pendC ?? {
       label: "Grid break — redraw, not a trade",
       text:
         biasEdge.edge === null
@@ -508,12 +598,15 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
       next_edge: biasEdge.beyond[0] ?? null,
     },
     D: {
-      label: `D — the counter edge ${fmt(counterEdge.edge)}`,
+      label: `D — the counter edge ${fmt(counterEdge.edge)}${pendCounter ? " (PENDING)" : ""}`,
       text:
         counterEdge.edge === null
           ? "no counter edge in view"
-          : `run + reclaim → a new ${long ? "bear" : "bull"} LB, a pullback origin: partial, then wait for the next ${long ? "low" : "high"}. Run without reclaim → the path to ${counterEdge.beyond[0] ? itemTxt(counterEdge.beyond[0]) : "the next level beyond"} is open, stop to BE.`,
+          : pendCounter
+            ? `run ${agoTxt(pendCounter.bars_since_run)} to ${fmt(pendCounter.ext)}, reclaim not confirmed (${pendCounter.bars_left} of ${pendCounter.confirm_bars} bars left): a 1h close back ${long ? "below" : "above"} ${fmt(pendCounter.level)} = a new ${long ? "bear" : "bull"} LB ${zoneTxt(pendCounter.lb_if_reclaimed)}, a pullback origin — partial, then wait for the next ${long ? "low" : "high"}; a miss = continuation, the path to ${counterEdge.beyond[0] ? itemTxt(counterEdge.beyond[0]) : "the next level beyond"} is open, stop to BE.`
+            : `run + reclaim → a new ${long ? "bear" : "bull"} LB, a pullback origin: partial, then wait for the next ${long ? "low" : "high"}. Run without reclaim → the path to ${counterEdge.beyond[0] ? itemTxt(counterEdge.beyond[0]) : "the next level beyond"} is open, stop to BE.`,
       beyond: counterEdge.beyond[0] ?? null,
+      ...(pendCounter ? { pending: pendCounter } : {}),
     },
     partials,
     not_done: notDone,
@@ -526,11 +619,14 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
             lb: reads["60"].story.lb,
             local_frame: reads["60"].local_frame ?? null,
             conditions: [
-              A && !A.pocket
+              pendBias
+                ? `A: a 1h/15m close back ${long ? "above" : "below"} ${fmt(pendBias.level)} within ${pendBias.bars_left} 4h bar(s), then the tap of ${zoneTxt(pendBias.lb_if_reclaimed)} — stop ${long ? "under" : "over"} ${fmt(pendBias.ext)}; no such close = breakdown, the grid redraws`
+                : null,
+              !pendBias && A && !A.pocket
                 ? `A: a 1h close back into LB ${zoneTxt(A.stop_anchor)} plus a 5m sweep of ${biasExt(A)} that closes back — that 5m ${long ? "low" : "high"} is the stop`
                 : null,
-              A && A.pocket ? `A: not traded — a 1h sweep of ${biasExt(A)} is a respect of ${fmt(A.pocket.floor)}, wait for B` : null,
-              B
+              !pendBias && A && A.pocket ? `A: not traded — a 1h sweep of ${biasExt(A)} is a respect of ${fmt(A.pocket.floor)}, wait for B` : null,
+              !pendBias && B
                 ? `B: a 1h/15m close ${long ? "below" : "above"} ${fmt(B.trigger)} and the next close back ${long ? "above" : "below"} it — that bar's ${long ? "low" : "high"} is the 1h LB and the stop; no reclaim within a few bars and pressure on ${fmt(biasEdge.kill)} is the grid break`
                 : null,
               counterEdge.edge !== null ? `D: a spike past ${fmt(counterEdge.edge)} that closes back on the 1h = pullback origin; a 1h close beyond = continuation` : null,
@@ -549,12 +645,20 @@ function gridLines(grid, long) {
     const s = side === "upper" ? grid.upper : grid.lower;
     if (s.edge === null) return `  ${side === "upper" ? "▲" : "▼"} no ${side} edge in view`;
     const isBias = side === "upper" ? !long : long;
+    if (s.pending) {
+      const p = s.pending;
+      const ago = p.bars_since_run === 0 ? "this bar" : p.bars_since_run === 1 ? "1 bar ago" : `${p.bars_since_run} bars ago`;
+      return `  ${side === "upper" ? "▲" : "▼"} ${fmt(s.edge)} ${isBias ? "bias edge" : "counter edge"} — PENDING: run to ${fmt(p.ext)} ${ago}, reclaim not confirmed (${p.bars_left} of ${p.confirm_bars} bars left)`;
+    }
     const members = s.cluster.length > 1 ? ` — ${isBias && s.floor_kind === "level" ? "pocket" : "cluster"}: ${s.cluster.map(itemTxt).join(" + ")}` : ` — ${itemTxt(s.anchor)}`;
     return `  ${side === "upper" ? "▲" : "▼"} ${fmt(s.edge)} ${isBias ? "bias edge" : "counter edge"}${s.weak ? " (weak: single-touch)" : ""}${members}`;
   };
   lines.push(edgeLine("upper"));
   for (const r of [...grid.upper.rungs].sort((a, b) => b.price - a.price)) lines.push(rung(r));
-  lines.push(`  ● ${fmt(grid.price)} price${grid.inside ? "" : " — OUTSIDE the grid, redraw pending"}`);
+  const state = grid.state ?? (grid.inside ? "inside" : "outside");
+  lines.push(
+    `  ● ${fmt(grid.price)} price${state === "inside" ? "" : state.startsWith("pending") ? " — the run is unresolved (PENDING)" : " — OUTSIDE the grid, redraw pending"}`,
+  );
   for (const r of [...grid.lower.rungs].sort((a, b) => b.price - a.price)) lines.push(rung(r));
   lines.push(edgeLine("lower"));
   return lines;

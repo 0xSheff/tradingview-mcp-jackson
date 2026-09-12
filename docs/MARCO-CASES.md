@@ -34,7 +34,18 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
    the story flips to the other side, the LB left behind supplies stop and retest),
    run without reclaim (continuation — the level is consumed, the next one is nearest).
    The LB is what a run leaves, not what we wait for. H4 levels are for alerts, not
-   orders. `[SOURCE, V1, V3, V6]`
+   orders. `[SOURCE, V1, V3, V6]` There is a fourth, transient state the brief must
+   name (user, 2026-09-12; built the same day): **PENDING** — the edge was run but the
+   reclaim is not confirmed yet. The level is gone from the map and the LB is not born,
+   so a naive grid jumps to the next rung and reads no-man's land in the one moment
+   V6 calls the reaction structure. The engine now exposes the unresolved sweep
+   (`map.pending`), the grid keeps the edge at the run level with the excursion
+   extreme as the kill, "what we wait for" answers *pending* with the bars left
+   (`confirm_bars`), A becomes the reclaim itself (entry on the tap of the LB it will
+   leave, stop beyond the extreme), B "the run deepens", C the breakdown. A run that
+   was reclaimed within the last bars is the *yes* case — direction ready, not
+   no-man's land — and the brief already printed it that way in the first live run
+   (MNQ, 2026-09-11: "run 1 bar ago … reclaim → bull LB").
 3. **Magnets vs pullback origins.** A magnet is where stops cluster: a build-up
    (x2+), a trend line, an HTF candle extreme, the range extreme. A *counter-bias LB*
    is not a magnet — its zone "holds no liquidity" (V1); it is where the false
