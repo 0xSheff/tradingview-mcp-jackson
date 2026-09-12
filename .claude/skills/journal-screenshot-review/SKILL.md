@@ -19,22 +19,32 @@ through `trade_verify_context`, the one door whose verified `notes` the coach ac
 
 ## Step 1 — Get the screenshot
 
-Either the trader hands you a file, or you reconstruct the moment from TradingView (if CDP
-is up): `chart_set_symbol` → `chart_set_timeframe` (the trade's TF) → `chart_scroll_to_date`
-to the trade window, with the "Liq blocks" indicator visible → `capture_screenshot` with
-region `chart` (lands under `screenshots/`).
+Either the trader hands you a file, or you take it from TradingView (CDP up) with the "Liq
+blocks" indicator visible: `chart_set_symbol` → `chart_set_timeframe` (symbol resets the TF)
+→ load history (`ui_scroll(direction="left", amount=4000)` a few times on 5m — the chart holds
+~300 bars and `chart_set_visible_range` silently snaps back when the history is not loaded)
+→ `chart_set_visible_range(from, to)` → `ui_keyboard(key="s", modifiers=["ctrl","alt"])`.
+TradingView's own snapshot keeps both axes and the symbol/TF header; `capture_screenshot`
+crops the axes (`chart`) or keeps the UI chrome (`full`). The PNG lands in the trader's
+Downloads as `<SYM>_<date>_<time>_<hash>.png` — take the newest and move it out.
 
-**Upload containment:** the journal MCP server only reads files under its upload dir.
-Copy the file to `trading-coach/mcp-server/uploads/` on the host and pass the path **as the
-server sees it**: `/app/uploads/<file>`. Keep it under the size caps (5 MB backend-side).
+Two images per trade is the norm: the entry TF (5m, the window around entry → exit) and the
+1h context (the week to date). Read the stop and target from the trader's position tool:
+`draw_list` → `draw_get_properties(entity_id)` gives the entry anchor, `stopLevel` and
+`profitLevel` in ticks (MNQ 0.25, MGC 0.1, 6E 0.00005).
 
-## Step 2 — Attach and wait for the vision draft
+## Step 2 — Upload, attach, wait for the vision draft
+
+The bytes travel out of band (ADR-0047): mint a handle, PUT the file, hand the handle over.
 
 ```
-trade_attach_screenshots(trade_id, file_paths=["/app/uploads/<file>"], real_stop=<if known and not yet on file>)
+upload_url_create(purpose="trade_screenshot", filename="<name>.png", content_type="image/png", size_bytes=<n>)
+# curl -X PUT -H "Content-Type: image/png" --data-binary @<file> "<upload_url>"   → 204
+trade_attach_screenshots(trade_id, upload_ids=[...], real_stop=<if known and not yet on file>)
 ```
 
-Then poll `trade_review(trade_id)` until the screenshot carries `extracted_context`.
+The URL is single-use and expires in minutes — mint it when you are about to send.
+Then poll `trade_review(trade_id)` until each screenshot carries `extracted_context`.
 `trade_verify_context` **refuses until the extraction has run** (extraction-pending error) —
 that is by design; wait a few seconds and retry. The draft's `key_levels` are your starting
 point, nothing more.
@@ -69,14 +79,26 @@ trade_verify_context(trade_id, screenshot_id, extracted_context={
 The object **replaces** the draft wholesale — always send all three keys, not a delta.
 
 `notes` rules — this text goes into the coach's prompt as untrusted data:
-- **Facts only, stated as data.** "Entry 4365.2 = the brief's confirmed sweep trigger;
-  stop 4069.4 behind bull LB 4074–4076.5; with weekly buy_story." Or: "Entry from the
-  dashed bear zone 4690.2–4755 — an inducement zone the brief marked as a false-reaction
-  origin, against the weekly story."
-- **No verdicts, no instructions.** Never write "this deviates", "be strict", "tone should
-  be…" — judging is the coach's job, and instructions inside data are exactly what the
-  journal's security model strips.
-- A few sentences, not an essay.
+- **A bullet list of facts, never prose** (trader feedback 2026-09-12: the first W37 notes
+  were paragraphs and unreadable). Fixed order, one line each, `·` between fields, drop what
+  is empty:
+
+  ```
+  - <TF> · <dates> · axis Athens (UTC+3) · <W/D story = regime> · inval <level> intact
+  - plan: <the rung this entry maps to, or the nearest one> · stop · targets · <plan wording that matters>
+  - before entry: <the event — sweep / reclaim / tap — with time (Z) and level>
+  - entry: <side price order-type time> · <where in the zone>
+  - stop: <price> (<position tool | stop fill>) · <what it sits beyond> · <pts> · $<risk>
+  - target: <price> (<source>)
+  - after entry: <the highs/lows that matter, with times — T1 taken? stop threatened?>
+  - exit: <type price time> · <fills: partial or not>
+  - result: <pts · $ · R>
+  ```
+
+- **Facts only, stated as data.** No verdicts, no instructions — never "this deviates", "be
+  strict", "tone should be…": judging is the coach's job, and instructions inside data are
+  exactly what the journal's security model strips.
+- Every number the review will need appears here once; adjectives do not.
 
 ## Never
 

@@ -112,6 +112,7 @@ indexes into `key_levels`, which is what keeps the levels out of the text.
 <weekly mode>/<regime> · inval <level> <Wclose|Dclose>
 - K1 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n> · <why, ≤6 words>
 - K2 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n> · <why, ≤6 words>
+- BE: <level> · stop → entry once taken
 - skip: <level> <model> · $<risk> > cap
 - no-entry: <zone> · <zone>
 - global: <levels> (≈<Nw>) final draw only
@@ -119,12 +120,22 @@ indexes into `key_levels`, which is what keeps the levels out of the text.
 - timing: <gate / event, if any>
 ```
 
-One line per bullet, `·` between fields, fixed labels (`skip:`, `no-entry:`, `global:`,
+One line per bullet, `·` between fields, fixed labels (`BE:`, `skip:`, `no-entry:`, `global:`,
 `replaces:`, `timing:`), each at most once, dropped when empty. **No closing sentence or
 paragraph** — the reasoning behind a rung lives in the chat and the retro, not here. Trader
 feedback 2026-09-10: the 09.09 and 10.09 addenda ended in a paragraph of numbers and were hard
 to read. On a locked plan an addendum item cannot be edited — the 10.09 pair was rewritten as a
 new addendum and the old items retired with `superseding_plan_item_id` pointing at the new ones.
+
+**Two rungs at most per setup, and only when they sit close together** — the same zone or
+pocket, one stop-anchor region. Rungs far apart (a near pocket and a deep zone) are separate
+setups with their own `key_levels` and `targets`, so a match and a verdict can land on each
+(trader rule 2026-09-12; the W37 MNQ item carried a five-rung ladder and every entry matched
+the same item, which told the retro nothing).
+
+**`BE:` names the level after which the stop goes to break-even** — the first target-side level,
+per the strategy's "First target-side level taken → break-even". The review checks it (trader
+rule 2026-09-12, after W37: three trades held the full stop past T1).
 
 Example (the 2026-09-10 6E addendum, rewritten in the format; invalidation levels come from
 the brief — the 4036.5 that once appeared for MGC was wrong, the brief says 4016):
@@ -133,6 +144,7 @@ the brief — the 4036.5 that once appeared for MGC was wrong, the brief says 40
 buy_story/aligned · inval 1.13635 Wclose
 - K1 tap · stop 1.16105 · $132 · RR 2.1 · Q bull LB from the ECB stab, stop under K2
 - K2 sweep+reclaim (5m) · stop under the run extreme · max 20 pips = $250 · x5 floor intact
+- BE: 1.16435 (T1) · stop → entry once taken
 - skip: sweep K2 at engine anchor 1.158714 · $298 > cap
 - no-entry: 1.1642–1.1643 · 1.1652–1.16565 (4h bear LB) · 1.1668–1.1672
 - global: 1.19235 (≈2.4w) final draw only
