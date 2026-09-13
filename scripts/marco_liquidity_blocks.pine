@@ -33,6 +33,17 @@
 //   * Bias source (§3): Auto = the last qualified LB (the trap), Auto (draw)
 //     = the side holding more intact build-up taps (the lean before the
 //     trap), Long/Short = by hand from the weekly brief, Off = no bias.
+//   * Left liquidity (v10, E1 — docs/MARCO.md §3): a run makes a valid LB
+//     only when it takes the level AND the liquidity from the left. The
+//     structure a run must clear = same-side levels born since the previous
+//     clean same-side LB, within `structBars`. A build-up left behind (or an
+//     unqualified zone) = invalid: dotted border, never flips Auto, the sweep
+//     of that level is the trigger; single-touch swings left behind =
+//     unrefined: the tap is the aggressive entry, their sweep the refined one.
+//     Label suffix "· left P ✗" (invalid) / "· left P ~" (unrefined).
+//   * Deepened runs (v10, E1): a wick within eqTol through a zone younger than
+//     confirmBars is the same run deepened — the pending reopens against the
+//     ORIGINAL swept level with its taps and age, not the zone's x1 extreme.
 //@version=6
 indicator("Marco LB — Liquidity Blocks", "Marco LB", overlay = true,
      max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -59,10 +70,12 @@ minZoneAtr  = input.float(0.25, "Min zone height (ATR mult)", step = 0.05, minva
      tooltip = "Thinner zones draw faint and fire no alerts — the stop would sit ticks away from the entry.")
 respectTol  = input.float(0.75, "Respect tolerance (ATR mult)", step = 0.05, minval = 0.0, group = grpQ,
      tooltip = "Low respecting low: a later low holding this far above a level counts as a confirming touch (docs/MARCO.md §4.4).")
+structBars  = input.int(60, "Structure lookback (bars)", minval = 5, group = grpQ,
+     tooltip = "Left liquidity (docs/MARCO.md §3, E1): the structure a run must clear = same-side levels born since the previous clean same-side LB, within this many bars. Mirrors the engine's story_lookback.")
 
 grpB = "Bias"
 biasMode    = input.string("Auto", "Bias", options = ["Auto", "Auto (draw)", "Long", "Short", "Off"], group = grpB,
-     tooltip = "Zones against the bias draw dashed with 'false' — pullback origins, never entries (docs/MARCO.md §3). Auto = side of the last build-up-qualified LB (the trap; an unqualified LB against a live qualified one is inducement and does not flip it). Auto (draw) = the side holding more intact build-up taps — Marco's lean before the trap. Long/Short = set by hand from the weekly brief. Off = no bias, nothing is marked false.")
+     tooltip = "Zones against the bias draw dashed with 'false' — pullback origins, never entries (docs/MARCO.md §3). Auto = side of the last clean LB (the trap; an LB that is unqualified or left liquidity behind — 'left P' — never flips it). Auto (draw) = the side holding more intact build-up taps — Marco's lean before the trap. Long/Short = set by hand from the weekly brief. Off = no bias, nothing is marked false.")
 
 grpU = "Build-up"
 showBuildups = input.bool(true, "Build-up boxes (equal highs/lows)", group = grpU,
@@ -98,6 +111,8 @@ type Pending
     int   extBar  = na
     float extBody = na // body edge of the excursion-extreme candle
     int   miss    = 0  // consecutive closes that failed to reclaim
+    bool  deep    = false // v10: reopened by a deepened run (same trap)
+    int   legStart = na   // v10: the structure bound carried from the deepened zone
 
 type Block
     box   bx
@@ -112,6 +127,12 @@ type Block
     int   born
     int   left // bar of the sweep extreme
     int   respects = 0 // later pivots that held within eqTol of the extreme (v9)
+    int   sweptT   = 1  // v10: taps of the swept level (carried into a deepened run)
+    int   sweptAge = 0  // v10: age of the swept level at the run
+    float leftLq   = na // v10: the nearest intact same-side level the run left beyond its extreme
+    int   leftLqT  = 0
+    int   legStart = na
+    string grade   = "clean" // v10: clean / unrefined / invalid
 
 type SweptBox
     box bx
@@ -125,7 +146,9 @@ var array<SweptBox> sweptBoxes = array.new<SweptBox>()
 var Pending pendBull = Pending.new()
 var Pending pendBear = Pending.new()
 var int biasDir   = 0 // +1 long, -1 short, 0 none
-var int lastLbDir = 0 // side of the most recent LB created (Auto bias)
+var int lastLbDir = 0 // side of the most recent clean LB created (Auto bias)
+var int lastBullLbBorn = na // v10: bar of the previous CLEAN bull LB — the structure bound
+var int lastBearLbBorn = na
 
 atrVal   = ta.atr(14)
 bodyLo   = math.min(open, close)
@@ -138,23 +161,49 @@ colSwept = #787b86
 againstBias(bool isBull, int dir) =>
     dir != 0 and (isBull ? dir < 0 : dir > 0)
 
+// v10 (E1): the box label — "false" against the bias, else LB/lb with the
+// left-liquidity suffix (✗ invalid, ~ unrefined)
+blockText(bool against, bool strong, string grade, float leftLq) =>
+    string txt = against ? "false" : (strong ? "LB" : "lb")
+    if grade != "clean"
+        txt := txt + " · left " + str.tostring(leftLq, format.mintick) + (grade == "invalid" ? " ✗" : " ~")
+    txt
+
 applyBias(int dir) =>
     if array.size(blocks) > 0
         for blk in blocks
             if not blk.dead
                 bool against = againstBias(blk.isBull, dir)
-                box.set_border_style(blk.bx, against ? line.style_dashed : line.style_solid)
-                box.set_text(blk.bx, against ? "false" : (blk.qualified ? "LB" : "lb"))
+                box.set_border_style(blk.bx, against ? line.style_dashed : (blk.grade == "invalid" ? line.style_dotted : line.style_solid))
+                box.set_text(blk.bx, blockText(against, blk.qualified, blk.grade, blk.leftLq))
 
-// docs/MARCO.md §3: a live build-up-qualified LB anchors the story; an
-// unqualified LB born against it is inducement and must not flip Auto bias.
+// docs/MARCO.md §3: a live clean, build-up-qualified LB anchors the story; an
+// LB that cannot flip it (unqualified, or left liquidity intact — v10) born
+// against it is inducement and must not flip Auto bias.
 liveBuild(bool isBull) =>
     bool found = false
     if array.size(blocks) > 0
         for blk in blocks
-            if not blk.dead and blk.build and blk.isBull == isBull
+            if not blk.dead and blk.build and na(blk.leftLq) and blk.isBull == isBull
                 found := true
     found
+
+// v10 (E1): the liquidity from the left — the nearest intact same-side level
+// of the structure (born after legStart) beyond the run's extreme, its taps,
+// and the strongest tap count among them
+leftLiq(array<LqLevel> lvls, bool isLow, float ext, int legStart) =>
+    float best  = na
+    int   bestT = 0
+    int   maxT  = 0
+    if array.size(lvls) > 0
+        for lv in lvls
+            bool beyond = isLow ? lv.price < ext : lv.price > ext
+            if beyond and lv.born > legStart
+                maxT := math.max(maxT, lv.touches)
+                if na(best) or (isLow ? lv.price > best : lv.price < best)
+                    best  := lv.price
+                    bestT := lv.touches
+    [best, bestT, maxT]
 
 // docs/MARCO.md §2.1: a level with the build-up touch count is a liquidity
 // build-up — draw the box across its equal extremes (the local target)
@@ -277,10 +326,15 @@ drawBias() =>
                 dn += lv.touches
     up > dn ? 1 : dn > up ? -1 : 0
 
-newBlock(bool isBull, int leftBar, float top, float bot, bool qualified) =>
+// returns true when the run left liquidity intact beyond the zone (v10, E1)
+newBlock(bool isBull, int leftBar, float top, float bot, bool qualified, int sT, int sAge, int legStart) =>
     // docs/MARCO.md §7.1: a zone thinner than minZoneAtr is not entry-grade
     bool thin   = top - bot < minZoneAtr * atrVal
     bool strong = qualified and not thin
+    // v10 (E1): the liquidity from the left — invalid when a build-up (or an
+    // unqualified zone) is left behind, unrefined when only x1 swings are
+    [lqP, lqT, lqMax] = leftLiq(isBull ? lowLvls : highLvls, isBull, isBull ? bot : top, legStart)
+    string grade = na(lqP) ? "clean" : (lqMax >= minTouches or not qualified) ? "invalid" : "unrefined"
     col   = isBull ? colBull : colBear
     fillT = strong ? 82 : 93
     bordT = strong ? 35 : 72
@@ -288,9 +342,9 @@ newBlock(bool isBull, int leftBar, float top, float bot, bool qualified) =>
     bool against = againstBias(isBull, biasDir)
     b = box.new(leftBar, top, bar_index, bot,
          border_color = color.new(col, bordT), border_width = 1,
-         border_style = against ? line.style_dashed : line.style_solid,
+         border_style = against ? line.style_dashed : (grade == "invalid" ? line.style_dotted : line.style_solid),
          bgcolor = color.new(col, fillT),
-         text = against ? "false" : (strong ? "LB" : "lb"), text_size = size.tiny,
+         text = blockText(against, strong, grade, lqP), text_size = size.tiny,
          text_color = color.new(col, txtT),
          text_halign = text.align_right,
          text_valign = isBull ? text.align_bottom : text.align_top)
@@ -300,12 +354,14 @@ newBlock(bool isBull, int leftBar, float top, float bot, bool qualified) =>
         st := line.new(leftBar, stopP, bar_index, stopP,
              color = color.new(col, 35), width = 1, style = line.style_dashed)
     array.push(blocks, Block.new(bx = b, st = st, top = top, bot = bot, isBull = isBull,
-         qualified = strong, build = qualified, tapped = false, dead = false, born = bar_index, left = leftBar))
+         qualified = strong, build = qualified, tapped = false, dead = false, born = bar_index, left = leftBar,
+         sweptT = sT, sweptAge = sAge, leftLq = lqP, leftLqT = lqT, legStart = legStart, grade = grade))
     if array.size(blocks) > MAX_BLOCKS
         Block old = array.shift(blocks)
         box.delete(old.bx)
         if not na(old.st)
             line.delete(old.st)
+    not na(lqP)
 
 // ------------------------------------------------- 1. maintain LB zones ----
 bool tapBull  = false
@@ -340,32 +396,47 @@ if array.size(blocks) > 0
                     else
                         registerLevel(highLvls, false, blk.left, blk.top, 1 + blk.respects)
                 // docs/MARCO.md §7.1: the extreme of an invalidated zone is swept
-                // liquidity — open a pending sweep so a reclaim can print the new LB
+                // liquidity — open a pending sweep so a reclaim can print the new LB.
+                // v10 (E1): a wick within eqTol through a zone younger than
+                // confirmBars is the same run deepened — the pending reopens
+                // against the ORIGINAL swept level with its taps, age and structure
                 if invalid
+                    bool  deep = bar_index - blk.born <= confirmBars and (blk.isBull ? blk.bot - low : high - blk.top) <= eqTol * atrVal
+                    float lvl  = deep ? (blk.isBull ? blk.top : blk.bot) : (blk.isBull ? blk.bot : blk.top)
+                    int   tch  = deep ? blk.sweptT : 1
+                    int   age  = deep ? blk.sweptAge : bar_index - blk.left
                     if blk.isBull
                         if na(pendBull.lvl)
-                            pendBull.lvl     := blk.bot
-                            pendBull.touches := 1
-                            pendBull.age     := bar_index - blk.left
+                            pendBull.lvl     := lvl
+                            pendBull.touches := tch
+                            pendBull.age     := age
                             pendBull.ext     := low
                             pendBull.extBar  := bar_index
                             pendBull.extBody := bodyLo
                             pendBull.miss    := 0
                         else
-                            pendBull.lvl := math.min(pendBull.lvl, blk.bot)
-                            pendBull.age := math.max(pendBull.age, bar_index - blk.left)
+                            pendBull.lvl     := math.min(pendBull.lvl, lvl)
+                            pendBull.touches := math.max(pendBull.touches, tch)
+                            pendBull.age     := math.max(pendBull.age, age)
+                        if deep
+                            pendBull.deep     := true
+                            pendBull.legStart := blk.legStart
                     else
                         if na(pendBear.lvl)
-                            pendBear.lvl     := blk.top
-                            pendBear.touches := 1
-                            pendBear.age     := bar_index - blk.left
+                            pendBear.lvl     := lvl
+                            pendBear.touches := tch
+                            pendBear.age     := age
                             pendBear.ext     := high
                             pendBear.extBar  := bar_index
                             pendBear.extBody := bodyHi
                             pendBear.miss    := 0
                         else
-                            pendBear.lvl := math.max(pendBear.lvl, blk.top)
-                            pendBear.age := math.max(pendBear.age, bar_index - blk.left)
+                            pendBear.lvl     := math.max(pendBear.lvl, lvl)
+                            pendBear.touches := math.max(pendBear.touches, tch)
+                            pendBear.age     := math.max(pendBear.age, age)
+                        if deep
+                            pendBear.deep     := true
+                            pendBear.legStart := blk.legStart
                 killBlock(i, blk)
             else if bar_index > blk.born and not blk.tapped
                 bool against = againstBias(blk.isBull, biasDir)
@@ -500,13 +571,19 @@ if not na(pendBull.lvl)
         float zTop = zoneModeS == "Swept level" ? pendBull.lvl :
              math.min(pendBull.lvl, math.max(pendBull.extBody, pendBull.ext + syminfo.mintick))
         bool qual = pendBull.touches >= minTouches or pendBull.age >= minLevelAge
-        bool ind  = not qual and liveBuild(false) // inducement: never flips the story (§3)
-        newBlock(true, pendBull.extBar, zTop, pendBull.ext, qual)
-        if not ind
+        // v10 (E1): the structure = levels born since the previous clean bull
+        // LB, within structBars; a deepened run keeps its structure
+        int legStart = not na(pendBull.legStart) ? pendBull.legStart :
+             na(lastBullLbBorn) ? bar_index - structBars : math.max(lastBullLbBorn, bar_index - structBars)
+        bool leftIn = newBlock(true, pendBull.extBar, zTop, pendBull.ext, qual, pendBull.touches, pendBull.age, legStart)
+        bool ind  = not (qual and not leftIn) and liveBuild(false) // inducement: never flips the story (§3, E1)
+        if not ind and not leftIn
             lastLbDir := 1
             if biasMode == "Auto" and biasDir != 1
                 biasDir := 1
                 applyBias(biasDir)
+        if not leftIn
+            lastBullLbBorn := bar_index
         pendBull := Pending.new()
     else
         pendBull.miss += 1
@@ -522,13 +599,17 @@ if not na(pendBear.lvl)
         float zBot = zoneModeS == "Swept level" ? pendBear.lvl :
              math.max(pendBear.lvl, math.min(pendBear.extBody, pendBear.ext - syminfo.mintick))
         bool qual = pendBear.touches >= minTouches or pendBear.age >= minLevelAge
-        bool ind  = not qual and liveBuild(true) // inducement: never flips the story (§3)
-        newBlock(false, pendBear.extBar, pendBear.ext, zBot, qual)
-        if not ind
+        int legStart = not na(pendBear.legStart) ? pendBear.legStart :
+             na(lastBearLbBorn) ? bar_index - structBars : math.max(lastBearLbBorn, bar_index - structBars)
+        bool leftIn = newBlock(false, pendBear.extBar, pendBear.ext, zBot, qual, pendBear.touches, pendBear.age, legStart)
+        bool ind  = not (qual and not leftIn) and liveBuild(true) // inducement: never flips the story (§3, E1)
+        if not ind and not leftIn
             lastLbDir := -1
             if biasMode == "Auto" and biasDir != -1
                 biasDir := -1
                 applyBias(biasDir)
+        if not leftIn
+            lastBearLbBorn := bar_index
         pendBear := Pending.new()
     else
         pendBear.miss += 1

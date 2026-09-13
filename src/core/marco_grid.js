@@ -31,7 +31,13 @@ const zoneTxt = (z) => (z ? `${fmt(z[0])}–${fmt(z[1])}` : "—");
 const itemTxt = (it) => {
   if (!it) return "—";
   if (it.kind === "lb") {
-    const flags = [it.qualified ? "Q" : null, it.thin ? "thin" : null, it.tapped ? "tapped" : null, it.inducement ? "ind" : null].filter(Boolean);
+    const flags = [
+      it.qualified ? "Q" : null,
+      it.thin ? "thin" : null,
+      it.tapped ? "tapped" : null,
+      it.inducement ? "ind" : null,
+      it.grade === "invalid" ? "invalid" : it.grade === "unrefined" ? "unrefined" : null,
+    ].filter(Boolean);
     return `LB ${zoneTxt(it.zone)}${flags.length ? ` [${flags.join(" ")}]` : ""}`;
   }
   return `${fmt(it.price)} x${it.touches}${it.seeded ? " (HTF)" : ""}`;
@@ -81,6 +87,7 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
         thin: b.thin === true,
         tapped: b.tapped,
         inducement: b.inducement === true,
+        grade: b.grade ?? "clean",
         bars_ago: n - 1 - b.born,
       })),
     ].sort((a, b) => (isLow ? b.price - a.price : a.price - b.price)); // nearest first
@@ -114,6 +121,7 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
           bars_left: p.bars_left,
           confirm_bars: cfg.confirm_bars,
           lb_if_reclaimed: isLow ? [round(p.ext), round(p.level)] : [round(p.level), round(p.ext)],
+          deepened: p.deepened ? [round(p.deepened[0]), round(p.deepened[1])] : null,
         },
       };
     }
@@ -161,6 +169,8 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
         "bear_lb_created",
         "bull_lb_invalidated",
         "bear_lb_invalidated",
+        "bull_lb_deepened",
+        "bear_lb_deepened",
         "low_poke",
         "high_poke",
         "bull_lb_tap",
@@ -177,6 +187,7 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
       ...(e.zone ? { zone: [round(e.zone[0]), round(e.zone[1])] } : {}),
       ...(e.qualified !== undefined ? { qualified: e.qualified } : {}),
       ...(e.floor !== undefined ? { floor: round(e.floor), ext: round(e.ext) } : {}),
+      ...(e.floor === undefined && e.ext !== undefined ? { ext: round(e.ext) } : {}),
     }));
 
   const inside = lower.edge !== null && upper.edge !== null && price > lower.edge && price < upper.edge;
@@ -204,16 +215,31 @@ function markPocket(t, floor, ext) {
   t.note = t.note ? `${t.note}; ${why}` : why;
 }
 
+// E1: single-touch swings left intact beyond the zone's extreme — the tap is
+// the aggressive entry, the sweep of the nearest such swing the refined one
+function markUnrefined(t, left, ext, from) {
+  t.unrefined = { floor: left.price, touches: left.touches, gap: round(Math.abs(ext - left.price)), from };
+  const why =
+    `unrefined — the ${t.side === "long" ? "low" : "high"} ${fmt(left.price)}${left.touches > 1 ? ` x${left.touches}` : ""} from the left is intact ` +
+    `${fmt(t.unrefined.gap)} ${t.side === "long" ? "below" : "above"} the LB extreme ${fmt(ext)}: this tap is the aggressive entry, the sweep of ${fmt(left.price)} the refined one (E1)`;
+  t.note = t.note ? `${t.note}; ${why}` : why;
+}
+
 /**
- * Pocket flag on entries [CALIBRATION, user-raised, 2026-09-10]. Two tiers on
+ * Pocket flag on entries [CALIBRATION, user-raised, 2026-09-10]. Tiers on
  * existing parameters: within eq_tolerance the map already refuses to print
  * an LB (poke, §2.3). Within respect_tolerance the LB exists but is INSIDE
  * THE POCKET of a deeper LEVEL of liquidity: its tap is inducement — the
  * buyers parked there are the fuel for the run of the floor — so the tap is
  * downgraded and the sweep trigger at the floor becomes the preferred entry.
  * A deeper same-side LB extreme is NOT a pocket floor: that is the V6 stop
- * refinement (the nested LB inside the daily LB), not a trap. Mutates
- * `triggers` (adds `pocket`, `preferred`, extends `note`) and returns the
+ * refinement (the nested LB inside the daily LB), not a trap. E1 (built
+ * 2026-09-14) adds the STRUCTURAL tier at any distance: the liquidity the
+ * run left intact inside its own structure (`left`, from the map) — a
+ * build-up left behind (or an unqualified zone) is the same pocket, a
+ * single-touch swing left behind makes the tap `unrefined` (aggressive)
+ * with its sweep as the refined entry. Mutates `triggers` (adds `pocket` /
+ * `unrefined`, `preferred` / `refined`, extends `note`) and returns the
  * floors found, keyed by anchor extreme, so blocks can carry the flag.
  */
 export function flagPocket(triggers, map, bars, cfg, direction) {
@@ -236,9 +262,25 @@ export function flagPocket(triggers, map, bars, cfg, direction) {
     markPocket(t, deeper[0], ext);
     floors.set(ext, t.pocket);
   }
+  // E1 structural tier — what the run left intact inside its structure
+  const refined = new Set();
+  for (const t of triggers) {
+    if (t.kind !== "tap" || !t.stop_anchor || t.pocket || !t.left) continue;
+    const ext = long ? t.stop_anchor[0] : t.stop_anchor[1];
+    if (t.grade === "invalid") {
+      const floor = t.left.strong ?? t.left;
+      markPocket(t, { kind: "level", price: floor.price, touches: floor.touches, side: long ? "below" : "above" }, ext);
+      t.pocket.from = "structure";
+      floors.set(ext, t.pocket);
+    } else if (t.grade === "unrefined") {
+      markUnrefined(t, t.left, ext, "structure");
+      refined.add(t.left.price);
+    }
+  }
   for (const t of triggers) {
     if (t.kind !== "sweep") continue;
     for (const p of floors.values()) if (Math.abs(t.trigger - p.floor) <= 1e-9) t.preferred = true;
+    for (const p of refined) if (Math.abs(t.trigger - p) <= 1e-9) t.refined = true;
   }
   return floors;
 }
@@ -271,13 +313,24 @@ export function clipToGrid(read, grid, bias) {
       const why = `target clipped to the H4 grid edge ${fmt(t.target)}`;
       t.note = t.note ? `${t.note}; ${why}` : why;
     }
-    if (t.kind === "tap" && t.stop_anchor && !t.pocket && biasSide.edge !== null && biasSide.floor_kind === "level") {
+    // E1 (structural — replaces the respect-distance tier of 2026-09-11): an
+    // LTF bias-side LB inside the grid sits above the grid's own liquidity.
+    // The edge, when it is a level, is the floor at any distance — no entry
+    // until it is run; an x1 H4 rung between the LB extreme and the edge
+    // makes the tap unrefined — the rung's sweep is the refined entry. An
+    // edge that is an LB extreme is the V6 stop refinement, not liquidity.
+    if (t.kind === "tap" && t.stop_anchor && !t.pocket && biasSide.edge !== null) {
       const ext = long ? t.stop_anchor[0] : t.stop_anchor[1];
-      const gap = long ? ext - biasSide.edge : biasSide.edge - ext;
-      if (gap >= 0 && gap <= grid.respect) {
+      const beyond = (p) => (long ? p < ext : p > ext);
+      if (biasSide.floor_kind === "level" && beyond(biasSide.edge)) {
         const floorItem = biasSide.cluster[biasSide.cluster.length - 1];
         markPocket(t, { kind: "level", price: biasSide.edge, touches: floorItem.touches, side: long ? "below" : "above" }, ext);
         t.pocket.from = "h4 grid";
+      } else if (!t.unrefined) {
+        const rung = biasSide.rungs
+          .filter((r) => r.kind === "level" && beyond(r.price))
+          .sort((a, b) => (long ? b.price - a.price : a.price - b.price))[0];
+        if (rung) markUnrefined(t, { price: rung.price, touches: rung.touches }, ext, "h4 grid");
       }
     }
   }
@@ -449,6 +502,14 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
 
   // B — the run of the bias-side edge
   const sweeps = all("sweep");
+  // E1: an unrefined tap's refined counterpart — the sweep of the left swing
+  const refinedOf = (t) => {
+    if (!t?.unrefined) return null;
+    const s = sweeps.find((x) => Math.abs(x.trigger - t.unrefined.floor) <= eqTol) ?? null;
+    return s
+      ? `the refined entry is its sweep: ${fmt(s.trigger)} → stop ${fmt(s.stop)} → T1 ${fmt(s.target)} (RR ${fmtRr(s.rr)})${money(s)}`
+      : "the refined entry is its sweep with a 1h/15m reclaim structure and the same stop";
+  };
   const nearEdge = (t) => biasEdge.edge !== null && Math.abs(t.trigger - biasEdge.edge) <= eqTol;
   const atEdge = sweeps.find((t) => nearEdge(t) && t.stop != null) ?? sweeps.find(nearEdge) ?? null;
   const insideGrid = sweeps.find(
@@ -556,6 +617,7 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
       ? `no ${long ? "shorts" : "longs"} from the counter-bias LBs ${counterZones.map((f) => `${zoneTxt(f.zone)} (${tfLabel(f.tf)})`).join(", ")} — pullback origins`
       : null,
     `no ${side}s mid-grid without an event at an edge`,
+    `no ${long ? "buys above" : "sells below"} a build-up forming under a counter-bias LB — its run is the trigger (E1)`,
   ].filter(Boolean);
 
   const biasExt = (t) => (t?.stop_anchor ? fmt(t.stop_anchor[long ? 0 : 1]) : "—");
@@ -565,7 +627,9 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
     A: pendA ?? (A
       ? {
           ...A,
-          label: A.pocket ? "A — inducement, not an entry" : `A — tap of the bias-side LB${A.tf !== "240" ? ` (${tfLabel(A.tf)})` : ""}`,
+          label: A.pocket
+            ? "A — inducement, not an entry"
+            : `A — tap of the bias-side LB${A.unrefined ? " (aggressive)" : ""}${A.tf !== "240" ? ` (${tfLabel(A.tf)})` : ""}`,
           text: A.pocket
             ? `LB ${zoneTxt(A.stop_anchor)}${A.tf !== "240" ? ` (${tfLabel(A.tf)})` : ""} holds; a sweep of ${biasExt(A)} that closes back is another respect of ${fmt(A.pocket.floor)} — its ${long ? "buyers" : "sellers"} are the fuel for the run of the floor. Wait for B.`
             : `tap ${fmt(A.trigger)} (LB ${zoneTxt(A.stop_anchor)}${inH4Lb ? ", the LTF structure inside the 4h LB price sits in" : ""}) → stop ${fmt(A.stop)} → T1 ${fmt(A.target)} (RR ${fmtRr(A.rr)})${money(A)}${/thin zone/.test(A.note ?? "") ? " — thin zone, take the stop from the 5m LB" : ""}${
@@ -574,7 +638,11 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
                     ? ` — over the cap; refined inside the zone: tap ${fmt(A.refined.trigger)} (LB ${zoneTxt(A.refined.stop_anchor)}, ${tfLabel(A.refined.tf)}) → stop ${fmt(A.refined.stop)} → RR ${fmtRr(A.refined.rr)}${money(A.refined)}; a deeper stab into ${zoneTxt(A.stop_anchor)} takes that stop, not the idea — re-enter (V7)`
                     : " — over the cap: refine the stop on a lower-TF LB inside the zone or pass"
                   : ""
-              }. Killed by a trade past ${fmt(A.stop)}.`,
+              }. Killed by a trade past ${fmt(A.stop)}.${
+                A.unrefined
+                  ? ` Unrefined (E1): the ${long ? "low" : "high"} ${fmt(A.unrefined.floor)}${A.unrefined.touches > 1 ? ` x${A.unrefined.touches}` : ""} from the left is intact — ${refinedOf(A)}; Elijah waits for that point.`
+                  : ""
+              }`,
         }
       : { label: "A — no bias-side LB to tap", text: "no alive LB on the bias side below price" }),
     B: pendB ?? (B
@@ -604,7 +672,7 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
           ? "no counter edge in view"
           : pendCounter
             ? `run ${agoTxt(pendCounter.bars_since_run)} to ${fmt(pendCounter.ext)}, reclaim not confirmed (${pendCounter.bars_left} of ${pendCounter.confirm_bars} bars left): a 1h close back ${long ? "below" : "above"} ${fmt(pendCounter.level)} = a new ${long ? "bear" : "bull"} LB ${zoneTxt(pendCounter.lb_if_reclaimed)}, a pullback origin — partial, then wait for the next ${long ? "low" : "high"}; a miss = continuation, the path to ${counterEdge.beyond[0] ? itemTxt(counterEdge.beyond[0]) : "the next level beyond"} is open, stop to BE.`
-            : `run + reclaim → a new ${long ? "bear" : "bull"} LB, a pullback origin: partial, then wait for the next ${long ? "low" : "high"}. Run without reclaim → the path to ${counterEdge.beyond[0] ? itemTxt(counterEdge.beyond[0]) : "the next level beyond"} is open, stop to BE.`,
+            : `run + reclaim → a new ${long ? "bear" : "bull"} LB — invalid (E1): it does not align with the bias, so it is a pullback origin: partial, then wait for the next ${long ? "low" : "high"}; its false reaction is where the next build-up forms, and the ${side} trigger is the run of that build-up — no ${long ? "buys above" : "sells below"} it. Run without reclaim → the path to ${counterEdge.beyond[0] ? itemTxt(counterEdge.beyond[0]) : "the next level beyond"} is open, stop to BE.`,
       beyond: counterEdge.beyond[0] ?? null,
       ...(pendCounter ? { pending: pendCounter } : {}),
     },
@@ -623,7 +691,8 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
                 ? `A: a 1h/15m close back ${long ? "above" : "below"} ${fmt(pendBias.level)} within ${pendBias.bars_left} 4h bar(s), then the tap of ${zoneTxt(pendBias.lb_if_reclaimed)} — stop ${long ? "under" : "over"} ${fmt(pendBias.ext)}; no such close = breakdown, the grid redraws`
                 : null,
               !pendBias && A && !A.pocket
-                ? `A: a 1h close back into LB ${zoneTxt(A.stop_anchor)} plus a 5m sweep of ${biasExt(A)} that closes back — that 5m ${long ? "low" : "high"} is the stop`
+                ? `A${A.unrefined ? " (aggressive)" : ""}: a 1h close back into LB ${zoneTxt(A.stop_anchor)} plus a 5m sweep of ${biasExt(A)} that closes back — that 5m ${long ? "low" : "high"} is the stop` +
+                  (A.unrefined ? `; refined: the 1h/15m sweep of ${fmt(A.unrefined.floor)} and its close back — the same stop under LB ${zoneTxt(A.stop_anchor)}` : "")
                 : null,
               !pendBias && A && A.pocket ? `A: not traded — a 1h sweep of ${biasExt(A)} is a respect of ${fmt(A.pocket.floor)}, wait for B` : null,
               !pendBias && B
@@ -648,7 +717,7 @@ function gridLines(grid, long) {
     if (s.pending) {
       const p = s.pending;
       const ago = p.bars_since_run === 0 ? "this bar" : p.bars_since_run === 1 ? "1 bar ago" : `${p.bars_since_run} bars ago`;
-      return `  ${side === "upper" ? "▲" : "▼"} ${fmt(s.edge)} ${isBias ? "bias edge" : "counter edge"} — PENDING: run to ${fmt(p.ext)} ${ago}, reclaim not confirmed (${p.bars_left} of ${p.confirm_bars} bars left)`;
+      return `  ${side === "upper" ? "▲" : "▼"} ${fmt(s.edge)} ${isBias ? "bias edge" : "counter edge"} — PENDING: run to ${fmt(p.ext)} ${ago}, reclaim not confirmed (${p.bars_left} of ${p.confirm_bars} bars left)${p.deepened ? ` — deepened past LB ${zoneTxt(p.deepened)}, the same trap` : ""}`;
     }
     const members = s.cluster.length > 1 ? ` — ${isBias && s.floor_kind === "level" ? "pocket" : "cluster"}: ${s.cluster.map(itemTxt).join(" + ")}` : ` — ${itemTxt(s.anchor)}`;
     return `  ${side === "upper" ? "▲" : "▼"} ${fmt(s.edge)} ${isBias ? "bias edge" : "counter edge"}${s.weak ? " (weak: single-touch)" : ""}${members}`;
@@ -678,6 +747,9 @@ function sinceLines(grid) {
       case "bull_lb_invalidated":
       case "bear_lb_invalidated":
         return `  ${e.type.startsWith("bull") ? "bull" : "bear"} LB ${zoneTxt(e.zone)} killed ${ago} (trade beyond the extreme)`;
+      case "bull_lb_deepened":
+      case "bear_lb_deepened":
+        return `  ${e.type.startsWith("bull") ? "bull" : "bear"} LB ${zoneTxt(e.zone)} deepened to ${fmt(e.ext)} ${ago} — the same trap; the reclaim of ${fmt(e.level)} decides`;
       case "low_poke":
       case "high_poke":
         return `  poke of ${fmt(e.level)} to ${fmt(e.ext)} ${ago} — floor ${fmt(e.floor)} intact (inducement into the pocket)`;

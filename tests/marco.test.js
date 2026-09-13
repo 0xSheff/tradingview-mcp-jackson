@@ -54,6 +54,10 @@ const SWEEP_RECLAIM = [
 // trade-beyond rule an equal low takes nothing, and the first zone's top
 // (100.0, a pivot inside the zone within eq_tolerance of 99.5) is a respect
 // that retires the zone into a x2 level — the second run sweeps that level.
+// A wick 1.5 under the zone's extreme — beyond eq_tolerance, so this is a
+// plain invalidation, not a deepened run (E1, 2026-09-14).
+const INVALIDATE_DEEP = [101.9, 102, 98.0, 99.2];
+
 const SWEEP_RECLAIM_TWICE = SWEEP_RECLAIM.concat(
   SWEEP_RECLAIM.map((r, i) => (i === 4 ? [103, 103.6, 99.4, 102.8] : r)),
 );
@@ -109,7 +113,7 @@ test("equal lows build up and qualify the LB that sweeps them", () => {
 });
 
 test("close beyond the LB extreme invalidates the zone", () => {
-  const rows = [...SWEEP_RECLAIM, [101.9, 102, 98.9, 99.2]];
+  const rows = [...SWEEP_RECLAIM, INVALIDATE_DEEP];
   const map = buildLiquidityMap(mkBars(rows), CFG);
   assert.equal(map.blocks.length, 1);
   assert.equal(map.blocks[0].dead, true);
@@ -151,7 +155,7 @@ test("story: recent bullish LB reads as a buy story", () => {
 });
 
 test("story: an invalidated LB reads as a failed trap, not a buy story", () => {
-  const bars = mkBars([...SWEEP_RECLAIM, [101.9, 102, 98.9, 99.2]]);
+  const bars = mkBars([...SWEEP_RECLAIM, INVALIDATE_DEEP]);
   const map = buildLiquidityMap(bars, CFG);
   const story = storyRead(map, bars, CFG);
   assert.equal(story.mode, "down_continuation");
@@ -256,7 +260,7 @@ test("analyzeMarco reports the stop buffered past the zone extreme", () => {
 test("an invalidated LB's extreme is swept liquidity: reclaim → new LB", () => {
   const rows = [
     ...SWEEP_RECLAIM,
-    [101.9, 102, 98.9, 99.2], // close below 99.5 → invalidated, pending opens
+    INVALIDATE_DEEP, // trade 1.5 below 99.5 → invalidated, pending opens against the extreme
     [99.2, 100.5, 98.8, 100.2], // reclaim above 99.5 → LB at the new extreme
   ];
   const map = buildLiquidityMap(mkBars(rows), CFG);
@@ -264,7 +268,7 @@ test("an invalidated LB's extreme is swept liquidity: reclaim → new LB", () =>
   const nb = map.blocks[1];
   assert.equal(nb.side, "bull");
   assert.equal(nb.top, 99.5);
-  assert.equal(nb.bot, 98.8);
+  assert.equal(nb.bot, 98.0);
   assert.equal(nb.born, 7);
   assert.ok(map.events.some((e) => e.type === "low_swept" && e.from_lb));
 });
@@ -455,7 +459,7 @@ test("inducement: an unqualified LB against a live qualified one is flagged and 
   assert.equal(story.mode, "buy_story");
   assert.equal(story.direction, 1);
   assert.deepEqual(story.lb.zone, [99, 100]);
-  assert.deepEqual(story.inducement, { side: "bear", zone: [105, 106], alive: true });
+  assert.deepEqual(story.inducement, { side: "bear", zone: [105, 106], alive: true, left: null });
   assert.match(story.read, /bearish LB 105–106 created 1 bar ago is inducement/);
 
   const read = analyzeMarco(bars, CFG);
@@ -661,7 +665,14 @@ test("resolveBias speaks in the given senior/junior names (intraweek stack)", ()
 // is not the liquidity, and a stab into a pocket is not a trap.
 
 test("a trade beyond the LB extreme invalidates the zone even when the bar closes back inside; the extreme is swept liquidity", () => {
-  const rows = [...SWEEP_RECLAIM, [101.9, 102, 99.4, 101.5]]; // wick under 99.5, close above 100
+  // the zone is older than confirm_bars here, so the wick is a plain
+  // invalidation (the fresh-zone case is the deepened run, E1 — next tests)
+  const filler = [
+    [101.9, 102.3, 100.6, 101.7],
+    [101.7, 102.2, 100.7, 101.9],
+    [101.9, 102.4, 100.8, 102.0],
+  ];
+  const rows = [...SWEEP_RECLAIM, ...filler, [101.9, 102, 99.4, 101.5]]; // wick under 99.5, close above 100
   const map = buildLiquidityMap(mkBars(rows), CFG);
   assert.equal(map.blocks[0].dead, true);
   assert.equal(map.blocks[0].death, "invalidated");
@@ -671,6 +682,225 @@ test("a trade beyond the LB extreme invalidates the zone even when the bar close
   assert.equal(map.blocks[1].bot, 99.4);
   assert.equal(map.blocks[1].top, 99.5);
   assert.equal(map.blocks[1].dead, false);
+});
+
+// ---------------------------------------------------------------------------
+// E1 (Elijah, 2026-09-14): deepened runs — a wick within eq_tolerance through a
+// FRESH zone is the same run deepened, not an internal-point run.
+
+test("deepened run: a shallow wick through a fresh LB that closes back above the ORIGINAL level keeps the trap — zone = new extreme ↔ original level", () => {
+  const rows = [...SWEEP_RECLAIM, [101.9, 102, 99.4, 101.5]]; // 0.1 under 99.5, 2 bars after birth, close above 100
+  const bars = mkBars(rows);
+  const map = buildLiquidityMap(bars, CFG);
+  assert.equal(map.blocks[0].death, "deepened");
+  assert.ok(map.events.some((e) => e.type === "bull_lb_deepened" && e.ext === 99.4 && e.level === 100.0));
+  assert.ok(!map.events.some((e) => e.type === "low_swept" && e.from_lb), "no x1 sweep of the zone's own extreme");
+  assert.equal(map.blocks.length, 2);
+  const nb = map.blocks[1];
+  assert.equal(nb.bot, 99.4);
+  assert.equal(nb.top, 100.0);
+  assert.deepEqual(nb.deepened, [99.5, 100.0]);
+  assert.equal(nb.dead, false);
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "buy_story");
+  assert.deepEqual(story.lb.zone, [99.4, 100]);
+  assert.equal(story.lb.deepened, true);
+  assert.match(story.read, /the run deepened past 99.5 before the reclaim — the same trap/);
+});
+
+test("deepened run: while the reclaim is pending the story falls back, and a miss within confirm_bars is the breakdown of the original level", () => {
+  const rows = [...SWEEP_RECLAIM, [101.9, 102, 99.4, 99.8], [99.8, 100.0, 99.5, 99.7], [99.7, 99.9, 99.5, 99.6], [99.6, 99.8, 99.4, 99.5]];
+  const bars = mkBars(rows);
+  const map = buildLiquidityMap(bars, CFG);
+  assert.equal(map.blocks.length, 1);
+  assert.equal(map.blocks[0].death, "deepened");
+  const bd = map.events.find((e) => e.type === "low_breakdown");
+  assert.ok(bd && bd.level === 100.0, "the breakdown is of the original swept level, not the zone extreme");
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "down_continuation");
+  // mid-pending: the superseded zone no longer tells a buy story
+  const mid = mkBars(rows.slice(0, 7));
+  const midMap = buildLiquidityMap(mid, CFG);
+  assert.ok(midMap.pending.bull && midMap.pending.bull.level === 100.0);
+  assert.deepEqual(midMap.pending.bull.deepened, [99.5, 100.0]);
+  assert.notEqual(storyRead(midMap, mid, CFG).mode, "buy_story");
+});
+
+test("deepened run keeps the swept level's qualification: a x2 build-up run, wicked 0.1 deeper two bars later, is still a qualified trap", () => {
+  const rows = [
+    [100, 101, 99.5, 100.5],
+    [100.5, 101, 98.0, 100.0], // pivot low 98.0
+    [100, 102, 99.6, 101.5],
+    [101.5, 102.5, 98.1, 100.8], // pivot low 98.1 → 98.0 x2
+    [100.8, 102, 100.2, 101.6],
+    [101.6, 102, 97.7, 101.0], // runs 98.0 x2, closes back → bull LB 97.7–98.0 qualified
+    [101, 102.2, 100.5, 101.8],
+    [101.8, 102, 97.6, 101.2], // 0.1 deeper, 2 bars later, close above 98.0 → deepened, same trap
+    [101.2, 101.5, 100.8, 101.3],
+  ];
+  const bars = mkBars(rows);
+  const map = buildLiquidityMap(bars, CFG);
+  const alive = map.blocks.filter((b) => !b.dead);
+  assert.equal(alive.length, 1);
+  assert.equal(alive[0].qualified, true);
+  assert.equal(alive[0].sweptTouches, 2);
+  assert.equal(alive[0].inducement, false);
+  assert.deepEqual([alive[0].bot, alive[0].top], [97.6, 98.0]);
+  assert.equal(storyRead(map, bars, CFG).mode, "buy_story");
+});
+
+// ---------------------------------------------------------------------------
+// E1 (Elijah, 2026-09-14): left liquidity — a run makes a valid LB only when it
+// takes the level AND the liquidity from the left.
+
+// a x2 build-up at 98.0 stays intact below the run of the x1 internal low 100.0
+const INVALID_LEFT = [
+  [100, 101, 99.5, 100.5],
+  [100.5, 101, 98.0, 100.0], // pivot low 98.0
+  [100, 102, 99.6, 101.5],
+  [101.5, 102.5, 98.1, 100.8], // pivot low 98.1 → 98.0 x2
+  [100.8, 102, 100.2, 101.6],
+  [101.6, 102, 100.0, 101.2], // pivot low 100.0 — the internal point
+  [101.2, 102.2, 100.5, 101.8],
+  [101.8, 102, 99.3, 101.4], // runs 100.0, leaves 98.0 x2 intact → bull LB 99.3–100.0, invalid
+  [101.4, 101.5, 100.8, 101.3],
+  [101.3, 101.7, 100.9, 101.4], // filler: no new pivots, zone untouched
+  [101.4, 101.7, 100.8, 101.2],
+  [101.2, 101.6, 100.7, 101.1],
+];
+
+// a x2 build-up at 100.0 is run while the single-touch origin 98.0 stays intact
+const UNREFINED_LEFT = [
+  [100, 101, 99.5, 100.5],
+  [100.5, 101, 98.0, 100.0], // pivot low 98.0 (x1) — the origin
+  [100, 102, 99.6, 101.5],
+  [101.5, 102.5, 100.2, 101.6],
+  [101.6, 102, 100.0, 101.2], // pivot low 100.0
+  [101.2, 102.2, 100.6, 101.8],
+  [101.8, 102, 100.1, 101.4], // pivot low 100.1 → 100.0 x2
+  [101.4, 102.3, 100.7, 101.9],
+  [101.9, 102, 99.4, 101.5], // runs 100.0 x2, leaves 98.0 x1 intact → bull LB 99.4–100.0 qualified, unrefined
+  [101.5, 101.8, 100.9, 101.3],
+  [101.3, 101.7, 100.8, 101.2], // filler: no new pivots, zone untouched
+  [101.2, 101.6, 100.7, 101.1],
+];
+
+// a clean bull trap (98.0 x2 run) anchors the story; then a x2 high 102.1 is run
+// while the leg's origin 104.0 stays intact above — E1's Sep-2 10:00 bear LB
+const LEFT_INDUCEMENT = [
+  [100, 101, 99.5, 100.5],
+  [100.5, 101, 98.0, 100.2], // pivot low 98.0
+  [100.2, 101.5, 99.8, 101.0],
+  [101, 101.6, 98.1, 100.6], // pivot low 98.1 → 98.0 x2
+  [100.6, 101.8, 100.0, 101.5],
+  [101.5, 104.0, 101.0, 103.2], // pivot high 104.0 — the leg's origin
+  [103.2, 103.6, 101.2, 101.6],
+  [101.6, 102.0, 97.6, 100.9], // runs 98.0 x2 → bull LB 97.6–98.0, clean and qualified: the anchor
+  [100.9, 101.9, 100.4, 101.8],
+  [101.8, 102.0, 101.3, 101.9], // pivot high 102.0
+  [101.9, 101.9, 101.4, 101.7],
+  [101.7, 102.0, 101.2, 101.9], // pivot high 102.0 again (equal, not a sweep) → 102.0 x2
+  [101.9, 102.0, 101.3, 101.8],
+  [101.8, 102.6, 101.2, 101.6], // runs 102.0 x2, 104.0 intact above → bear LB 102.0–102.6: unrefined, inducement
+  [101.6, 101.9, 101.3, 101.5],
+];
+
+test("left liquidity: a run that leaves a build-up intact beyond it is INVALID — no story, its tap is a pocket, the sweep of the build-up is the entry", () => {
+  const bars = mkBars(INVALID_LEFT);
+  const map = buildLiquidityMap(bars, CFG);
+  const blk = map.blocks.find((b) => b.side === "bull");
+  assert.ok(blk && !blk.dead);
+  assert.deepEqual([blk.bot, blk.top], [99.3, 100.0]);
+  assert.equal(blk.grade, "invalid");
+  assert.equal(blk.left.price, 98.0);
+  assert.equal(blk.left.touches, 2);
+  assert.ok(map.events.some((e) => e.type === "bull_lb_created" && e.grade === "invalid" && e.left.price === 98.0));
+  const story = storyRead(map, bars, CFG);
+  assert.notEqual(story.mode, "buy_story");
+  assert.match(story.read, /bullish LB 99.3–100 created 4 bars ago is invalid: the low 98 x2 from the left is intact — not a flip; no entry until 98 is run/);
+  const read = analyzeMarco(bars, CFG, { bias: 1 });
+  const tap = read.triggers.find((t) => t.kind === "tap");
+  assert.ok(tap, "the tap exists");
+  assert.equal(tap.grade, "invalid");
+  assert.equal(tap.pocket.floor, 98.0);
+  assert.equal(tap.pocket.from, "structure");
+  assert.match(tap.note, /no entry until 98 is run/);
+  assert.equal(read.triggers.find((t) => t.kind === "sweep" && t.trigger === 98.0).preferred, true);
+  assert.equal(read.blocks.find((b) => b.side === "bull").grade, "invalid");
+});
+
+test("left liquidity: only a single-touch swing left behind makes the LB UNREFINED — no story flip, the tap is the aggressive entry, the sweep of the swing the refined one", () => {
+  const bars = mkBars(UNREFINED_LEFT);
+  const map = buildLiquidityMap(bars, CFG);
+  const blk = map.blocks.find((b) => b.side === "bull");
+  assert.deepEqual([blk.bot, blk.top], [99.4, 100.0]);
+  assert.equal(blk.qualified, true);
+  assert.equal(blk.grade, "unrefined");
+  assert.equal(blk.left.price, 98.0);
+  assert.equal(blk.left.touches, 1);
+  const story = storyRead(map, bars, CFG);
+  assert.notEqual(story.mode, "buy_story");
+  assert.match(story.read, /is unrefined: the low 98 from the left is intact — not a flip; its tap is the aggressive entry at best, the sweep of 98 the refined one/);
+  const read = analyzeMarco(bars, CFG, { bias: 1 });
+  const tap = read.triggers.find((t) => t.kind === "tap");
+  assert.equal(tap.grade, "unrefined");
+  assert.equal(tap.pocket, undefined);
+  assert.equal(tap.unrefined.floor, 98.0);
+  assert.equal(tap.unrefined.from, "structure");
+  assert.match(tap.note, /this tap is the aggressive entry, the sweep of 98 the refined one/);
+  assert.equal(read.triggers.find((t) => t.kind === "sweep" && t.trigger === 98.0).refined, true);
+});
+
+test("left liquidity: a counter-side LB with the leg's origin intact is inducement against a live clean anchor — the story holds (E1, MNQ Sep 2 10:00)", () => {
+  const bars = mkBars(LEFT_INDUCEMENT);
+  const map = buildLiquidityMap(bars, CFG);
+  const bull = map.blocks.find((b) => b.side === "bull");
+  const bear = map.blocks.find((b) => b.side === "bear");
+  assert.ok(bull && !bull.dead && bull.qualified && bull.left === null, "the anchor is clean and qualified");
+  assert.ok(bear && !bear.dead);
+  assert.deepEqual([bear.bot, bear.top], [102.0, 102.6]);
+  assert.equal(bear.qualified, true, "the x2 run qualifies the zone");
+  assert.equal(bear.grade, "unrefined");
+  assert.equal(bear.left.price, 104.0);
+  assert.equal(bear.inducement, true);
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "buy_story");
+  assert.deepEqual(story.lb.zone, [97.6, 98]);
+  assert.deepEqual(story.inducement, { side: "bear", zone: [102, 102.6], alive: true, left: { price: 104, touches: 1 } });
+  assert.match(story.read, /bearish LB 102–102.6 created 1 bar ago is inducement \(the high 104 from the left is intact\): a pullback origin, not a flip/);
+  const read = analyzeMarco(bars, CFG);
+  assert.equal(read.bias_used, 1);
+  assert.equal(read.false_reactions[0].inducement, true);
+  assert.match(read.false_reactions[0].note, /the high 104 from the left is intact/);
+});
+
+test("MNQ 2026-09-02 (real bars, E1): the deepened 28927.25 run keeps the 1h buy story, and the 10:00 bear LB under the intact 29317.25 is inducement, not a flip", () => {
+  const fx = JSON.parse(readFileSync(new URL("./fixtures/mnq_2026-09-04.json", import.meta.url), "utf-8"));
+  const cfg = MARCO_DEFAULTS;
+  const et = (m, d, h) => Date.UTC(2026, m - 1, d, h + 4) / 1000; // ET = UTC-4 in September
+  const readAt = (cut) => {
+    const b60 = fx.bars["60"].filter((x) => x.time <= cut);
+    const b240 = fx.bars["240"].filter((x) => x.time <= cut);
+    const seed = seedFromMap(buildLiquidityMap(b240, cfg), b240, { before: b60[0].time, price: b60.at(-1).close, cfg });
+    const map = buildLiquidityMap(b60, cfg, { seed });
+    return { map, story: storyRead(map, b60, cfg) };
+  };
+  const near = (a, b) => Math.abs(a - b) < 0.01;
+  // 07:00 ET: the 05:00 low 28940.75 is wicked to 28927.25 (0.16 ATR) and the bar closes 29083.75
+  const r7 = readAt(et(9, 2, 7));
+  assert.equal(r7.story.mode, "buy_story");
+  assert.ok(near(r7.story.lb.zone[0], 28927.25) && near(r7.story.lb.zone[1], 28947.75), `zone ${r7.story.lb.zone}`);
+  assert.ok(r7.map.events.some((e) => e.type === "bull_lb_deepened" && near(e.ext, 28927.25)));
+  assert.match(r7.story.read, /the run deepened past 28940.75 before the reclaim — the same trap/);
+  // 11:00 ET: the 10:00 bar ran the x2 highs 29171.25 to 29211.75 and closed back — the 29317.25 high from the left is intact
+  const r11 = readAt(et(9, 2, 11));
+  assert.equal(r11.story.mode, "buy_story");
+  assert.equal(r11.story.inducement?.side, "bear");
+  assert.ok(near(r11.story.inducement.zone[0], 29171.25) && near(r11.story.inducement.zone[1], 29211.75));
+  assert.ok(near(r11.story.inducement.left.price, 29317.25));
+  const bear = r11.map.blocks.find((b) => !b.dead && b.side === "bear" && near(b.top, 29211.75));
+  assert.equal(bear.grade, "unrefined");
+  assert.equal(bear.inducement, true);
 });
 
 test("an expired zone's extreme returns to the map as a level — the liquidity outlives the zone", () => {
@@ -850,9 +1080,15 @@ test("intraweek: a target beyond a weekly range says refine the stop instead; th
   const bias = resolveBias(reads.W.story, reads.D.story);
   assert.equal(bias.bias_word, "short");
   const { intraweek, triggers } = intraweekLayer(reads, bias, cfg);
-  assert.equal(intraweek.phase, "aligned");
-  assert.equal(intraweek.local_regime, "daily_only");
-  assert.match(intraweek.local_read, /trigger timeframe agrees/);
+  // E1 (2026-09-14): the Sep-4 02:00 4h bear LB 1.3548–1.3549 leaves the
+  // Aug-31 high 1.3566 x2 intact above it — invalid, not the 4h trap. The
+  // trap came on Sep 9 when 1.3566 was run (docs/MARCO-CASES.md D1), so the
+  // week opens with no local story and the run of 1.3566 as the trigger.
+  const h4 = reads["240"].story;
+  assert.equal(h4.mode, "down_continuation");
+  assert.match(h4.read, /bearish LB 1.3548–1.3549 created 3 bars ago is invalid: the high 1.3566 x2 from the left is intact/);
+  assert.equal(intraweek.phase, "no_local_story");
+  assert.equal(intraweek.local_regime, "no_bias");
   assert.doesNotMatch(intraweek.local_read, /counter-trend/);
   assert.ok(Math.abs(intraweek.primary_target - 1.3474) < 0.0001, "the pocket floor is the week's first target");
   const far = [...triggers["240"], ...triggers["60"]].find((t) => t.targets && t.targets.at(-1).atr_weeks > 1);

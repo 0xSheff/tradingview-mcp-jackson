@@ -141,6 +141,35 @@ export async function setVisibleRange({ from, to }) {
   return { success: true, requested: { from, to }, actual: actual || { from: 0, to: 0 } };
 }
 
+// The chart loads an initial chunk (≈300 bars) and only fetches more when the
+// visible range reaches the left edge. Callers that need deeper history for a
+// local computation ask for it explicitly, then wait for the series to settle.
+export async function loadMoreHistory({ bars = 400, timeout_ms = 8000 } = {}) {
+  const before = await evaluate(`
+    (function() {
+      var m = ${CHART_API}._chartWidget.model();
+      var b = m.mainSeries().bars();
+      m.timeScale().requestMoreHistoryPoints(${Math.max(1, Math.floor(bars))});
+      return b.lastIndex() - b.firstIndex() + 1;
+    })()
+  `);
+  const started = Date.now();
+  let loaded = before;
+  while (Date.now() - started < timeout_ms) {
+    await new Promise(r => setTimeout(r, 400));
+    const s = await evaluate(`
+      (function() {
+        var m = ${CHART_API}._chartWidget.model();
+        var b = m.mainSeries().bars();
+        return { loaded: b.lastIndex() - b.firstIndex() + 1, loading: !!(m.mainSeries().isLoading && m.mainSeries().isLoading()) };
+      })()
+    `);
+    loaded = s.loaded;
+    if (!s.loading && loaded > before) break;
+  }
+  return { success: true, requested: bars, before, loaded };
+}
+
 export async function scrollToDate({ date }) {
   let timestamp;
   if (/^\d+$/.test(date)) timestamp = Number(date);

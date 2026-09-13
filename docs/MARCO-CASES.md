@@ -7,7 +7,9 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
 ## Conventions
 
 - **Case ids.** `D#` = Inter Equity Discord post, `IG#` = Instagram post, `U#` = the
-  user's own markup reviewed in a session. Author is named when it is not Marco
+  user's own markup reviewed in a session, `E#` = a YouTube video by Elijah (Ghost
+  Capitals, @Ghostcapitals — an IE coach with his own branch in the Inter Equity
+  Discord; user, 2026-09-14). Author is named when it is not Marco
   (e.g. Elijah, IE moderator) — a moderator's chart is evidence about the method, not
   the author's word; it stays `[SOURCE, D#]` only if Marco's own rule is quoted.
 - **Per case:** date/time (ET and Athens), instrument, what the pictures show, what
@@ -109,6 +111,19 @@ recorded under *Rule candidates* → pocket flag.
   Tooling bug found on the way: `quote_get` ignores its `symbol` parameter and
   returns the chart symbol (6EU2026 and 6EZ2026 came back identical) — fix it, and
   do not use it to detect the front contract until then.
+- **E1 — left liquidity, deepened runs, the invalid-LB chain** (user, 2026-09-14;
+  **built the same day** — engine + Pine v10 + `flagPocket` / `clipToGrid` /
+  `dailyScenarios`; tests in `tests/marco.test.js` (three hand fixtures + the MNQ
+  Sep-2 real bars) and `tests/marco_grid.test.js`; rules restated in `docs/MARCO.md`
+  §2.3, §3, §3.1, §6, §7). The build decisions are recorded under the E1 verdict.
+  Side effects seen in the suite: the 6B fixture's Sep-4 4h bear LB 1.3548–1.3549
+  reads *invalid* under the intact Aug-31 high 1.3566 x2 (the D1 line), so the
+  week opens with no local 4h story and the run of 1.3566 as the trigger — the
+  intraweek test was updated to say so; the weekly 6B map no longer prints the
+  Mar–Jun cascade of ever-lower LBs (each a "reclaim" of the previous extreme): a
+  deepened run that is not reclaimed is a breakdown. Not re-uploaded to
+  TradingView yet — the desktop app was not running; `pine check` and save the
+  next time it is (back up the TV copy first).
 
 ## Rule candidates
 
@@ -140,6 +155,45 @@ recorded under *Rule candidates* → pocket flag.
 - **Shelf promotion** (§7.1 open idea, now four examples). A non-pivot bar low that
   later bar lows respect ≥ `min_touches` times within `eq_tolerance` becomes a level.
   See *Engine gaps*.
+- **Left-liquidity validity test** `[CALIBRATION, from E1, 2026-09-14]` — **built
+  2026-09-14** (see *Approved changes*; decisions under the E1 verdict). Elijah's
+  diagram: a run creates a valid LB only when it takes the level *and* the liquidity
+  from the left; while the left liquidity stays intact, price "respects this area and
+  keeps trading" to it. The engine has this only as the respect-tolerance tier of the
+  pocket flag (0.75 ATR), and both E1 misses sit beyond it (92 and 105 pts against
+  60–71). Proposal: make the test structural. For a run on one side, the *left
+  liquidity* is every intact same-side level or build-up beyond the swept level
+  within the current leg — on the exec TF bounded by `story_lookback`, in the daily
+  brief bounded by the H4 grid (edge included). Two tiers, both on existing
+  parameters: left liquidity with ≥ `min_touches` (or the grid edge itself) intact →
+  the LB is **invalid**: no story flip (`Bias = Auto`), no entry, its sweep is the
+  trigger; only x1 swings intact → the LB is **valid but unrefined**: the tap or the
+  build-up run is the *aggressive* entry, the sweep of the left swing the *refined*
+  one (Elijah: "personal preference — me personally I like to wait for this point").
+  Replaces the respect tier of `flagPocket` and the `inducement` test of `storyRead`;
+  the `eq_tolerance` poke tier stays. Engine + Pine together. Open for the build:
+  whether an alive same-side LB *extreme* counts as left liquidity for the story — it
+  did in E1's Sep 1 09:00 read, while the 2026-09-11 exception keeps it out of the
+  pocket flag (a nested LB inside the HTF anchor zone is a refinement); E1 suggests
+  the layering decides: the extreme counts when it is the HTF's *draw*, not its anchor.
+- **Deepened runs inherit the trap** `[CALIBRATION, from E1]` — **built 2026-09-14**.
+  A fresh LB (younger
+  than `confirm_bars`) traded through by a wick within `eq_tolerance` of its extreme,
+  with the bar — or the next `confirm_bars` — closing back above the *original* swept
+  level, is the same run deepened (§3.1 PENDING B, after the fact), not "an internal
+  low run inside the leg": the LB becomes new extreme ↔ original swept level, keeps
+  the level's qualification, the story stands. E1: Sep 2 05:00 → 07:00, 13.5 pts =
+  0.16 ATR, the 1h fell from `buy_story` to `down_continuation` while the 240 (both
+  wicks in one bar) read the trap. Engine + Pine; regression test on the MNQ fixture.
+- **The invalid-LB chain in the brief** (rendering only) — **built 2026-09-14**. E1's
+  1h → 5m walk is the D
+  scenario's mechanics written out: the counter-bias LB is *invalid* — "an area price
+  respects to engineer liquidity" — and its false reaction builds the build-up (trend
+  line, equal lows) under which the bias-side trigger is expected: "do not buy above
+  the build-up". Print, per bias-side scenario, both entry grades — aggressive (the
+  build-up run, close-confirmed) and refined (the run of the leg's origin swing) —
+  with the stop covering the whole LB extreme either way ("this high can easily get
+  taken out and then respect this extreme"). `renderDailyMarkdown` only; no map change.
 
 ## Engine gaps observed
 
@@ -156,6 +210,14 @@ a strict `pivot_len` swing never registers, so its tap count is lost:
 Rising lows are never strict pivots (each has a lower low within `pivot_len` bars to
 the left), and a shelf 30 pips above the last pivot is beyond `respect_tolerance`, so
 neither the swing rule nor the respect rule catches it.
+
+**Deepened runs.** A wick through a fresh LB's extreme within `eq_tolerance` kills the
+LB and re-opens the sweep against the LB's own young x1 extreme, so a qualified trap is
+re-read as "an internal low run inside the leg" — MNQ 1h, 2 Sep 2026 05:00 → 07:00 ET
+(E1): 28 940.75 → 28 927.25, 0.16 ATR, `buy_story` → `down_continuation` + `inducement`.
+The 240 does not see it because both wicks fall in one bar. **Fixed 2026-09-14** (the
+E1 build): the pending reopens against the original level with its qualification and
+`bull_lb_deepened` marks it; the MNQ real-bars test pins the Sep-2 read.
 
 ---
 
@@ -239,3 +301,144 @@ redraws with 1.152 x3 as the lower edge; no H1 scenario until then. **D** price 
 without reclaim → the path to 1.1685–1.1690 is open, stop to BE. Not done: shorts
 from 1.1656 / 1.1672 (counter-bias, and the Mon–Tue window is closed), longs
 mid-range without an event.
+
+### E1 — Elijah (Ghost Capitals), YouTube `dSDugD5rhFs`, 2026-09-14 — "Identifying liquidity block & traps masterclass" (14:58)
+
+Elijah is an IE coach (his own branch in the Inter Equity Discord — user, 2026-09-14).
+The vocabulary and the rules are Marco's; the video is evidence about the method, not
+`[SOURCE]`. Reviewed from the auto-generated transcript plus five user screenshots
+(2:51, 4:12, 4:41, 5:22, 5:47); the NQ 1h example reproduced on
+`tests/fixtures/mnq_2026-09-04.json` (MNQ, defaults, 60 seeded from 240). Prices below
+are ours; his NQ1! differs by ticks.
+
+**What he says (0:45–4:44, diagrams).** *Valid* LB = "an area that currently does not
+have liquidity below / above — and it has to align with the current direction of the
+market". *Invalid* LB = "an area we can see price respect and engineer liquidity,
+because it does not align with the current direction". The diagram adds the test the
+definition hides: bullish, the run must take the low **and the low from the left** —
+"that traps all the traders in the market, meaning we now have no liquidity at this
+low"; bearish is the mirror. Invalid: the high is taken but "we've kept these highs to
+the left intact and price moves away — the liquidity from the left has not been taken,
+therefore price can easily just respect this area and keep trading up"; bullish
+mirror: "price could easily still hunt from this liquidity, respect this area … and now
+leave liquidity — now you have the move." "Price won't always mirror these exact
+diagrams — the market is situational — identify price action with logic."
+
+**NQ 1h (4:49–5:30).** "Price has traded below this low" (the Aug-24 09:00 low
+28 947.75, line extended to Sep 2) → "induced sellers — that gives us our direction:
+no shorts, we are long". The bear LB from the Sep 1 11:00 spike (his box 29 178–29 318;
+our bar 29 179–29 317.25) "does not align with the current direction — trap; that's to
+build liquidity".
+
+**NQ 5m (5:34–7:39, Sep 2 → Sep 3; user screenshots 6:32, 6:38, 6:49, 7:10, 7:15,
+7:27, 7:39).** Sep 2 ET: the 03:10 high 29 120 (line) is taken by the 08:15 spike
+(29 150); the 09:55 drop to 29 015.25 (blue arc) sweeps the 09:30 low and reclaims —
+the 5m bull LB *below*; the 10:45 dip 29 088 (arrow, line) is "the low from the left —
+you can see how we've reacted to this low and caused this move up, and we've just been
+respecting that low ever since"; the 11:00 spike to 29 215 and the 11:20 dip to 29 118
+("we've traded up above this high, then traded down, inducing sellers — we formed a LB
+here … mind you, we've just respected this area to the left", the 29 120 line) print
+the 5m LB 29 118–29 140 (pink box), and the rising channel 11:00–00:00 (lows 29 140 →
+29 145) is the build-up "right above it — we need that build-up to solidify that LB,
+and we have just that … we do not want to be buying anywhere above this build-up".
+"I want to see that low [29 088] taken as my last point of liquidity as well. But more
+often than not you don't need to refine it in this manner — you can honestly just take
+the entry as soon as this [build-up] low is taken. Personal preference; me personally I
+like to wait for this point." The trade (7:10–7:15): limit long **29 088** (the left
+low), stop **29 015.25** (beyond the LB below), target **29 317.25** (the top of the
+invalid 1h bear LB — the range extreme's far edge, §3.1 ladder split), RR 3.15 — a §4.4
+sweep trigger at the origin, stop under the pre-existing LB, target the HTF liquidity.
+Outcome: tagged Sep 3 01:15 (low 29 075 — "notice how it takes out that point as well
+… we take out that low, and we take out the liquidity from the left; we have the LB
+below, and price runs"), back toward entry 05:30 (29 100), target 09:35 (29 359). Our
+1h: Sep 3 01:00 low 29 075 / close 29 188.75; 05:00–07:00 lows 29 127 / 29 105.5 /
+29 101.75; 09:00 high 29 375.25.
+
+**15m/5m bearish example (7:39–11:40; instrument and date not on the screenshots).**
+Highs run → buyers induced → bearish. A "bull LB" left by a minor low run — "a lot of
+you would have seen this as a liquidity block" — is invalid: "we've still reacted from
+this low to the left … we're not in a bullish environment"; its reactions "induce
+buyers yet again". 5m entry once sellers are trapped at a build-up of highs ("traded
+into this area multiple times and sold off, now we finally take it out"): *aggressive*
+= "as soon as this high gets taken, based on the candle-closure confirmation", target
+the lows from the left; *most optimal* = the internal high that forms after the LB and
+"induces sellers — this one will trap them once it gets taken out"; the stop covers the
+whole LB high — "this high can easily get taken out and then respect this extreme, and
+price can still sell off; I'd rather have a wider stop still covering this LB" (the
+wider stop did save the trade).
+
+**AUDUSD 15m/5m (11:45–14:06; user screenshot 14:12 — FOREXCOM 5m, Aug 28 → Sep 2
+ET).** The Aug-28 09:00 spike 0.71880 runs the external high 0.71870 (blue arc) →
+"induces buyers into the market … we now want to see price towards the lows" → bias
+short; that spike is the valid bear LB (the stop side, 0.71875). The Aug-29 13:00 low
+0.71545, after the 0.71660 high was taken, leaves a bull LB 0.71545–0.71600 (pink
+box) — "mind you, we are not in a bullish environment, therefore this area should be a
+trap: an invalid liquidity block, we should see false reactions coming from here" —
+tapped Aug 30 21:00 and Aug 31 11:00, two false reactions. The highs 0.71720 (Aug 29
+17:00 → Aug 31 16:30) are "liquidity being built here"; 0.71770 (Aug 28 09:30 → Aug 31
+16:30) is the internal point left after the external run — "take out all this
+liquidity from the left, respect this liquidity block, and trade all the way to the
+downside". Trade: limit short **0.71770**, stop **0.71875**, target **0.71378** (the
+lows from the left), RR 3.73; tagged Aug 31 18:00 (spike 0.71800), lows respected Sep 1
+04:30–12:00 (0.71400 → bounce 0.71610), target Sep 2 00:05 (0.71330). The same
+mechanics as the NQ long: the entry is the sweep of the left-liquidity level, the stop
+beyond the pre-existing LB from the external run, the target the lows the structure
+kept respecting.
+
+**Engine on the same bars (MNQ 1h, defaults; 1h ATR14 80–95, eq 20–24, respect 60–71):**
+
+| Bar (ET) | What happened | Engine 1h read | Elijah's rule | Outcome |
+| --- | --- | --- | --- | --- |
+| Sep 1 09:00 | waterfall runs the 1h lows 29 116.75 / 29 040 inside the Aug-24 LB zone 28 947.75–29 116.75, close 29 105.5 | `buy_story`; bull LB 29 040–29 095.5 **qualified**; `tap long @29095.5 RR 6.9, confirmed` | invalid — the low from the left (Aug-24 28 947.75, 92 pts below, beyond respect 68.5) is intact | killed 14:00 (29 001.75); 28 947.75 run Sep 2 |
+| Sep 1 11:00 | spike 29 317.25, close 29 296 | level `29317.25 x1` (no LB — it swept no registered high) | invalid bear LB, "to build liquidity" | tapped Sep 2 23:00 (29 242.75) and Sep 3 04:00 (29 293) — false reactions; run Sep 3 09:00 |
+| Sep 2 05:00 | low 28 940.75 runs the Aug-24 extreme 28 947.75, close 28 973.25 | invalidated-extreme rule → `buy_story` "lows were run and reclaimed 0 bars ago"; bull LB 28 940.75–28 947.75 Q, thin | direction long — "traded below this low, sellers induced" | agrees |
+| Sep 2 07:00 | low 28 927.25 (13.5 pts = 0.16 ATR deeper), close 29 083.75 | the 05:00 LB **invalidated**; new bull LB 28 927.25–28 940.75 `inducement` ("an internal low run inside the leg"); story → `down_continuation` | the same trap, deepened — the low **and** the low from the left are taken | 29 543.75 within 28 h; the 240 (one 04:00–08:00 bar) read `buy_story` at once |
+| Sep 2 10:00 | high 29 211.75 runs 29 171.25 x2, close 29 120.25 | `sell_story`; bear LB 29 171.25–29 211.75 **qualified** (x2 build-up run); target 28 940.75 | invalid — direction long, and the high from the left (29 317.25, 105 pts above, beyond respect 71) is intact | 20 h of chop 29 075–29 293 under it (the 5m trend line), then 29 317 run → 29 543.75 |
+| Sep 3 04:00 | high 29 293, close 29 216.75 | bear LB 29 255–29 293 `pocket` — "24.25 below the x1 level 29 317.25; no entry until it is run" | invalid, same reason | run without reclaim 09:00, continuation — agrees |
+
+W/D from the fixture on these dates: weekly `buy_story` (stale), daily `sell_story` with
+28 947.75 as its target → `counter_trend` short. The Sep 2 run consumed the daily's
+target, so the layered read returns to the weekly long on exactly the bar Elijah calls
+the direction; in the daily brief the Sep 1 09:00 and Sep 2 10:00 1h stories would have
+been `noise` against the bias — the H4 grid already carries the *alignment* half of his
+rule.
+
+**Verdict.** Nothing contradicts `docs/MARCO.md`: valid = "holds no liquidity" +
+aligned (§2.3, §3); invalid = the false reaction / pullback origin (§3, ladder split);
+the build-up solidifies the LB (§6 qualification); wait for the run and do not buy above
+the build-up (§4.4, Principle 2, pocket flag); the trend line as build-up (§2.1);
+direction as a reaction to a run (§3.1); the stop covers the LB extreme (§5); the
+"internal point after the LB" entry is §4.2's candle 3. Two things the engine gets
+wrong on his own example, both about the *left liquidity*: (1) the respect tier of the
+pocket rule is distance-bounded while Elijah's test is structural — both misses
+(Sep 1 09:00, Sep 2 10:00) sit 92–105 pts beyond a 60–71-pt tolerance; (2) a deepened
+run kills a fresh qualified LB and demotes the story (Sep 2 07:00). Both → *Rule
+candidates* (left-liquidity validity test; deepened runs inherit the trap), plus a
+rendering candidate (the invalid-LB → build-up → trigger chain, two entry grades). The
+Sep 1 09:00 miss is not an argument against the 2026-09-11 "floor must be a level"
+exception: the Aug-24 extreme was the *daily's target* — the running leg's draw — not
+the anchor of a live story as MGC's daily zone was; the layering, not the pocket flag,
+separates a nested refinement from inducement into the draw.
+
+**Build decisions (2026-09-14, all `[CALIBRATION]`).** (1) Alive same-side LB
+extremes are not left liquidity — Elijah's 5m long sits above the 29 015 LB and the 1h
+LB 28 927, his AUDUSD short under the 0.71880 LB: they are the stop anchors (V6), which
+is also the 2026-09-11 "floor must be a level" exception. (2) The structure = intact
+same-side levels born since the previous *clean* same-side LB, within `story_lookback`
+— an inducement LB does not reset it (so the Sep-3 04:00 bear LB still sees
+29 317.25); seeded HTF levels are the grid's business. (3) Grades: `invalid` when a
+build-up (≥ `min_touches`) remains or the zone is unqualified — no flip, no entry, its
+sweep is the trigger; `unrefined` when only x1 swings remain — no flip, the tap is the
+aggressive entry, the sweep of the nearest swing the refined one; `clean` otherwise. A
+qualified clean LB is the only story anchor. (4) The `respect_tolerance` tier of the
+pocket flag stays as the near-floor rule for the shelves the engine under-counts (U1);
+the H4-grid tier becomes structural — a level edge is the floor at any distance, an x1
+rung makes the LTF tap unrefined, an LB edge is nothing. (5) Deepened run: a wick within
+`eq_tolerance` through a zone younger than `confirm_bars` reopens the pending against
+the original level with its taps and age. Known limit: a single-touch level older than
+`story_lookback` is outside the structure — Sep 1 09:00's 29 016.75 (Aug 24 20:00, 179
+bars) is caught only by the layering (the daily's target 28 947.75). Verified on the
+same bars: Sep 2 07:00 `buy_story` at 28 927.25–28 947.75 with "the run deepened past
+28 940.75 before the reclaim — the same trap"; Sep 2 11:00 `buy_story` held, the bear LB
+29 171.25–29 211.75 `unrefined` and inducement "(the high 29 317.25 from the left is
+intact)".

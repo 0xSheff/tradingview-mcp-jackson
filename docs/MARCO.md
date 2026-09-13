@@ -142,6 +142,19 @@ Created **when a level of liquidity gets swept and price moves away**:
   Aug-13 / Sep-2 floor 1.3474 — under the old rules that made a bull LB, a
   1h buy story and "x0 fuel below"; under these it is a poke, and 1.3474 is
   an intact x4 build-up — the short's target.
+- **Deepened runs [CALIBRATION, E1, 2026-09-14].** A wick within
+  `eq_tolerance` through a zone younger than `confirm_bars` is the same run
+  deepened (§3.1 PENDING B, after the fact), not a new internal-point run:
+  the pending reopens against the *original* swept level with its taps and
+  age, and the reclaim prints the zone new extreme ↔ original level
+  (`bull_lb_deepened`, then `bull_lb_created` carrying `deepened`). No
+  reclaim within `confirm_bars` is the breakdown of the original level. MNQ
+  1h, 2 Sep 2026: the 05:00 run of the Aug-24 low 28 947.75 was wicked 13.5
+  points deeper at 07:00 (0.16 ATR) and the bar closed 29 083.75 — the old
+  rules killed the qualified LB and re-read the bar as "an internal low run
+  inside the leg" (`down_continuation`), while the 240, with both wicks in
+  one bar, read the trap at once and Elijah reads it as the direction
+  (docs/MARCO-CASES.md E1).
 
 ### 2.4 The LB zone
 
@@ -233,6 +246,52 @@ author sets it by eye. **[CALIBRATION]** In the engine every zone carries a
 the indicator's `Bias` input (Auto / Long / Short / Off) draws counter-bias
 zones dashed with the label `false` and mutes their alerts; Auto follows the
 last qualified LB and is not moved by inducement zones.
+
+**Valid and invalid LBs — the liquidity from the left [CALIBRATION, E1,
+2026-09-14].** Elijah's (IE coach, Ghost Capitals) definition sharpens the
+anchor rule: a *valid* LB is "an area that currently does not have liquidity
+below / above — and it has to align with the current direction of the
+market"; an *invalid* one is "an area we can see price respect and engineer
+liquidity, because it does not align". His diagram supplies the test the
+definition hides: the run must take the level **and the liquidity from the
+left** — "that traps all the traders in the market, meaning we now have no
+liquidity at this low"; leave the left liquidity intact and "price can
+easily just respect this area and keep trading" to it (docs/MARCO-CASES.md
+E1 — evidence about the method, not Marco's word). Built as a structural
+test on existing parameters: at an LB's birth the engine looks for intact
+same-side *levels* beyond the run's extreme inside the **structure** — the
+levels born since the previous clean same-side LB, within `story_lookback`
+(seeded HTF levels belong to the grid). The nearest one is the block's
+`left`; alive same-side LB extremes are never left liquidity — they are the
+V6 stop refinement (Elijah's own 5m long sits above the 29 015 LB and the 1h
+LB 28 927; the 2026-09-11 "floor must be a level" exception stands). Three
+grades:
+
+- **clean** — nothing left behind: the run is the side being run; a
+  qualified clean LB is the story anchor and flips `Bias = Auto`;
+- **unrefined** — only single-touch swings remain (the swept level itself
+  was a build-up): never a flip; as a bias-side entry the tap is the
+  *aggressive* grade and the sweep of the left swing the *refined* one —
+  "you can honestly just take the entry as soon as this [build-up] low is
+  taken … me personally I like to wait for this point" (E1 5m NQ: the
+  trend-line build-up run vs the 29 088 origin low, which he took with a
+  limit);
+- **invalid** — a build-up remains beyond the extreme, or the zone itself is
+  unqualified: never a flip, no entry, the sweep of that build-up is the
+  trigger (the pocket flag at any distance; the `respect_tolerance` tier
+  stays for the shelves the engine under-counts).
+
+An LB with `left` born against a live clean anchor is inducement and the
+read names the level ("the high 29 317.25 from the left is intact"); with no
+anchor it is noted and the story stays where it was. The V1 gold example is
+unchanged (the spike ran an x1 high — inducement by qualification already).
+What changes is the E1 replay: MNQ 1h Sep 2 10:00, the x2 highs 29 171.25
+run with 29 317.25 intact 105 points above (beyond the 71-point respect
+tier) — `sell_story` before, inducement now; 20 hours of chop under the zone,
+then 29 317 ran and price went to 29 543.75. On 6B (docs/MARCO-CASES.md D1)
+the Sep-4 4h bear LB 1.3548–1.3549 is now invalid under the intact Aug-31
+high 1.3566 x2 — Elijah's own Discord line — and the 4h trigger is the run
+of 1.3566, which came on Sep 9.
 
 **Bias source [CALIBRATION].** The author's bias is a liquidity read, never
 the block: the *draw* (where liquidity built — "the only logical liquidity
@@ -426,7 +485,12 @@ rung beyond). Then what is not done (counter-bias LBs are pullback origins,
 nothing mid-grid without an event), partials, the 1h conditions per
 scenario (the reclaim structure, the 1h LB for the stop) and the timing
 line in exchange and local time. The brief order itself was chosen by the
-user (docs/MARCO-CASES.md → Approved changes).
+user (docs/MARCO-CASES.md → Approved changes). E1 (2026-09-14) adds the two
+entry grades to A — an unrefined tap prints "aggressive" with its refined
+sweep named (trigger, stop, T1, RR) — and the invalid-LB chain to D: the
+counter-bias LB is invalid because it does not align, its false reaction is
+where the next build-up forms, and the bias-side trigger is the run of that
+build-up, never a buy above it.
 
 **PENDING — the run before the reclaim [CALIBRATION, user, 2026-09-12].**
 An edge run within the last bars is not no-man's land, and it is not yet a
@@ -457,7 +521,14 @@ sweep trigger at the floor is the preferred entry. The floor must be a
 refinement, not a trap. The H4 grid's tolerance governs the lower
 timeframes: a 15m LB whose extreme sits within the H4 respect distance of a
 level edge is inducement whatever the 15m ATR says (6E 15m 1.16405 inside
-the 4h pocket 1.16285–1.16515, 2026-09-11).
+the 4h pocket 1.16285–1.16515, 2026-09-11). E1 (2026-09-14) makes the tier
+structural: an LTF bias-side LB inside the grid sits above the grid's own
+liquidity — the edge, when it is a level, is the floor at any distance (no
+entry until it is run); an x1 rung between the LB extreme and the edge
+makes the tap *unrefined* (the aggressive grade; the rung's sweep is the
+refined entry); an edge that is an LB extreme is the stop refinement, not
+liquidity. The exec-TF map carries the same grades from its own structure
+(§3, "the liquidity from the left").
 
 **Ladder split [CALIBRATION, user, 2026-09-10].** A counter-bias LB on the
 path is a pullback origin, not liquidity: its near edge is a partial before
@@ -610,6 +681,8 @@ Everything below is ours to tune — the videos show it by eye only.
 | Pocket flag: a bias-side LB tap whose extreme sits this close above a deeper *level* is inducement (§3.1); the poke tier below it prints no LB | `respect_tolerance_atr` / `eq_tolerance_atr` (reused) | 0.75 / 0.25 ATR |
 | Scenario B inside the grid: an LTF sweep needs this RR and must fit the cap (§3.1) | `target_min_rr`, `max_risk_per_trade` (reused) | 1.5, $250 |
 | Contract roll: every shared basis bar differs by one constant, within this tolerance (§3.1) | half a tick (`contracts.json`) | — |
+| Left liquidity (§3, E1): the structure a run must clear — same-side levels born since the previous clean same-side LB, within this window; a build-up left behind = invalid, single-touch swings = unrefined | `story_lookback` / `structBars` (Pine), `min_touches` (reused) | 60 bars / 2 |
+| Deepened run (§2.3, E1): a wick this close past a zone this young is the same run — the pending reopens against the original level | `eq_tolerance` / `confirm_bars` (reused) | 0.25 ATR / 3 bars |
 | The timing line's local clock (§3.1) | `local_tz` | Europe/Athens |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
@@ -663,6 +736,16 @@ tuning any default:
     seed every scanned TF from the `htf` (240) map. New events: `low_poke` /
     `high_poke` (pocket floor), `*_lb_respect`, `*_lb_retired` (reason
     `expired` | `buildup`); blocks carry `respects`, levels `seeded`.
+  - E1 (2026-09-14): blocks and their creation events carry `left` (the
+    nearest structure level beyond the extreme), `grade` (`clean` /
+    `unrefined` / `invalid`) and `deepened`; `*_lb_deepened` marks a
+    deepened run and `map.pending.*.deepened` the zone it went through;
+    `storyRead` anchors on clean qualified LBs only and names the left level
+    in its inducement read; taps carry `grade` / `left`, `flagPocket` grades
+    them (`pocket` with `from: "structure"`, `unrefined`; sweeps `preferred`
+    / `refined`) and `clipToGrid` applies the grid tier structurally. Pine
+    v10 mirrors all of it (`structBars` input, `leftLq` / `grade` on the
+    block, "· left P ✗ / ~" label suffix, dotted border for invalid zones).
   - `node src/cli/index.js marco weekly --compact` — the weekly brief in
     two layers (§3.1): global bias W→D with the big targets (≈Nw = distance
     in weekly ATRs) and invalidation; intraweek phase (D vs 4h), reachable

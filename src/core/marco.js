@@ -222,6 +222,39 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
   let pendBull = null;
   let pendBear = null;
 
+  // Left liquidity (docs/MARCO.md §3, E1 — Elijah's valid/invalid LB): a run
+  // makes a valid LB only when it takes the level AND the liquidity from the
+  // left; while the left liquidity stays intact, price "respects this area and
+  // keeps trading" to it. The structure a run must clear = the intact
+  // same-side levels born since the previous CLEAN same-side LB (a real
+  // trap; an LB that itself left liquidity behind does not reset the
+  // structure), within story_lookback; seeded HTF levels belong to the HTF's
+  // structure (the grid). Returns the nearest intact level beyond the run's
+  // extreme. [CALIBRATION — reuses story_lookback, min_touches]
+  let lastBullLbBorn = null;
+  let lastBearLbBorn = null;
+  const legStartFor = (lastBorn, i) => Math.max(lastBorn ?? -Infinity, i - cfg.story_lookback);
+  const leftLiquidity = (side, ext, legStart) => {
+    const lvls = (side === "bull" ? lowLvls : highLvls).filter(
+      (lv) => !lv.seeded && lv.born > legStart && (side === "bull" ? lv.price < ext : lv.price > ext),
+    );
+    if (!lvls.length) return null;
+    lvls.sort((a, b) => (side === "bull" ? b.price - a.price : a.price - b.price)); // nearest beyond the extreme first
+    const strong = lvls.find((lv) => lv.touches >= cfg.min_touches) ?? null;
+    return {
+      price: lvls[0].price,
+      touches: lvls[0].touches,
+      born: lvls[0].born,
+      max: Math.max(...lvls.map((lv) => lv.touches)),
+      strong: strong ? { price: strong.price, touches: strong.touches } : null,
+    };
+  };
+  // invalid = a build-up is left behind (or the zone itself is unqualified):
+  // never a flip, no entry, the sweep of that level is the trigger;
+  // unrefined = only single-touch swings remain: the tap is the aggressive
+  // entry, their sweep the refined one (Elijah: "personal preference")
+  const gradeOf = (left, qualified) => (!left ? "clean" : left.max >= cfg.min_touches || !qualified ? "invalid" : "unrefined");
+
   // HTF feed (docs/MARCO.md §2.1, V7: "this 4-hour high is just another high
   // on the lower time frames — I just grab that high"): intact levels of a
   // higher timeframe enter the map before bar 0 as aged levels, so the
@@ -291,10 +324,17 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
       // (docs/MARCO.md §2.3, §5) [user, 2026-09-06: by trade, not by close]
       const invalid = blk.side === "bull" ? b.low < blk.bot : b.high > blk.top;
       const expired = i - blk.born > cfg.zone_max_age;
+      // E1 (deepened runs): a wick within eq_tolerance through a FRESH zone is
+      // the same run deepened (§3.1 PENDING B, after the fact) — the pending
+      // reopens against the ORIGINAL swept level with its qualification, not
+      // against the zone's own young x1 extreme [CALIBRATION — confirm_bars,
+      // eq_tolerance reused]
+      const deep =
+        invalid && i - blk.born <= cfg.confirm_bars && (blk.side === "bull" ? blk.bot - b.low : b.high - blk.top) <= tolAt(i);
       if (invalid || expired) {
         blk.dead = true;
         blk.died = i;
-        blk.death = invalid ? "invalidated" : "expired";
+        blk.death = deep ? "deepened" : invalid ? "invalidated" : "expired";
         if (expired) {
           // the zone ages out, the extreme does not: a low that was made and
           // never taken is still liquidity — it goes back on the map as a
@@ -307,27 +347,33 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           events.push({ bar: i, type: `${blk.side}_lb_retired`, zone: [blk.bot, blk.top], reason: "expired", level: ext });
         }
         if (invalid) {
-          events.push({ bar: i, type: `${blk.side}_lb_invalidated`, zone: [blk.bot, blk.top] });
+          const bull = blk.side === "bull";
+          const ext = bull ? b.low : b.high;
+          if (deep) {
+            events.push({ bar: i, type: `${blk.side}_lb_deepened`, zone: [blk.bot, blk.top], ext, level: bull ? blk.top : blk.bot });
+          } else {
+            events.push({ bar: i, type: `${blk.side}_lb_invalidated`, zone: [blk.bot, blk.top] });
+          }
           // the buyers/sellers who leaned on this zone are now trapped: its
           // extreme is swept liquidity, and a reclaim makes the new extreme an
-          // LB (docs/MARCO.md §7.1 — the Oct-2023 NQ bottom)
-          if (blk.side === "bull") {
-            if (!pendBull) {
-              pendBull = { lvl: blk.bot, touches: 1, age: i - blk.extBar, ext: b.low, extBar: i, bar: i, miss: 0 };
-            } else {
-              pendBull.lvl = Math.min(pendBull.lvl, blk.bot);
-              pendBull.age = Math.max(pendBull.age, i - blk.extBar);
-            }
-            events.push({ bar: i, type: "low_swept", level: blk.bot, touches: 1, from_lb: true });
+          // LB (docs/MARCO.md §7.1 — the Oct-2023 NQ bottom). A deepened zone
+          // hands its swept level, taps, age and structure to the pending.
+          const lvl = deep ? (bull ? blk.top : blk.bot) : bull ? blk.bot : blk.top;
+          const touches = deep ? blk.sweptTouches ?? 1 : 1;
+          const age = deep ? blk.sweptAge ?? 0 : i - blk.extBar;
+          const carry = deep ? { buildup: blk.buildup ?? null, deepened: [blk.bot, blk.top], legStart: blk.legStart ?? null } : {};
+          const pend = bull ? pendBull : pendBear;
+          if (!pend) {
+            const fresh = { lvl, touches, age, ext, extBar: i, bar: i, miss: 0, ...carry };
+            if (bull) pendBull = fresh;
+            else pendBear = fresh;
           } else {
-            if (!pendBear) {
-              pendBear = { lvl: blk.top, touches: 1, age: i - blk.extBar, ext: b.high, extBar: i, bar: i, miss: 0 };
-            } else {
-              pendBear.lvl = Math.max(pendBear.lvl, blk.top);
-              pendBear.age = Math.max(pendBear.age, i - blk.extBar);
-            }
-            events.push({ bar: i, type: "high_swept", level: blk.top, touches: 1, from_lb: true });
+            pend.lvl = bull ? Math.min(pend.lvl, lvl) : Math.max(pend.lvl, lvl);
+            pend.touches = Math.max(pend.touches, touches);
+            pend.age = Math.max(pend.age, age);
+            if (deep) Object.assign(pend, { ...carry, buildup: pend.buildup ?? carry.buildup });
           }
+          if (!deep) events.push({ bar: i, type: bull ? "low_swept" : "high_swept", level: lvl, touches: 1, from_lb: true });
         }
         continue;
       }
@@ -423,11 +469,17 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
         const qualified =
           pendBull.touches >= cfg.min_touches || pendBull.age >= cfg.min_level_age;
         const thin = atr[i] ? pendBull.lvl - pendBull.ext < cfg.min_zone_atr * atr[i] : false;
-        // docs/MARCO.md §3 (V1 diagram): an unqualified LB born against a
-        // live qualified one is inducement — the crowd read the break of an
+        // E1: the liquidity from the left — what the run left intact beyond its
+        // extreme inside the structure; a deepened run keeps its structure
+        const legStart = pendBull.legStart ?? legStartFor(lastBullLbBorn, i);
+        const left = leftLiquidity("bull", pendBull.ext, legStart);
+        const grade = gradeOf(left, qualified);
+        // docs/MARCO.md §3 (V1 diagram, E1): an LB that cannot flip the story
+        // (unqualified, or left liquidity intact) born against a live
+        // flip-grade one is inducement — the crowd read the break of an
         // internal point as a BOS. A by-the-book LB (pullback origin), but it
         // never flips the story.
-        const inducement = !qualified && blocks.some((o) => !o.dead && o.qualified && o.side === "bear");
+        const inducement = !(qualified && !left) && blocks.some((o) => !o.dead && o.qualified && !o.left && o.side === "bear");
         blocks.push({
           side: "bull",
           top: pendBull.lvl,
@@ -439,12 +491,26 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           qualified,
           thin,
           inducement,
+          left,
+          grade,
+          legStart,
+          deepened: pendBull.deepened ?? null,
           buildup: pendBull.buildup ?? null,
           tapped: false,
           dead: false,
         });
         if (pendBull.buildup != null) buildups[pendBull.buildup].lb = blocks.length - 1;
-        events.push({ bar: i, type: "bull_lb_created", zone: [pendBull.ext, pendBull.lvl], qualified, inducement });
+        events.push({
+          bar: i,
+          type: "bull_lb_created",
+          zone: [pendBull.ext, pendBull.lvl],
+          qualified,
+          inducement,
+          grade,
+          left: left ? { price: left.price, touches: left.touches } : null,
+          deepened: pendBull.deepened ?? null,
+        });
+        if (!left) lastBullLbBorn = i;
         pendBull = null;
       } else if (++pendBull.miss > cfg.confirm_bars) {
         const qualified = pendBull.touches >= cfg.min_touches || pendBull.age >= cfg.min_level_age;
@@ -461,7 +527,10 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
         const qualified =
           pendBear.touches >= cfg.min_touches || pendBear.age >= cfg.min_level_age;
         const thin = atr[i] ? pendBear.ext - pendBear.lvl < cfg.min_zone_atr * atr[i] : false;
-        const inducement = !qualified && blocks.some((o) => !o.dead && o.qualified && o.side === "bull");
+        const legStart = pendBear.legStart ?? legStartFor(lastBearLbBorn, i);
+        const left = leftLiquidity("bear", pendBear.ext, legStart);
+        const grade = gradeOf(left, qualified);
+        const inducement = !(qualified && !left) && blocks.some((o) => !o.dead && o.qualified && !o.left && o.side === "bull");
         blocks.push({
           side: "bear",
           top: pendBear.ext,
@@ -473,12 +542,26 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           qualified,
           thin,
           inducement,
+          left,
+          grade,
+          legStart,
+          deepened: pendBear.deepened ?? null,
           buildup: pendBear.buildup ?? null,
           tapped: false,
           dead: false,
         });
         if (pendBear.buildup != null) buildups[pendBear.buildup].lb = blocks.length - 1;
-        events.push({ bar: i, type: "bear_lb_created", zone: [pendBear.lvl, pendBear.ext], qualified, inducement });
+        events.push({
+          bar: i,
+          type: "bear_lb_created",
+          zone: [pendBear.lvl, pendBear.ext],
+          qualified,
+          inducement,
+          grade,
+          left: left ? { price: left.price, touches: left.touches } : null,
+          deepened: pendBear.deepened ?? null,
+        });
+        if (!left) lastBearLbBorn = i;
         pendBear = null;
       } else if (++pendBear.miss > cfg.confirm_bars) {
         const qualified = pendBear.touches >= cfg.min_touches || pendBear.age >= cfg.min_level_age;
@@ -530,6 +613,8 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           bars_left: Math.max(0, cfg.confirm_bars + 1 - p.miss),
           qualified: p.touches >= cfg.min_touches || p.age >= cfg.min_level_age,
           buildup: p.buildup ?? null,
+          // E1: the zone this run deepened past (the same trap, told again)
+          deepened: p.deepened ?? null,
         }
       : null;
   return { levels: { lows: lowLvls, highs: highLvls }, blocks, events, buildups, pending: { bull: pending(pendBull, "bull"), bear: pending(pendBear, "bear") } };
@@ -612,8 +697,16 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
 
   const recent = map.events.filter((e) => n - 1 - e.bar <= cfg.story_lookback);
   const lastOf = (...types) => [...recent].reverse().find((e) => types.includes(e.type)) ?? null;
-  let lastLb = lastOf("bull_lb_created", "bear_lb_created");
+  const created = (e) => e.type === "bull_lb_created" || e.type === "bear_lb_created";
+  const blockOf = (e) => (e ? map.blocks.find((b) => b.born === e.bar && e.type.startsWith(b.side)) ?? null : null);
+  // E1: an LB whose run left the structure's liquidity intact never sets the
+  // story (price "could easily still hunt from this liquidity"); a zone
+  // superseded by a deepened run is the same trap, told by the LB that
+  // replaced it (or by the breakdown that followed)
+  const superseded = (e) => blockOf(e)?.death === "deepened";
+  let lastLb = [...recent].reverse().find((e) => created(e) && !e.left && !superseded(e)) ?? null;
   let lastBreak = lastOf("low_breakdown", "high_breakdown");
+  const leftLb = [...recent].reverse().find((e) => created(e) && e.left && !superseded(e)) ?? null;
   const ago = (bar) => {
     const b = n - 1 - bar;
     return b === 1 ? "1 bar ago" : `${b} bars ago`;
@@ -627,7 +720,7 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
   // never a flip. The anchor holds until it is invalidated or expires, even
   // when it is older than story_lookback (the V1 blue LB was 68 bars old at
   // its counterpart's tap).
-  const anchor = map.blocks.filter((b) => !b.dead && b.qualified).sort((a, b) => b.born - a.born)[0] ?? null;
+  const anchor = map.blocks.filter((b) => !b.dead && b.qualified && !b.left).sort((a, b) => b.born - a.born)[0] ?? null;
   const dirOf = (e) => (e.type === "bull_lb_created" || e.type === "high_breakdown" ? 1 : -1);
   let inducedLb = null;
   let inducedBreak = null;
@@ -636,6 +729,11 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
     if (lastLb && lastLb.bar > anchor.born && !lastLb.qualified && dirOf(lastLb) !== anchorDir) {
       inducedLb = lastLb;
       lastLb = null;
+    }
+    // E1: a counter-side LB with left liquidity intact is inducement too (the
+    // Sep-2 10:00 bear LB under the intact 29317.25 while the 28947.75 trap held)
+    if (leftLb && leftLb.bar > anchor.born && dirOf(leftLb) !== anchorDir && (!inducedLb || leftLb.bar > inducedLb.bar)) {
+      inducedLb = leftLb;
     }
     if (lastBreak && lastBreak.bar > anchor.born && !lastBreak.qualified && dirOf(lastBreak) !== anchorDir) {
       inducedBreak = lastBreak;
@@ -648,9 +746,7 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
 
   let mode;
   let read;
-  const lbBlock = lastLb
-    ? map.blocks.find((b) => b.born === lastLb.bar && lastLb.type.startsWith(b.side))
-    : null;
+  const lbBlock = blockOf(lastLb);
   if (lastLb && lbBlock?.dead && lbBlock.death === "invalidated" && (!lastBreak || lastBreak.bar < lastLb.bar)) {
     const bull = lastLb.type === "bull_lb_created";
     mode = bull ? "down_continuation" : "up_continuation";
@@ -703,6 +799,9 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
     if (!fresh) notes.push(`stale — the trap is ${age} bars old`);
     if (lbBlock?.thin) notes.push("zone too thin to hold a stop — refine the entry on a lower TF");
     if (lbBlock?.tapped) notes.push("LB already tapped once");
+    if (lbBlock?.deepened) {
+      notes.push(`the run deepened past ${round(lbBlock.side === "bull" ? lbBlock.deepened[0] : lbBlock.deepened[1])} before the reclaim — the same trap`);
+    }
     if (notes.length) read += ` [${notes.join("; ")}]`;
     // the run that made the story took a build-up: that was the local target
     if (lbBlock && (lbBlock.sweptTouches ?? 1) >= cfg.min_touches) {
@@ -710,16 +809,26 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
       read += ` — the x${lbBlock.sweptTouches} build-up at ${round(lvl)} was the local target, now taken`;
     }
   }
-  const inducedBlock = inducedLb
-    ? map.blocks.find((b) => b.born === inducedLb.bar && inducedLb.type.startsWith(b.side)) ?? null
-    : null;
+  const inducedBlock = blockOf(inducedLb);
   const inducedAlive = !!(inducedBlock && !inducedBlock.dead);
+  const leftTxt = (e) =>
+    `the ${e.type.startsWith("bear") ? "high" : "low"} ${round(e.left.price)}${e.left.touches > 1 ? ` x${e.left.touches}` : ""} from the left is intact`;
   if (inducedLb) {
     const bear = inducedLb.type === "bear_lb_created";
     read +=
       ` — the ${bear ? "bearish" : "bullish"} LB ${round(inducedLb.zone[0])}–${round(inducedLb.zone[1])} ` +
-      `created ${ago(inducedLb.bar)} ${inducedAlive ? "is" : "was"} inducement (an internal ${bear ? "high" : "low"} run inside the leg): ` +
+      `created ${ago(inducedLb.bar)} ${inducedAlive ? "is" : "was"} inducement (${inducedLb.left ? leftTxt(inducedLb) : `an internal ${bear ? "high" : "low"} run inside the leg`}): ` +
       (inducedAlive ? "a pullback origin, not a flip" : "already run through, the story never flipped");
+  } else if (leftLb && (!lastLb || leftLb.bar > lastLb.bar) && !blockOf(leftLb)?.dead) {
+    // E1: the latest LB left liquidity behind — an entry grade at best, never
+    // the story: invalid (a build-up remains, or the zone is unqualified) or
+    // unrefined (single-touch swings remain)
+    const bear = leftLb.type === "bear_lb_created";
+    read +=
+      ` — the ${bear ? "bearish" : "bullish"} LB ${round(leftLb.zone[0])}–${round(leftLb.zone[1])} created ${ago(leftLb.bar)} is ${leftLb.grade}: ${leftTxt(leftLb)} — not a flip; ` +
+      (leftLb.grade === "invalid"
+        ? `no entry until ${round(leftLb.left.price)} is run`
+        : `its tap is the aggressive entry at best, the sweep of ${round(leftLb.left.price)} the refined one`);
   }
   if (inducedBreak) {
     read +=
@@ -749,6 +858,7 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
           zone: [round(lastLb.zone[0]), round(lastLb.zone[1])],
           alive: !!(lbBlock && !lbBlock.dead),
           thin: lbBlock?.thin === true,
+          deepened: !!lbBlock?.deepened,
         }
       : null;
 
@@ -791,6 +901,7 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
           side: inducedLb.type === "bear_lb_created" ? "bear" : "bull",
           zone: [round(inducedLb.zone[0]), round(inducedLb.zone[1])],
           alive: inducedAlive,
+          left: inducedLb.left ? { price: round(inducedLb.left.price), touches: inducedLb.left.touches } : null,
         }
       : null,
     read,
@@ -905,6 +1016,16 @@ export function triggerSetups(map, bars, cfg = MARCO_DEFAULTS, { direction = 0, 
         confirmed: b.qualified,
         touches: b.sweptTouches ?? 1,
         tapped: b.tapped,
+        // E1: what the run left intact beyond the zone's extreme — flagPocket
+        // grades the tap on it (invalid → pocket, unrefined → aggressive)
+        grade: b.grade ?? "clean",
+        left: b.left
+          ? {
+              price: round(b.left.price),
+              touches: b.left.touches,
+              strong: b.left.strong ? { price: round(b.left.strong.price), touches: b.left.strong.touches } : null,
+            }
+          : null,
         note: b.thin ? "thin zone — refine the entry on a lower TF" : null,
       }),
     );
@@ -1089,7 +1210,9 @@ export function falseReactions(map, price, direction, { max = 3 } = {}) {
       distance: round(long ? b.bot - price : price - b.top),
       note:
         `expect a false ${long ? "bearish" : "bullish"} reaction here — a pullback toward the next ${long ? "long" : "short"} setup, not an entry` +
-        (b.inducement ? " (inducement: an internal point run inside the leg)" : ""),
+        (b.inducement
+          ? ` (inducement: ${b.left ? `the ${b.side === "bear" ? "high" : "low"} ${round(b.left.price)} from the left is intact` : "an internal point run inside the leg"})`
+          : ""),
     }))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, max);
@@ -1123,6 +1246,10 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = n
       qualified: b.qualified,
       thin: b.thin === true,
       inducement: b.inducement === true,
+      // E1: valid / unrefined / invalid by the liquidity left beyond the extreme
+      grade: b.grade ?? "clean",
+      left: b.left ? { price: round(b.left.price), touches: b.left.touches } : null,
+      deepened: !!b.deepened,
       tapped: b.tapped,
       age_bars: n - 1 - b.born,
       stop_beyond: b.side === "bull" ? round(b.bot - buf) : round(b.top + buf),
@@ -1822,6 +1949,31 @@ function parseShift(shift) {
 }
 
 /**
+ * Which stored price basis a daily run compares today's bars against. The
+ * freshest one wins: the previous daily's when it was generated after the
+ * weekly brief (its `weekly_shift` carries — it was measured against this
+ * same weekly layer), otherwise the weekly's own basis with no carried
+ * shift. A new weekend brief is already in the current contract's prices,
+ * so a shift measured against the old weekly must never be applied to it:
+ * 6E W37→W38 — the Friday daily carried +0.00405 from the U6→Z6 roll and
+ * the Monday run would have moved the Z6-based W38 layer a second time.
+ * A weekly that recorded no basis (pre-roll-detection brief) still hands
+ * the comparison to the older daily's bars, but its shift stays behind.
+ */
+export function basisReference({ prev, prevDaily, weekly, wk0, execTf }) {
+  const prevAt = Date.parse(prevDaily?.generated_at ?? "") || 0;
+  const weeklyAt = Date.parse(weekly?.generated_at ?? "") || 0;
+  const prevBasis = prev?.basis?.[execTf];
+  if (prevBasis && prevAt >= weeklyAt) {
+    return { bars: prevBasis, from: `daily ${prevDaily.trading_day}`, carried: prev.weekly_shift ?? 0 };
+  }
+  const wkBasis = wk0?.basis?.[execTf];
+  if (wkBasis) return { bars: wkBasis, from: `weekly ${weekly.week}`, carried: 0 };
+  if (prevBasis) return { bars: prevBasis, from: `daily ${prevDaily.trading_day}`, carried: 0 };
+  return null;
+}
+
+/**
  * The daily morning run (docs/MARCO.md — "the weekend sets direction, the
  * morning sets the setup", 2026-09-09; the nested read and the approved
  * brief format, docs/MARCO-CASES.md, 2026-09-10/11). Direction comes from
@@ -1901,7 +2053,10 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
         const isKey = (cfg.key_timeframes ?? []).map(String).includes(tf);
         const need = cfg.min_bars?.[tf] ?? 0;
         let bars = (await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars;
-        for (let i = 0; isKey && bars.length < need && i < (cfg.history_retries ?? 0); i++) {
+        // The chart only holds its initial chunk until something asks for
+        // more — ask for the shortfall (plus a margin) before each refetch.
+        for (let i = 0; bars.length < need && i < (cfg.history_retries ?? 0); i++) {
+          await chart.loadMoreHistory({ bars: need - bars.length + 100 });
           await sleep(cfg.history_retry_ms ?? 1500);
           bars = (await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars;
         }
@@ -1922,12 +2077,7 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
       const execBars = Array.isArray(barsBy[execTf]) ? barsBy[execTf] : null;
 
       // 2. contract roll: the same bars, read against the last stored basis
-      const prev = prevFor(symbol);
-      const ref = prev?.basis?.[execTf]
-        ? { bars: prev.basis[execTf], from: `daily ${prevDaily.trading_day}`, carried: prev.weekly_shift ?? 0 }
-        : wk0.basis?.[execTf]
-          ? { bars: wk0.basis[execTf], from: `weekly ${weekly.week}`, carried: 0 }
-          : null;
+      const ref = basisReference({ prev: prevFor(symbol), prevDaily, weekly, wk0, execTf });
       let roll = { status: "unknown", offset: 0, note: "no stored basis to compare against — this run records one" };
       let weeklyShift = ref?.carried ?? 0;
       if (ref && execBars) {

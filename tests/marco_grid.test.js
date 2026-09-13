@@ -12,6 +12,7 @@ import {
   flagPocket,
   clipToGrid,
   detectRoll,
+  basisReference,
   shiftPrices,
   basisBars,
   dailyScenarios,
@@ -369,4 +370,138 @@ test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run le
   assert.ok(md.includes("▼ 99.6 bias edge — PENDING: run to 99.1 2 bars ago, reclaim not confirmed (2 of 3 bars left)"), md);
   assert.ok(md.includes("● 100 price — the run is unresolved (PENDING)"), md);
   assert.ok(md.includes("Bias-side run + reclaim: **PENDING** (4h)"), md);
+});
+
+test("basisReference: the freshest stored basis wins — a daily older than the new weekly hands over to the weekly and its shift stays behind", () => {
+  const bars = [{ time: 1, open: 1, high: 1, low: 1, close: 1 }];
+  const prevDaily = { generated_at: "2026-09-11T07:28:53Z", trading_day: "2026-09-11" };
+  const prev = { basis: { 240: bars }, weekly_shift: 0.00405 };
+  const weekly = { generated_at: "2026-09-13T18:38:32Z", week: "2026-W38" };
+  const wk0 = { basis: { 240: bars } };
+  // Monday after a new weekend brief: compare against the weekly, carry nothing (the W37→W38 6E double-shift)
+  const r = basisReference({ prev, prevDaily, weekly, wk0, execTf: "240" });
+  assert.equal(r.from, "weekly 2026-W38");
+  assert.equal(r.carried, 0);
+  // mid-week: the previous daily is newer than the weekly — its shift carries
+  const later = { generated_at: "2026-09-15T07:00:00Z", trading_day: "2026-09-15" };
+  const r2 = basisReference({ prev, prevDaily: later, weekly, wk0, execTf: "240" });
+  assert.equal(r2.from, "daily 2026-09-15");
+  assert.equal(r2.carried, 0.00405);
+  // a weekly without a stored basis: the older daily's bars still serve, its shift does not
+  const r3 = basisReference({ prev, prevDaily, weekly, wk0: {}, execTf: "240" });
+  assert.equal(r3.from, "daily 2026-09-11");
+  assert.equal(r3.carried, 0);
+  assert.equal(basisReference({ prev: null, prevDaily: null, weekly, wk0: {}, execTf: "240" }), null);
+});
+
+// ---------------------------------------------------------------------------
+// E1 (Elijah, 2026-09-14): the structural tier — what the run left intact
+// inside its own structure, at any distance.
+
+test("flagPocket structural tier: an invalid tap is a pocket at the build-up it left behind; an unrefined tap is the aggressive entry and the sweep of the left swing is refined", () => {
+  const m = handMap();
+  m.levels.lows = m.levels.lows.filter((l) => l.price !== 98.2); // nothing within respect distance now
+  const bull = m.blocks.find((b) => b.side === "bull" && !b.dead);
+  bull.grade = "invalid";
+  bull.left = { price: 95, touches: 3, strong: { price: 95, touches: 3 } };
+  let triggers = triggerSetups(m, BARS, CFG, { direction: 1, max: 6 });
+  let tap = triggers.find((t) => t.kind === "tap");
+  assert.equal(tap.grade, "invalid");
+  const floors = flagPocket(triggers, m, BARS, CFG, 1);
+  assert.equal(floors.size, 1);
+  assert.equal(tap.pocket.floor, 95);
+  assert.equal(tap.pocket.from, "structure");
+  assert.equal(tap.pocket.gap, 3.6);
+  assert.match(tap.note, /no entry until 95 is run/);
+  assert.equal(triggers.find((t) => t.kind === "sweep" && t.trigger === 95).preferred, true);
+
+  bull.grade = "unrefined";
+  bull.left = { price: 97, touches: 1, strong: null };
+  m.levels.lows.push({ price: 97, touches: 1, born: 6 });
+  triggers = triggerSetups(m, BARS, CFG, { direction: 1, max: 6 });
+  tap = triggers.find((t) => t.kind === "tap");
+  flagPocket(triggers, m, BARS, CFG, 1);
+  assert.equal(tap.pocket, undefined);
+  assert.deepEqual(tap.unrefined, { floor: 97, touches: 1, gap: 1.6, from: "structure" });
+  assert.match(tap.note, /this tap is the aggressive entry, the sweep of 97 the refined one/);
+  assert.equal(triggers.find((t) => t.kind === "sweep" && t.trigger === 97).refined, true);
+  assert.equal(triggers.find((t) => t.kind === "sweep" && t.trigger === 95).preferred, undefined);
+});
+
+test("clipToGrid structural tier: a level edge is the floor at any distance, an LB edge is not liquidity, an x1 rung between the LTF extreme and the edge makes the tap unrefined", () => {
+  const tap = () => ({ kind: "tap", side: "long", trigger: 99.3, stop: 98.7, stop_anchor: [98.9, 99.3], target: 101, rr: 2.8, distance: 0.7, note: null });
+  // edge = the x3 level 95, 3.9 below the LTF extreme — beyond respect (1.5)
+  const far = handMap();
+  far.levels.lows = far.levels.lows.filter((l) => l.price !== 98.2);
+  far.blocks = far.blocks.filter((b) => b.side !== "bull");
+  const gFar = h4Grid(far, BARS, CFG, { bias: 1 });
+  assert.equal(gFar.lower.edge, 95);
+  const rFar = { story: { direction: 1 }, triggers: [tap()], liquidity: { intact_below: [], intact_above: [] } };
+  clipToGrid(rFar, gFar, 1);
+  assert.equal(rFar.triggers[0].pocket.floor, 95);
+  assert.equal(rFar.triggers[0].pocket.from, "h4 grid");
+  // edge = the bull LB extreme 98.6 (Elijah's 5m entry above the 1h LB): the stop refinement, not liquidity
+  const lb = handMap();
+  lb.levels.lows = lb.levels.lows.filter((l) => l.price !== 98.2);
+  const gLb = h4Grid(lb, BARS, CFG, { bias: 1 });
+  assert.equal(gLb.lower.floor_kind, "lb");
+  const rLb = { story: { direction: 1 }, triggers: [tap()], liquidity: { intact_below: [], intact_above: [] } };
+  clipToGrid(rLb, gLb, 1);
+  assert.equal(rLb.triggers[0].pocket, undefined);
+  assert.equal(rLb.triggers[0].unrefined, undefined);
+  // an x1 rung 99.0 between the LTF extreme 99.2 and the LB edge → unrefined from the grid
+  const rung = handMap();
+  rung.levels.lows = [{ price: 99.6, touches: 1, born: 12 }, { price: 99.0, touches: 1, born: 10 }, { price: 95, touches: 3, born: 1 }];
+  rung.blocks = rung.blocks.map((b) => (b.side === "bull" && !b.dead ? { ...b, bot: 97.6, top: 98.4 } : b));
+  const gRung = h4Grid(rung, BARS, CFG, { bias: 1 });
+  assert.deepEqual(gRung.lower.rungs.map((r) => r.price), [99.6, 99.0]);
+  const t3 = { ...tap(), trigger: 99.5, stop_anchor: [99.2, 99.5] };
+  const rRung = { story: { direction: 1 }, triggers: [t3], liquidity: { intact_below: [], intact_above: [] } };
+  clipToGrid(rRung, gRung, 1);
+  assert.equal(t3.pocket, undefined);
+  assert.deepEqual(t3.unrefined, { floor: 99.0, touches: 1, gap: 0.2, from: "h4 grid" });
+});
+
+test("dailyScenarios (E1): an unrefined A is the aggressive grade with its refined sweep named; D calls the counter LB invalid and points at the build-up under it; the brief prints the deepened run", () => {
+  const m = handMap();
+  m.levels.lows = [{ price: 99.6, touches: 1, born: 12 }, { price: 97, touches: 1, born: 6 }, { price: 95, touches: 3, born: 1 }];
+  const bull = m.blocks.find((b) => b.side === "bull" && !b.dead);
+  bull.grade = "unrefined";
+  bull.left = { price: 97, touches: 1, strong: null };
+  m.events.push({ bar: n - 3, type: "bull_lb_deepened", zone: [98.8, 99.4], ext: 98.6, level: 99.4 });
+  const grid = h4Grid(m, BARS, CFG, { bias: 1 });
+  const triggers = triggerSetups(m, BARS, CFG, { direction: 1, max: 6 });
+  flagPocket(triggers, m, BARS, CFG, 1);
+  for (const t of triggers) {
+    t.risk_usd = t.stop == null ? null : Math.round(Math.abs(t.trigger - t.stop) * 100);
+    t.over_cap = false;
+  }
+  const r240 = {
+    bars_analyzed: n,
+    story: { mode: "buy_story", direction: 1, fresh: true, read: "lows were run and reclaimed 1 bar ago (trap)", lb: { zone: [98.6, 99.4], alive: true, thin: false } },
+    triggers,
+    false_reactions: [],
+    liquidity: { intact_above: [{ price: 101, touches: 1 }], intact_below: [{ price: 99.6, touches: 1 }] },
+    alignment: "aligned",
+  };
+  const sc = dailyScenarios({ grid, reads: { 240: r240 }, bias: 1, cfg: CFG, tfs: ["240"] });
+  assert.match(sc.A.label, /tap of the bias-side LB \(aggressive\)/);
+  assert.match(sc.A.text, /Unrefined \(E1\): the low 97 from the left is intact — the refined entry is its sweep: 97 → stop/);
+  assert.match(sc.A.text, /Elijah waits for that point/);
+  assert.match(sc.D.text, /invalid \(E1\)/);
+  assert.match(sc.D.text, /no buys above it/);
+  assert.ok(sc.not_done.some((s) => /build-up forming under a counter-bias LB/.test(s)));
+  assert.ok(sc.h1 === null);
+  const md = renderDailyMarkdown({
+    generated_at: "2026-09-14T06:00:00.000Z",
+    trading_day: "2026-09-14",
+    weekday: "Mon",
+    counter_trend_note: "open",
+    direction_from: "briefs/weekly/2026-W38 (global layer)",
+    risk_cap: 250,
+    timeframes: ["240"],
+    results: [{ symbol: "TEST:X1!", quote: { last: 100 }, weekly: { bias: "long", regime: "aligned" }, grid, scenarios: sc, timeframes: { 240: r240 } }],
+  });
+  assert.ok(md.includes("bull LB 98.8–99.4 deepened to 98.6 2 bars ago — the same trap; the reclaim of 99.4 decides"), md);
+  assert.ok(md.includes("- **A — tap of the bias-side LB (aggressive).**"), md);
 });
