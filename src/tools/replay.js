@@ -4,7 +4,7 @@ import * as core from '../core/replay.js';
 
 export function registerReplayTools(server) {
   server.tool('replay_start', 'Start bar replay mode, optionally at a specific date', {
-    date: z.string().optional().describe('Date to start replay from (YYYY-MM-DD format). If omitted, selects first available date.'),
+    date: z.string().optional().describe('Moment to start replay from: a date (YYYY-MM-DD) or an ISO datetime (YYYY-MM-DDTHH:MM:SSZ) for intraday timeframes. The playhead lands one second before the given moment, so the last bar on the chart is the one closing at it. If omitted, selects first available date.'),
   }, async ({ date }) => {
     try { return jsonResult(await core.start({ date })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }

@@ -20,13 +20,37 @@ through `trade_verify_context`, the one door whose verified `notes` the coach ac
 ## Step 1 — Get the screenshot
 
 Either the trader hands you a file, or you take it from TradingView (CDP up) with the "Liq
-blocks" indicator visible: `chart_set_symbol` → `chart_set_timeframe` (symbol resets the TF)
-→ load history (`ui_scroll(direction="left", amount=4000)` a few times on 5m — the chart holds
-~300 bars and `chart_set_visible_range` silently snaps back when the history is not loaded)
-→ `chart_set_visible_range(from, to)` → `ui_keyboard(key="s", modifiers=["ctrl","alt"])`.
-TradingView's own snapshot keeps both axes and the symbol/TF header; `capture_screenshot`
-crops the axes (`chart`) or keeps the UI chrome (`full`). The PNG lands in the trader's
-Downloads as `<SYM>_<date>_<time>_<hash>.png` — take the newest and move it out.
+blocks" indicator visible. Take it **in bar replay, parked one bar after the trade closed**
+(trader's request 2026-09-18): later trades on the same chart never make it into the image,
+the closed trade is always the last thing on the right, and "Liq blocks" is recomputed as of
+that moment — the zones look as they did when the trade was taken, not with hindsight.
+
+1. `chart_set_symbol` → `chart_set_timeframe("5")` (symbol resets the TF).
+2. `replay_start(date = <open of the bar that contains the exit> + 2 × TF)`, ISO **with time**
+   — e.g. exit 19:33Z on 5m → exit bar 19:30 → `date: "2026-09-16T19:40:00Z"`. The playhead
+   lands one second before the requested moment, so the last bar on the chart is the one
+   *after* the exit bar. Equivalent: `replay_start(+1 × TF)` then one `replay_step`.
+   `replay_step`'s own reply still shows the old date — read the real one with
+   `replay_status`. Replay loads its own history; no `ui_scroll` dance is needed.
+3. `chart_set_visible_range(from = <window start>, to = <anything ≥ playhead>)` — in replay
+   `to` is clamped to the playhead, so the exit bar + 1 sits at the right edge.
+4. `ui_keyboard(key="s", modifiers=["ctrl","alt"])`. TradingView's own snapshot keeps both
+   axes and the symbol/TF header; `capture_screenshot` crops the axes (`chart`) or keeps the
+   UI chrome (`full`). The PNG lands in the trader's Downloads as
+   `<SYM>_<date>_<time>_<hash>.png` — take the newest and move it out.
+5. For the 1h context: `chart_set_timeframe("60")` **while still in replay** — the playhead
+   stays put and the last 1h bar is the partial hour as of that moment. Set the range to the
+   week to date, snapshot again.
+6. `replay_stop` — always, even if a step failed. Replay mode is `AllCharts`: it freezes every
+   pane of the layout until stopped.
+
+Known cosmetics: a translucent "Replay" watermark sits in the middle of the image; it is drawn
+on the canvas and stays. Verified on MNQ 5m and 60, 2026-09-18.
+
+Without replay (a trade still open, or replay unavailable for the symbol/TF): load history
+first (`ui_scroll(direction="left", amount=4000)` a few times on 5m — the chart holds ~300
+bars and `chart_set_visible_range` silently snaps back when the history is not loaded), then
+set the range and snapshot as above.
 
 Two images per trade is the norm: the entry TF (5m, the window around entry → exit) and the
 1h context (the week to date). Read the stop and target from the trader's position tool:
@@ -102,6 +126,8 @@ The object **replaces** the draft wholesale — always send all three keys, not 
 
 ## Never
 
+- Never leave replay running after the snapshot — the layout stays frozen on the replay date
+  for every pane; `replay_stop` is part of Step 1, not an afterthought.
 - Never put this analysis into `trade_add_explanation` — that channel is the **trader's own
   words**, and the retrospective clusters it for rationalization patterns; agent analysis
   there poisons the clustering.
