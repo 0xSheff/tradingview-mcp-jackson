@@ -2,9 +2,9 @@
 
 This file is the single source of truth for the `marco` branch.
 
-Sources — six public videos from the **Inter Equity Trading** YouTube channel
-(@InterEquity, Marco Accettone) plus one long-form interview (V7). Rules
-below are distilled from the full auto-generated transcripts of:
+Sources — seven public videos from the **Inter Equity Trading** YouTube channel
+(@InterEquity, Marco Accettone; V1–V6, V8) plus one long-form interview (V7).
+Rules below are distilled from the full auto-generated transcripts of:
 
 | Ref | Video ID | Title | What it contributes |
 | --- | --- | --- | --- |
@@ -15,6 +15,7 @@ below are distilled from the full auto-generated transcripts of:
 | **V5** | `lEsZYpeGNVQ` | The Simple Trading Strategy That Actually Works | The 10 a.m. reversal — the 06:00–10:00 ET H4 candle model |
 | **V6** | `aKoGbAe-xTE` | 10,000 Hours of Liquidity Trading in a 16 Minute Video | Weekly/daily bias, trend-line liquidity, the HTF→LTF entry chain |
 | **V7** | `5NrNBik2dmY` | MRKT interview (Jun 2026, XAUUSD/NQ walkthrough) | "Invisible" levels = HTF candle highs / highs respected multiple times; re-entry while the target is intact; counter-bias framing; the short-term play toward the local draw |
+| **V8** | `E2n7KMQDYIU` | Fix This Liquidity Mistake, Everything Will Change (Sep 2026) | Pattern trading vs the trap: the reaction origin ("where did this reaction occur from? look to the left-hand side"), the induce-sellers → induce-buyers → trap sequence, "we need to see a build-up", the go-long-again false move; gold 1h/30m/15m walkthrough (Jul–Aug 2025 chart) |
 
 > **Two kinds of statement in this document.**
 > Lines marked **[SOURCE]** are the author's rules, restated from the
@@ -102,6 +103,17 @@ When price takes out a minor level, the crowd reads it as a BOS and enters in
 the break direction — they are trapped, and their stops become the fuel for
 the real move. Every bullish reaction after buyers are induced is short-lived
 and only builds liquidity for the opposite side. **[SOURCE, V1, V3]**
+
+Every run of an internal level induces one side and, by itself, is nothing:
+"we've taken out a low, printing a new low — that's just induced the sellers.
+There's nothing for us yet" (V8 08:29). The run of a high induces buyers. The
+induced crowd's stops rest beyond the level *the inducing move came from* —
+"this low to this high: where did this reaction occur from? Look to the
+left-hand side" — and the trap is the run of that origin: "once we take out
+this low right here, we have trapped them" (V8 04:31–05:31). The word "trap"
+names both the run that catches the induced crowd and the LB it leaves
+("we've created ourselves an LB — this is now known as a trap", 11:36).
+**[SOURCE, V8]**
 
 ### 2.3 Liquidity block (LB)
 
@@ -293,6 +305,65 @@ the Sep-4 4h bear LB 1.3548–1.3549 is now invalid under the intact Aug-31
 high 1.3566 x2 — Elijah's own Discord line — and the 4h trigger is the run
 of 1.3566, which came on Sep 9.
 
+**The reaction origin, and pattern trading [SOURCE, V8; build
+CALIBRATION, user, 2026-09-19].** Marco's own words for the left-liquidity
+principle above: after a high is run ("the common retail trader would call
+[it] a BOS, and the intention behind it is it induces buyers"), most traders
+"mark this low, drag it over, and say: if we don't trade below this low, I'm
+not going to take the trade" — the structural swing low of the leg. "If you
+are trading like this, you are looking at the market from a pattern-based
+perspective … you can actually trade above this low, but there has to be
+specific things that need to occur. You need to ask yourself the big
+question of where is the trap occurring" (01:35–02:25). The things that must
+occur are the inducement sequence inside the pullback: the pullback runs
+internal lows ("induces sellers — nothing for us yet"), a rapid move up runs
+an internal high ("inducing buyers"), and the low that move came from —
+found by looking left, usually a tap into an internal low of the leg — is the
+liquidity: "all you got to do is grab this low, drag it over"; its run traps
+the induced buyers and is the long, with the stop under the LB it leaves.
+"You don't need price below here [the structural low]. You needed price below
+here [the origin] … This is called pattern trading. We are not doing that"
+(06:14–06:56). Two caveats he keeps: (1) without such a sequence the pattern
+read is right — "if price just sells all the way off, yeah, we're probably
+going to see this low taken, because we haven't had a trap anywhere else"
+(07:50–08:12); (2) the first reaction at the origin is not the trap — the
+market may "go long again … all we have now done is induce buyers once more
+… as soon as those lows are cleared, the buyers have been trapped"
+(05:45–06:17) — Principle 2 of docs/MARCO-CASES.md, a run not a touch. So
+"pattern trading" has two faces in the sources: buying the sweep mechanically
+without the reaction structure (V6, §3.1) and requiring the structural swing
+mechanically when the trap already happened at the origin (V8).
+
+Built as follows, on existing parameters **[CALIBRATION]**: the map keeps a
+*swing* that flips on any consumed level — a low run turns it down, a high
+run turns it up, consecutive runs one way keep it — and the extreme of the
+swing an inducing move came from is that move's **origin** (`buyers_induced`
+/ `sellers_induced` events carry it; `origin_run` marks it traded through).
+At an LB's birth the liquidity left beyond its extreme is graded in this
+order: a build-up (≥ `min_touches`) inside the structure → **invalid** (E1,
+unchanged); otherwise the LB is **unrefined**, and the level it names depends
+on whose leg it is — born *against* a live story it names the leg's
+structure, the nearest single-touch swing (E1's "high from the left", MNQ
+29 317.25); born *with* the story, or with no story to speak of, it names the
+intact reaction origin (V8), falling back to the nearest swing; nothing left →
+**clean**. What V8 changes: an unrefined LB *sets the story* — the trap
+stands and the deeper single-touch swing is the refined entry, not a
+requirement — unless an opposing anchor is alive, in which case it is
+inducement as before. An LB whose run took an origin that stood intact
+carries `trap`. The intact origin per side is the **trap pointer**
+(`map.origins`, `trap_pointers`, the daily brief's "Trap pointer" line, the
+indicator's dashed line and label): "buyers induced N bars ago by the run of
+H — their stops rest under the origin L; its run is the trap, a reclaim there
+the entry". An origin sitting at an alive same-side LB extreme is that
+zone's stop side, not a pointer (E1 build decision 1); the origin is never
+put on the map as a level (a running extreme is no swing, and a phantom
+level there rewrote the V1 fixture's narrative). Tests: `V8_TRAP` (the
+diagram in miniature: pointer at the origin, the trap flips the story with
+the x1 structural low intact) and the E1 fixtures, of which only
+`UNREFINED_LEFT` changed its expectation (the x2 build-up run is the story;
+98.0 is named, not required). The gold walkthrough is in docs/MARCO-CASES.md
+(case V8).
+
 **Bias source [CALIBRATION].** The author's bias is a liquidity read, never
 the block: the *draw* (where liquidity built — "the only logical liquidity
 point left") is the lean, and the *trap* (the run of the other side) is the
@@ -350,7 +421,10 @@ The same story read, run on the weekly first. The author's NQ walkthrough
    low that built liquidity ("low respecting low") gets run → buy with the
    stop below an LB, target the HTF highs. "Just because we took the low
    does not mean buy right away — that is pattern trading": wait for the
-   reaction structure.
+   reaction structure. The other face of pattern trading (V8): requiring the
+   leg's structural swing to be run when the trap already happened at the
+   reaction origin inside the pullback — "you do not need to wait for this
+   low here" (§3). **[SOURCE, V6, V8]**
 6. **Management:** once a left-side high is taken, liquidity is taken — move
    to BE or tuck the stop below the last low. If the LB is too big, refine
    the stop on a lower timeframe LB. HTF-only entries in the walkthrough
@@ -683,6 +757,9 @@ Everything below is ours to tune — the videos show it by eye only.
 | Contract roll: every shared basis bar differs by one constant, within this tolerance (§3.1) | half a tick (`contracts.json`) | — |
 | Left liquidity (§3, E1): the structure a run must clear — same-side levels born since the previous clean same-side LB, within this window; a build-up left behind = invalid, single-touch swings = unrefined | `story_lookback` / `structBars` (Pine), `min_touches` (reused) | 60 bars / 2 |
 | Deepened run (§2.3, E1): a wick this close past a zone this young is the same run — the pending reopens against the original level | `eq_tolerance` / `confirm_bars` (reused) | 0.25 ATR / 3 bars |
+| The swing whose extreme is a move's reaction origin (§3, V8) flips on which runs | any consumed level — no parameter | — |
+| An unrefined LB (origin / single-touch swing intact beyond it) sets the story unless an opposing anchor is alive (§3, V8 over E1) | — | on |
+| Trap pointer: the intact origin of the last inducing move per side, drawn unless it sits at an alive same-side LB extreme (§3, V8) | `Trap pointers` (Pine) / `trap_pointers` (engine) | on |
 | The timing line's local clock (§3.1) | `local_tz` | Europe/Athens |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
@@ -746,6 +823,21 @@ tuning any default:
     / `refined`) and `clipToGrid` applies the grid tier structurally. Pine
     v10 mirrors all of it (`structBars` input, `leftLq` / `grade` on the
     block, "· left P ✗ / ~" label suffix, dotted border for invalid zones).
+  - V8 (2026-09-19): the map keeps the swing and its origins — events
+    `buyers_induced` / `sellers_induced` (the run, the origin it came from)
+    and `origin_run`; `map.origins` is the intact origin per side (null when
+    it sits at an alive same-side LB extreme); blocks and their creation
+    events carry `left.kind` (`buildup` / `origin` / `swing`) and `trap`;
+    `storyRead` anchors on qualified LBs that are not invalid and not
+    inducement (an unrefined LB with the story flips it), appends the
+    unrefined note ("the trap does not need it") and the trap pointers
+    (`story.pointers`, `analyzeMarco().trap_pointers`, the compact brief);
+    the daily brief prints a "Trap pointer" line under "What we wait for"
+    (`dailyScenarios` → `wait_for.pointer`) and the H4 "since" list names the
+    inducements. Pine v11 mirrors it: a `Swing` object, `oP/oBar/oAt` on the
+    pending and the block, `ind`/`trap`/`leftKind` on the block, "· trap" in
+    the label, the *Trap pointers* input (dashed line + label per side) and
+    two alerts (origin run, bull/bear).
   - `node src/cli/index.js marco weekly --compact` — the weekly brief in
     two layers (§3.1): global bias W→D with the big targets (≈Nw = distance
     in weekly ATRs) and invalidation; intraweek phase (D vs 4h), reachable
@@ -828,6 +920,19 @@ pips above). By the book the trap completes only below the pocket's
 furthest low — a stab under 1.15795 holding above 1.1576 is another
 inducement into the pocket, not the completed run. Had 1.15765 registered,
 the respect rule would have kept the level at the extreme.
+
+**V8 check (XAUUSD 30m/15m, 28 Jul – 1 Aug 2025, replayed 2026-09-19, engine
+defaults, 30m seeded from 60m).** The video's gold walkthrough on the same bars:
+the 28 Jul low 3301.8 that Marco calls "induced sellers" is the engine's qualified
+bull trap (the run took the origin 3324) and its box bottom the level he says must
+be run; the FOMC drop reads as continuation ("back down to the lows"); the 31 Jul
+01:00 bounce induces buyers with the origin 3268.1 (the pointer); the 31 Jul
+evening build-up 3288.4–3286.6 → stab 3286.2 → LB → second stab 3281.7 → reclaim is
+his trade and ours (entry 3286.2 vs his 3288.2, stop 3281.3 vs his 3283.0, T2 3311.3
+vs his 3311.2, hit 1 Aug 08:30). Misses: a midday 15m long (13:00, tap 3291.4)
+would have been stopped at 19:45 before the real trap; the 30 Jul evening shelf
+3282.9–3286.8 never registered (flat neighbours). Details in docs/MARCO-CASES.md,
+case V8. **[V8]**
 
 **Third case and the fix (6B 1h, 4 Sep 2026 — built 2026-09-06).** The
 floor 1.3474 (13 Aug, equal lows 06:00/09:00) never registered on the 1h —

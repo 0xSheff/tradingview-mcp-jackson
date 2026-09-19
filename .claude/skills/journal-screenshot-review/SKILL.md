@@ -40,7 +40,7 @@ that moment — the zones look as they did when the trade was taken, not with hi
    `<SYM>_<date>_<time>_<hash>.png` — take the newest and move it out.
 5. For the 1h context: `chart_set_timeframe("60")` **while still in replay** — the playhead
    stays put and the last 1h bar is the partial hour as of that moment. Set the range to the
-   week to date, snapshot again.
+   last ~10 days, snapshot again.
 6. `replay_stop` — always, even if a step failed. Replay mode is `AllCharts`: it freezes every
    pane of the layout until stopped.
 
@@ -52,8 +52,10 @@ first (`ui_scroll(direction="left", amount=4000)` a few times on 5m — the char
 bars and `chart_set_visible_range` silently snaps back when the history is not loaded), then
 set the range and snapshot as above.
 
-Two images per trade is the norm: the entry TF (5m, the window around entry → exit) and the
-1h context (the week to date). Read the stop and target from the trader's position tool:
+Two images per trade is the norm: the entry TF (5m, ~20 h before the exit ≈ 240 bars — the
+previous session's H4 gate candle and the origin levels must be in the frame) and the 1h context
+(~10 days ≈ 240 bars; replay clamps to its loaded history). Trader feedback 2026-09-22: the earlier
+~10 h / ~5 day windows were "not enough context" — never narrower than this. Read the stop and target from the trader's position tool:
 `draw_list` → `draw_get_properties(entity_id)` gives the entry anchor, `stopLevel` and
 `profitLevel` in ticks (MNQ 0.25, MGC 0.1, 6E 0.00005).
 

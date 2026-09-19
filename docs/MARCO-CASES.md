@@ -63,6 +63,17 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
    by taps: an x1 extreme and an x5 shelf are different things. A shelf of near-equal
    HTF lows is "lows respecting lows" `[SOURCE, V6]` even when no single bar is a
    strict swing — the engine misses those (see *Engine gaps*); the eye must not.
+6. **The trap is the run of the origin, not of the pattern low** (agreed 2026-09-19,
+   from V8). After a high is run (buyers induced), the level whose run traps them is
+   the low *that move came from* — "where did this reaction occur from? Look to the
+   left-hand side" — not the leg's structural swing low: requiring the latter is
+   "pattern trading". Every internal run induces one side and is "nothing for us
+   yet"; the first touch of the origin is not the trap either (the market may "go
+   long again … induce buyers once more"), its *run* is. Without an inducement
+   sequence inside the pullback the pattern read stands ("we haven't had a trap
+   anywhere else"). Against a live story the stricter E1 test stays: a counter-side
+   LB that leaves the leg's origin intact is inducement (MNQ 29 317.25).
+   `[SOURCE, V8; E1]`
 
 ## Approved changes
 
@@ -124,6 +135,27 @@ recorded under *Rule candidates* → pocket flag.
   deepened run that is not reclaimed is a breakdown. Not re-uploaded to
   TradingView yet — the desktop app was not running; `pine check` and save the
   next time it is (back up the TV copy first).
+
+- **V8 — the reaction origin and the trap pointer** (user, 2026-09-19; **built the
+  same day** — engine + Pine v11 + tests; rules restated in `docs/MARCO.md` §2.2,
+  §3, §3.1, §6, §7; the case is *V8* below). The map keeps a swing that flips on any
+  consumed level; the extreme of the swing an inducing move came from is that
+  move's origin (`buyers_induced` / `sellers_induced`, `origin_run`). At an LB's
+  birth: build-up beyond → invalid (E1); else unrefined, naming the nearest x1 swing
+  when born against a live story (E1) or the intact origin when born with it / with
+  none (V8), falling back to the swing; nothing → clean. **An unrefined LB now sets
+  the story** unless an opposing anchor is alive (then inducement) — the E1
+  `UNREFINED_LEFT` expectation flipped from "no flip" to `buy_story`; the MNQ Sep 2
+  10:00 read is unchanged. `trap` marks an LB whose run took an intact origin. The
+  intact origin per side is the trap pointer (`map.origins`, `trap_pointers`, the
+  daily brief's "Trap pointer" line, the indicator's dashed line + label, two
+  alerts); not drawn at an alive same-side LB extreme (E1 decision 1). Rejected in
+  the build: putting the origin on the map as a level — the first flips read a
+  running extreme that is no swing, and a phantom x1 there got run by the next bar
+  and turned the V1 inducement fixture into `up_continuation`; also "flip only on
+  qualified runs" — it kills V8's own gold example, where the high that induced
+  buyers was x1. Pine v11 uploaded to TradingView as "Liq blocks" the same day
+  (see the case for the check).
 
 ## Rule candidates
 
@@ -206,6 +238,7 @@ a strict `pivot_len` swing never registers, so its tap count is lost:
 | 6B 1h, 4 Sep 2026 | 1.3474 equal lows 06:00/09:00 | nothing — tie pivots cancelled | fixed: tie-aware swings, HTF feed (§7.1) |
 | 6B 4h, 4–7 Sep 2026 | 1.3505 / 1.3511 / 1.3512 / 1.3506 | nothing on 240 and D; 1h had 1.3506 | 240 bull LB 1.3492–1.3521 instead of 1.3492–1.3505; second target unnamed |
 | 6E 4h, 2–4 Sep 2026 | 1.15890 / 80 / 75 / 85 + Sep-4 1.15880 | x1 on 240 (the Sep-4 pivot only), x2 on 60 | the strongest build-up below price under-counted; pocket rule missed by a pip |
+| XAUUSD 15m, 30 Jul 2025 20:00–21:30 ET (case V8) | 3283.4 / 3282.9 / 3283.8 / 3285.5 / 3285.0 | nothing — 19:45's 3280.9 sits inside every pivot window | the 31 Jul 21:45 stab 3281.7 read as the LB extreme's sweep only; the LB and the story came anyway |
 
 Rising lows are never strict pivots (each has a lower low within `pivot_len` bars to
 the left), and a shelf 30 pips above the last pivot is beyond `respect_tolerance`, so
@@ -442,3 +475,199 @@ same bars: Sep 2 07:00 `buy_story` at 28 927.25–28 947.75 with "the run deepen
 28 940.75 before the reclaim — the same trap"; Sep 2 11:00 `buy_story` held, the bear LB
 29 171.25–29 211.75 `unrefined` and inducement "(the high 29 317.25 from the left is
 intact)".
+
+### V8 — Marco, YouTube `E2n7KMQDYIU`, reviewed 2026-09-19 — "Fix This Liquidity Mistake, Everything Will Change" (13:09)
+
+Marco's own video, so `[SOURCE, V8]`; the row is in `docs/MARCO.md`'s source table.
+Reviewed from the auto-generated transcript (396 segments, `youtube-transcript-api`,
+scratchpad) plus 46 user screenshots in `tmp/Marco liq explanation mistakes/`
+(filename prefix = timecode). The gold walkthrough is a *historical* chart — XAUUSD
+OANDA at 3250–3460, i.e. Jul–Aug 2025 (the 4h frame at 09:05 shows the live price
+4311.25 in the corner) — 1h → 30m → 15m.
+
+**What he says.** The mistake (01:10–02:25, 06:25–07:00): after a high is run ("the
+common retail trader would call [it] a BOS … it induces buyers") most traders mark the
+last structural low and refuse to trade until it is run — "a pattern-based
+perspective … you can actually trade above this low, but there has to be specific
+things that need to occur … where is the trap occurring?" The diagram (02:26–06:25):
+the pullback runs internal lows ("induces sellers — nothing for us yet", 08:29), a
+rapid move up runs an internal high ("inducing buyers"), and the question is "this
+low to this high — where did this reaction occur from? Look to the left-hand side"
+(04:31–04:39): the move came off an internal low from the left, which is the
+liquidity — "all you got to do is grab this low, drag it over" (05:04); its run traps
+the induced buyers — "you don't need price below here [the structural low], you
+needed price below here [the origin]" (06:19–06:21); "this is called pattern trading.
+We are not doing that" (06:54). Caveats: without a trap inside the pullback the
+structural low probably gets taken — "because we haven't had a trap anywhere else"
+(07:50–08:12); the first reaction at the origin is not the trap — the market may "go
+long again … all we have now done is induce buyers once more … as soon as those lows
+are cleared, the buyers have been trapped" (05:45–06:17). Vocabulary: "trap" = the run
+that catches the induced crowd *and* the LB it leaves ("we've created ourselves an LB
+— this is now known as a trap", 11:36); "trading with structure" is the wrong frame
+(10:38–10:50): "we've swept a high, which tells me we have taken some sort of
+liquidity. Now all we need to do is wait … the price action has told us the story."
+Reason for the long (10:05–10:30): "we need to have a reason to go long — a ton of
+liquidity left at the highs": the trend line of falling highs, the internal highs, the
+HTF external high.
+
+**Gold, as read off the screenshots (Jul–Aug 2025 prices):**
+
+| Frame | Level | What it is |
+| --- | --- | --- |
+| 1h 07:24 | ≈3250 low from the left, wicked; internal highs ≈3405, external ≈3452 | the leg's origin and the liquidity above |
+| 30m 08:40–08:51 | lower low ≈3300 "induced sellers"; high ≈3346 run → "buyers induced" | the inducement pair inside the pullback |
+| 30m 09:44 | zone 3290–3297 "from the left" — "we tapped into this" | the reaction origin = the internal low of the leg |
+| 30m 10:58 | stab ≈3287 under the zone, below the previous daily low | the trap of the buyers |
+| 15m 11:32–11:38 | build-up lows 3287–3290 → first stab ≈3285 = "an LB … a trap" | "we need to see a build-up", then the stab |
+| 15m 11:50 | entry ≈3288, stop ≈3282.5 (5.2), target 3311.2 (22.9), RR 4.39 | second stab takes "this level of internal just to be safe"; stop "below the LB to the left"; T1 = the inducing spike high |
+| 15m 12:29 | run to 3366–3368 | the HTF high; the 3346 line "a great partial point" |
+
+**Mapping onto the engine.** The 15m entry is §4.2's four-candle model (stab = LB,
+higher low, break → long) with §4.4's stop under the pre-existing LB; the targets are
+the ladder split (the inducing spike = pullback origin, partial) and §5. The
+"induces sellers → induces buyers → trap" sequence is the map's runs: minor run →
+counter-side run → the run of the origin. Before this review the engine graded a
+trap with an x1 swing intact beyond it `unrefined` and never let it set the story
+(E1 build); V8 says the structural low is not required — a discrepancy that was
+situational (inside `story_lookback` → unrefined, outside → clean), i.e. an artefact
+of the 60-bar window, not of structure.
+
+**Verdict.** Confirms: left liquidity as the reaction origin (E1's principle, now
+Marco's words), build-up → stab = the trap (§6), the entry and stop mechanics (§4.2,
+§4.4), the target ladder (§5, ladder split), "wait for a run, not a touch" (Principle
+2), the HTF deciding whose trap matters (§3.1; "that aligns with that higher time
+frame idea", 08:50), aggressive vs refined (11:00 "sometimes you take out another
+level of internal"). Refines: (A) an unrefined LB sets the story — the deeper x1 is
+the refined entry, not a requirement; (B) "pattern trading" has a second meaning
+(§3.1); (C) the inducement sequence gives a forward-looking level — the trap pointer.
+Reconciled with E1 by the anchor: a counter-side LB against a live story keeps E1's
+structure test (MNQ 29 317.25 stays inducement); a same-side LB, or one with no story
+to speak of, is graded by the origin (V8).
+
+**Build (2026-09-19, all `[CALIBRATION]` on existing parameters).** Swing state in the
+map, flipping on any consumed level (pokes and LB invalidations included); origin =
+the extreme of the swing the inducing move came from, read at the flip
+(`buyers_induced` / `sellers_induced`), `origin_run` when traded through; `left` =
+build-up → (against a live story) nearest x1 swing → (with / without a story) the
+intact origin → nearest x1 swing; `gradeOf` unchanged in shape; `inducement` =
+(not clean or unqualified) and an opposing anchor alive; the story anchor = alive,
+qualified, not invalid, not inducement; `trap` on the block and its event;
+`map.origins` / `trap_pointers` exclude origins at an alive same-side LB extreme (E1
+decision 1). Tests: `V8_TRAP` ×3 (pointer, the trap flips the story with 98.0 intact,
+no pointer at an LB extreme); `UNREFINED_LEFT` now expects `buy_story`; all other
+E1/V1/V6 fixtures and the MNQ/6B real-bar tests unchanged. Rejected: registering the
+origin as a level (phantom levels; see *Approved changes*); flips only on qualified
+runs (kills the gold example — the 3346 high was x1). Pine v11 mirrors it. Known
+limit: with fine-grained flips a decline with bounces that run minor highs resets the
+up-swing, so the origin can be a mid-leg low rather than the leg's start — the anchor
+split covers the counter-side case, the same-side case names the nearest origin
+(conservative in direction, aggressive in level).
+
+**Gold 2025 replay (2026-09-19; `OANDA:XAUUSD` in bar replay at 2025-08-08, 60m/30m/15m
+bars pulled from the chart, 30m seeded from 60m; ET times).** Dating from the bars:
+Marco's 30m frames are Tue 29 Jul evening (price 3334), the stab under the zone is
+Wed 30 Jul before FOMC (price 3308), the 15m entry is Thu 31 Jul evening and the
+"fast forward" is Fri 1 Aug (NFP, high 3363.6).
+
+- **27–29 Jul (30m).** 27 Jul 23:30 buyers induced (3340.3 run, origin 3324). 28 Jul
+  09:30 the drop ran 3308.1 x2 → 10:00 bull LB 3301.8–3308.1 Q clean `trap` (it took the
+  origin 3324) → `buy_story`; 15:30 the rally ran 3317.3 → buyers induced, origin
+  3301.8 = the LB's bottom, so no pointer — the box says it. Marco: "induced sellers"
+  (the 3301.8 low) → "buyers induced" (the 3345.5 high) → "if price now sells back off
+  to trap the buyers …". The engine gave that low the status of a qualified trap and
+  printed the long he calls "inducing buyers" (3308 → 3345 the same day); its box
+  bottom is exactly the level he says must be run to trap them. 29 Jul 18:00:
+  `up_continuation`, alive bull LB 3301.8–3308.1 TRAP, bear LB 3330.1–3334.3 inducement.
+- **30 Jul (30m).** 09:30 the LB 3301.8 killed → LB 3298.4–3301.8 Q clean → 11:00
+  killed → 12:30 breakdown; 14:30–15:30 the FOMC drop ran 3288.6 x1 (his zone "from
+  the left" 3290–3297), 3282.7 x2 and 3274.6 x2 → breakdown 3274.6 (qualified) →
+  `down_continuation`; low 3268.1. Marco: "take out another level of internal, and now
+  you can maybe see price back down to the lows … we've taken previous daily low" ✓.
+- **31 Jul (30m + 15m).** 01:00 the bounce ran 3298.8 → buyers induced, origin 3268.1 →
+  the **trap pointer for longs 3268.1** on both frames. 03:45 the run of 3305.2 x2 → bear
+  LB 3309.9–3315 → 30m `sell_story`, targets 3293.8 / 3268.1 / 3244.4 (3293.8 hit 10:30,
+  3281.7 by 21:45 — the counter read of the day played, then NFP). 15m 10:30 the run
+  of 3293.8 x3 → bull LB 3291.4–3293.8 Q clean → deepened → 12:15 LB 3289.7–3291.4 →
+  13:00 `buy_story`, tap 3291.4 / stop 3289.2 / T1 3299.1 (RR 3.6) — **stopped at
+  19:45** (low 3288.1) before the real trap: Marco's "you're not staying patient … all
+  we have now done is induce buyers once more" in numbers. 19:15 the run of 3289.7 x2 →
+  bull LB 3288.4–3289.7 Q clean → deepened 3288.1 → 20:30 LB 3286.6–3289.7 Q clean,
+  `buy_story`; 21:30 the stab 3286.2 killed it (trade beyond the extreme), 21:45 3281.7,
+  22:00 the reclaim bar (O 3283.8, C 3291.2) → LB 3281.7–3286.2 (x1) → `buy_story`: tap
+  3286.2, stop 3281.3, targets 3299.1 x3 → 3311.3 → 3315. **Marco's trade on the same
+  bars:** the build-up = the 19:15–20:15 lows 3288.4 / 3288.1 / 3286.8 / 3286.6 ("look
+  how we had a build up"), the first stab 3286.2 ("we stabbed the low again — created
+  ourselves an LB, now known as a trap"), the second stab 3281.7 ("taken out this level
+  of internal just to be safe"), entry ≈3288.2 on the reclaim, stop 3283.0 — below the
+  *first* LB, above the second stab's wick — target 3311.2, hit 1 Aug 08:30 (RR 4.39).
+  The engine's version: entry 3286.2, stop 3281.3 (under the deepest wick, §2.3), T1
+  3299.1 (RR 2.6), T2 3311.3 (RR 5.1). Same trade; his stop covers the first LB, ours
+  the whole excursion.
+- **1 Aug.** 08:30–09:00 the run of 3334.3 x3/x4, 3345.5 (his "buyers induced" line —
+  "a great partial point") and 3349 x2; 15:30 3360.2 x3; close 3362.9.
+
+What it says about the rules: (1) the structure matched Marco's narrative at every
+stage; (2) on these bars the old rule would have read the 19:15 LB the same way —
+3268.1 was already outside the 60-bar structure — so here V8 changed the pointer, not
+the flip; the flip changes in the `V8_TRAP` fixture (the structural low inside the
+window); (3) two calibration lessons, both built: the trap pointer expires with the
+structure (`story_lookback` / `structBars`) — at 10:30 the 71-bar-old 3268.1 still
+showed while the LB born then was graded clean; and the 30 Jul 20:00–21:30 shelf
+3282.9–3286.8 never registered (flat neighbours — *Engine gaps*), so the 21:45 stab read
+as the sweep of the LB extreme only — the LB and the story came anyway; (4) Marco's
+stop sits under the *first* stab's LB, not under the deepest wick — not adopted (§2.3
+stays), recorded.
+
+### D2 — Elijah (IE), Discord, 2026-09-18 22:42 ET / 05:42 Athens Sep 19 — "EURO … a clean entry in London"
+
+Instrument EURUSD (FOREXCOM) 15m + 5m — our `CME:6E1!`; basis on these bars: **6E is
+spot plus 0.0040** (Sep-16 night low 1.14965 vs 1.14560; Sep-17 spike 1.15385 vs 1.14985).
+Charts stamped Sep 18 22:34/22:40 UTC-4. The user's question: the W38 brief had 6E
+**LONG (pullback)** — could we have caught this?
+
+**His markup (spot → 6E).** 15m: the Sep-16 FOMC drop; the Sep-17 08:00–10:30 rally
+running the 1.14880 (1.1528) and 1.14960 (1.1536) highs, blue arc on the spike top
+1.14985 (1.15385); a rising "BUILDUP" trend line under the Sep-17 lows 1.14640 →
+1.14760; the Sep-16 low 1.14560 (1.14965) extended right; a pink box 1.14760–1.14800
+(1.1516–1.1520). 5m: a light-blue bear LB 1.14920–1.14940 (1.1532–1.1534) from the
+spike — "DIRECT ENTRY HERE" at the Sep 18 00:00 ET Asia tap; two pink boxes (invalid
+bull LBs, 1.1516–1.1520 and 1.1526–1.1528); "CONFIRMATION" = the 04:10 spike to
+1.14921 (1.15321) over the 1.14880 highs and its reclaim → short **1.14877**
+(1.15277), stop **1.14921** (1.15321), target **1.14561** (1.14961), hit 08:20 ET —
+RR 7.2. Text: "this price action clearly shows where the liquidity in the market is"
+— the build-up line and the Sep-16 low are the sell-side liquidity.
+
+**Engine on 6E, bar replay at Fri 17:00 ET, 240/60/15/5 (60/15/5 seeded from 240),
+weekly bias long, H4 grid 1.1417 (LB) ↔ 1.15975 (LB):**
+
+| Moment (ET) | Elijah | Engine |
+| --- | --- | --- |
+| Sep 17 10:45, after the spike | external high run → direction short | 15m own story `sell_story` (bear LB 1.1536–1.15385, x1), targets 1.1512 / 1.15075 / **1.1498–1.14965 (LB, range extreme)** = his target; layered: **noise** against the weekly long inside the grid. 60m: `down_continuation` + **trap pointer for longs 1.14965** ("buyers induced by the 1.15235 run — their stops rest under 1.14965; its run is the trap, a reclaim there the long") |
+| Sep 18 00:15, "direct entry" tap | tap of the 5m box 1.1532–1.1534 | the 6E spike 1.1532 stays under our box 1.1536–1.15385 (inner edge = swept level) — no tap printed; the 15m/5m bull LBs 1.1514 / 1.1516 graded **invalid, pocket over 1.15135 x2** = his pink boxes |
+| Sep 18 04:20, "confirmation" | run of the 1.1528 highs to 1.15321, reclaim → short 1.15277, stop 1.15321 | 5m bear LB **1.15275–1.15305 = his entry**, graded invalid/inducement: the high 1.15315 (the 00:00 spike) from the left is intact — by **1 pip** on 6E (spot ran it by 1 pip); **trap pointer for shorts 1.15315** — "its run is the trap, a reclaim there the short" (= his trade, his stop 6 pips above it). 60m: the bear LBs 1.15225–1.15385 invalid, left = the leg's origin 1.15975; layered: noise |
+| Sep 18 08:45, after the low run | target 1.14561 hit 08:20 | 15m + 5m **`buy_story`**: the x3 build-up 1.14965 run 08:15–08:25 and reclaimed → bull LB 1.1495–1.14965 Q clean; tap 1.14965 / stop 1.14945 / T1 1.1527 (15m) — the grid's lower edge moves to 1.1495 |
+| Sep 18 15:15–16:00 | — | 1.1527 x2 run → bear LB 1.1527–1.153; the long's T1 hit (+30 pips); 15m `sell_story` = noise |
+
+**Verdict — could we have caught it?** The *short*, as he traded it: **not by our
+rules**. It is counter-bias (W38 6E long), on a Thursday (the Mon–Tue counter-trend
+frame is closed), inside the H4 grid — the layered read calls every 15m/5m sell story
+`noise` and the 1h grades the bear LBs invalid until the leg's origin 1.15975 is run.
+The engine nevertheless *read the structure exactly*: at 04:20 the 5m bear LB
+1.15275–1.15305 is his entry, the short-side trap pointer 1.15315 is his stop, the
+range-extreme bull LB 1.14965 is his target. The *long* the brief waited for is the
+other half of the same picture: the 1h trap pointer said from Sep 17 10:00 that the
+buyers' stops rest under 1.14965 and its run is the trap; the run came 08:15–08:25
+Sep 18 with the reclaim — 15m/5m `buy_story`, entry 1.14965, stop under 1.1495, T1
+1.1527 hit at 15:15. His "clean entry in London" is the false move that hands us the
+long (V1: "anticipate this false reaction … if there's a bullish opportunity you buy
+back up"). Nothing in the journal for Sep 17–18: no daily brief was generated those
+days (the last is 2026-09-15).
+
+**Observations, no rule change.** (1) His light-blue LB 1.14920–1.14940 sits *below*
+the swept level 1.14960 — a sweep-candle-body box, the second IE markup drawn that way
+(Principle 4: "keep watching"; the 00:00 tap exists only under that box). (2) The
+origin check is strict (`high > origin`): 6E's 1.15305 missed 1.15315 by a pip while
+spot ran it by a pip — the basis decides a V8 trap at 5m granularity; Principle 2 (a
+run, not a touch) says "not yet", which is what the engine said. (3) Elijah's 5m
+pink boxes and our `invalid` (pocket over the x2 1.15135) coincide — the E1/V8 grade
+matches his hand on the bull side too.

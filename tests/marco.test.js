@@ -829,18 +829,23 @@ test("left liquidity: a run that leaves a build-up intact beyond it is INVALID �
   assert.equal(read.blocks.find((b) => b.side === "bull").grade, "invalid");
 });
 
-test("left liquidity: only a single-touch swing left behind makes the LB UNREFINED — no story flip, the tap is the aggressive entry, the sweep of the swing the refined one", () => {
+test("left liquidity: only a single-touch swing left behind makes the LB UNREFINED — the trap stands (V8), the tap is the aggressive entry, the sweep of the swing the refined one", () => {
   const bars = mkBars(UNREFINED_LEFT);
   const map = buildLiquidityMap(bars, CFG);
   const blk = map.blocks.find((b) => b.side === "bull");
   assert.deepEqual([blk.bot, blk.top], [99.4, 100.0]);
   assert.equal(blk.qualified, true);
   assert.equal(blk.grade, "unrefined");
+  assert.equal(blk.left.kind, "swing");
   assert.equal(blk.left.price, 98.0);
   assert.equal(blk.left.touches, 1);
+  // V8 (06:52): "you do not need to wait for this low — that is pattern
+  // trading": the x2 build-up run IS the trap; the x1 origin low 98 beyond it
+  // is the refined entry, not a requirement — the story flips
   const story = storyRead(map, bars, CFG);
-  assert.notEqual(story.mode, "buy_story");
-  assert.match(story.read, /is unrefined: the low 98 from the left is intact — not a flip; its tap is the aggressive entry at best, the sweep of 98 the refined one/);
+  assert.equal(story.mode, "buy_story");
+  assert.deepEqual(story.lb.zone, [99.4, 100]);
+  assert.match(story.read, /unrefined — the low 98 from the left is intact: the tap is the aggressive entry, the sweep of 98 the refined one; the trap does not need it \(V8\)/);
   const read = analyzeMarco(bars, CFG, { bias: 1 });
   const tap = read.triggers.find((t) => t.kind === "tap");
   assert.equal(tap.grade, "unrefined");
@@ -872,6 +877,97 @@ test("left liquidity: a counter-side LB with the leg's origin intact is induceme
   assert.equal(read.bias_used, 1);
   assert.equal(read.false_reactions[0].inducement, true);
   assert.match(read.false_reactions[0].note, /the high 104 from the left is intact/);
+});
+
+// ---------------------------------------------------------------------------
+// V8 (Marco, E2n7KMQDYIU "Fix This Liquidity Mistake", 2026-09-19): the trap
+// is the run of the level the inducing move came from — "where did this
+// reaction occur from? look to the left-hand side" — not of the structural
+// swing low pattern traders mark. Diagram 02:26–06:56 in miniature.
+const V8_TRAP = [
+  [100, 101, 99.5, 100.5],
+  [100.5, 101, 98.0, 100.0], // pivot low 98.0 — the structural low the pattern trader marks (x1)
+  [100, 102, 99.6, 101.5], // 98.0 registered
+  [101.5, 102.4, 101.0, 102.0],
+  [102.0, 103.0, 101.6, 102.5], // pivot high 103.0 — the top
+  [102.5, 102.7, 101.4, 101.8], // 103.0 registered; the retracement starts
+  [101.8, 102.0, 100.0, 100.9], // pivot low 100.0 — the internal low of the leg
+  [100.9, 101.9, 100.9, 101.6], // 100.0 registered
+  [101.6, 101.8, 100.1, 101.3], // pivot low 100.1 → equal → 100.0 x2 (the zone "from the left")
+  [101.3, 102.1, 101.0, 101.9],
+  [101.9, 102.2, 101.6, 102.0],
+  [102.0, 102.3, 101.3, 101.8], // pivot low 101.3 — a minor low; pivot high 102.3
+  [101.8, 102.2, 101.7, 102.1], // both registered
+  [102.1, 102.2, 100.5, 100.8], // runs 101.3 — "induces sellers"; the stab stops at 100.5, above the x2 zone
+  [100.8, 101.0, 100.6, 100.9],
+  [100.9, 101.2, 100.7, 101.1], // no reclaim → breakdown of 101.3; 100.5 is a plain low, no LB
+  [101.1, 103.4, 101.0, 103.1], // the rapid move up runs the highs — "inducing buyers"; the move came from 100.5
+  [103.1, 103.3, 102.4, 102.7], // reclaim → bear LB 103.0–103.3, x1 and young
+  [102.7, 102.9, 101.5, 101.8], // the sell-off "to trap the buyers"
+  [101.8, 102.0, 99.7, 100.9], // runs the origin 100.5 AND the x2 zone 100.0, closes back → the trap; 98.0 stays intact
+  [100.9, 101.6, 100.7, 101.4],
+  [101.4, 101.8, 101.0, 101.6],
+];
+
+test("V8: after buyers are induced, the trap pointer names the origin their move came from — 'grab this low, drag it over'", () => {
+  const bars = mkBars(V8_TRAP.slice(0, 18)); // through the bear LB, before the sell-off
+  const map = buildLiquidityMap(bars, CFG);
+  const induced = map.events.find((e) => e.type === "buyers_induced");
+  assert.ok(induced, "the run of the highs induced buyers");
+  assert.equal(induced.bar, 16);
+  assert.equal(induced.origin, 100.5);
+  assert.equal(induced.origin_bar, 13);
+  assert.ok(map.events.some((e) => e.type === "sellers_induced" && e.bar === 13 && e.level === 101.3), "the minor low run induced sellers first");
+  assert.equal(map.origins.bull.price, 100.5);
+  assert.equal(map.origins.bull.induced.who, "buyers");
+  assert.equal(map.origins.bear, null, "the bear origin 103 was traded through by the rally");
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.pointers.bull.price, 100.5);
+  assert.equal(story.pointers.bull.induced.who, "buyers");
+  assert.match(story.read, /trap pointer: buyers induced 1 bar ago \(the high 10[23](\.\d)? run\) — their stops rest under the origin 100\.5 that move came from: its run is the trap, a reclaim there the long/);
+  const read = analyzeMarco(bars, CFG);
+  assert.equal(read.trap_pointers.bull.price, 100.5);
+});
+
+test("V8: the run of the origin + the x2 zone is the trap and sets the story, although the structural low 98 stays intact — waiting for it is pattern trading", () => {
+  const bars = mkBars(V8_TRAP);
+  const map = buildLiquidityMap(bars, CFG);
+  assert.ok(map.events.some((e) => e.type === "origin_run" && e.side === "bull" && e.bar === 19 && e.origin === 100.5));
+  const blk = map.blocks.find((b) => b.side === "bull" && !b.dead);
+  assert.deepEqual([blk.bot, blk.top], [99.7, 100.0]);
+  assert.equal(blk.qualified, true, "the x2 zone run qualifies the trap");
+  assert.equal(blk.sweptTouches, 2);
+  assert.equal(blk.trap, true, "the run took the origin the inducing move came from");
+  assert.equal(blk.grade, "unrefined", "the x1 structural low 98 is named as the refined entry, not required");
+  assert.deepEqual([blk.left.kind, blk.left.price], ["swing", 98.0]);
+  assert.equal(blk.inducement, false);
+  assert.ok(map.levels.lows.some((l) => l.price === 98.0 && l.touches === 1), "98.0 stays on the map, intact");
+  assert.equal(map.origins.bull, null, "the pointer is gone once the origin is run");
+  const story = storyRead(map, bars, CFG);
+  assert.equal(story.mode, "buy_story");
+  assert.equal(story.direction, 1);
+  assert.deepEqual(story.lb.zone, [99.7, 100]);
+  assert.match(story.read, /the trap does not need it \(V8\)/);
+  assert.match(story.read, /the run took the origin of the move that induced the crowd — the trap, V8/);
+  const read = analyzeMarco(bars, CFG);
+  assert.equal(read.bias_used, 1);
+  assert.equal(read.blocks.find((b) => b.side === "bull").trap, true);
+  const tap = read.triggers.find((t) => t.kind === "tap");
+  assert.equal(tap.grade, "unrefined");
+  assert.equal(tap.unrefined.floor, 98.0);
+  assert.match(tap.note, /the trap does not need it/);
+});
+
+test("V8: an origin sitting at an alive same-side LB extreme is the stop side, not a pointer (E1 build decision 1)", () => {
+  const bars = mkBars([
+    ...SWEEP_RECLAIM, // bull LB 99.5–100 alive; its run flipped the swing down
+    [102.8, 103.9, 102.0, 103.5], // runs the 103.6 high → buyers induced; the move came from 99.5 = the LB extreme
+  ]);
+  const map = buildLiquidityMap(bars, CFG);
+  const induced = map.events.find((e) => e.type === "buyers_induced");
+  assert.ok(induced && induced.origin === 99.5);
+  assert.equal(map.origins.bull, null);
+  assert.equal(storyRead(map, bars, CFG).pointers.bull, null);
 });
 
 test("MNQ 2026-09-02 (real bars, E1): the deepened 28927.25 run keeps the 1h buy story, and the 10:00 bear LB under the intact 29317.25 is inducement, not a flip", () => {

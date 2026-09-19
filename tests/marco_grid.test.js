@@ -422,7 +422,7 @@ test("flagPocket structural tier: an invalid tap is a pocket at the build-up it 
   tap = triggers.find((t) => t.kind === "tap");
   flagPocket(triggers, m, BARS, CFG, 1);
   assert.equal(tap.pocket, undefined);
-  assert.deepEqual(tap.unrefined, { floor: 97, touches: 1, gap: 1.6, from: "structure" });
+  assert.deepEqual(tap.unrefined, { floor: 97, touches: 1, gap: 1.6, from: "structure", kind: "swing" });
   assert.match(tap.note, /this tap is the aggressive entry, the sweep of 97 the refined one/);
   assert.equal(triggers.find((t) => t.kind === "sweep" && t.trigger === 97).refined, true);
   assert.equal(triggers.find((t) => t.kind === "sweep" && t.trigger === 95).preferred, undefined);
@@ -459,7 +459,7 @@ test("clipToGrid structural tier: a level edge is the floor at any distance, an 
   const rRung = { story: { direction: 1 }, triggers: [t3], liquidity: { intact_below: [], intact_above: [] } };
   clipToGrid(rRung, gRung, 1);
   assert.equal(t3.pocket, undefined);
-  assert.deepEqual(t3.unrefined, { floor: 99.0, touches: 1, gap: 0.2, from: "h4 grid" });
+  assert.deepEqual(t3.unrefined, { floor: 99.0, touches: 1, gap: 0.2, from: "h4 grid", kind: "swing" });
 });
 
 test("dailyScenarios (E1): an unrefined A is the aggressive grade with its refined sweep named; D calls the counter LB invalid and points at the build-up under it; the brief prints the deepened run", () => {

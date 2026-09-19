@@ -218,10 +218,11 @@ function markPocket(t, floor, ext) {
 // E1: single-touch swings left intact beyond the zone's extreme — the tap is
 // the aggressive entry, the sweep of the nearest such swing the refined one
 function markUnrefined(t, left, ext, from) {
-  t.unrefined = { floor: left.price, touches: left.touches, gap: round(Math.abs(ext - left.price)), from };
+  t.unrefined = { floor: left.price, touches: left.touches, gap: round(Math.abs(ext - left.price)), from, kind: left.kind ?? "swing" };
+  const what = left.kind === "origin" ? "the inducing move came from" : "from the left";
   const why =
-    `unrefined — the ${t.side === "long" ? "low" : "high"} ${fmt(left.price)}${left.touches > 1 ? ` x${left.touches}` : ""} from the left is intact ` +
-    `${fmt(t.unrefined.gap)} ${t.side === "long" ? "below" : "above"} the LB extreme ${fmt(ext)}: this tap is the aggressive entry, the sweep of ${fmt(left.price)} the refined one (E1)`;
+    `unrefined — the ${t.side === "long" ? "low" : "high"} ${fmt(left.price)}${left.touches > 1 ? ` x${left.touches}` : ""} ${what} is intact ` +
+    `${fmt(t.unrefined.gap)} ${t.side === "long" ? "below" : "above"} the LB extreme ${fmt(ext)}: this tap is the aggressive entry, the sweep of ${fmt(left.price)} the refined one (E1; V8: the trap does not need it)`;
   t.note = t.note ? `${t.note}; ${why}` : why;
 }
 
@@ -481,6 +482,11 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
         timeframe: eventIn,
         fresh: eventIn ? reads[eventIn].story.fresh : null,
       };
+  // V8 trap pointer on the bias side: the intact origin of the last move
+  // that induced the crowd we want trapped — "grab this low, drag it over";
+  // its run is the trap, a reclaim there the entry. Nearest timeframe first.
+  const ptrTf = ["240", "60", "15"].find((tf) => reads[tf]?.trap_pointers?.[long ? "bull" : "bear"]) ?? null;
+  waitFor.pointer = ptrTf ? { timeframe: ptrTf, ...reads[ptrTf].trap_pointers[long ? "bull" : "bear"] } : null;
 
   // A — the nearest bias-side LB tap (240 first at equal distance). Over the
   // cap, the V6 refinement is a nested same-side LB inside the zone with a
@@ -759,6 +765,11 @@ function sinceLines(grid) {
       case "low_breakdown":
       case "high_breakdown":
         return `  ${e.type === "low_breakdown" ? "low" : "high"} ${fmt(e.level)} consumed without a reclaim ${ago} — continuation`;
+      case "buyers_induced":
+      case "sellers_induced":
+        return `  ${e.type === "buyers_induced" ? "buyers" : "sellers"} induced ${ago} (${e.type === "buyers_induced" ? "high" : "low"} ${fmt(e.level)} run) — origin ${fmt(e.origin)} is where their stops rest (V8)`;
+      case "origin_run":
+        return `  origin ${fmt(e.origin)} run ${ago} — the ${e.side === "bull" ? "buyers" : "sellers"} induced earlier are trapped; the reclaim decides (V8)`;
       default:
         return `  ${e.type} ${ago}`;
     }
@@ -829,6 +840,12 @@ export function renderDailyMarkdown(daily) {
         "",
         `**What we wait for.** Bias-side run + reclaim: **${sc.wait_for.answer.toUpperCase()}**${sc.wait_for.timeframe ? ` (${tfLabel(sc.wait_for.timeframe)})` : ""}${sc.wait_for.fresh === false ? " — stale" : ""}. ${sc.wait_for.read ?? ""}`,
       );
+      if (sc.wait_for.pointer) {
+        const p = sc.wait_for.pointer;
+        out.push(
+          `**Trap pointer** (${tfLabel(p.timeframe)}, V8). ${p.induced.who} induced ${p.induced.bars_ago === 0 ? "this bar" : `${p.induced.bars_ago} bars ago`} by the run of ${fmt(p.induced.level)} — their stops rest ${long ? "under" : "over"} the origin **${fmt(p.price)}** that move came from. Its run is the trap, a ${tfLabel("60")}/${tfLabel("15")} reclaim there the entry; the deeper x1 rungs are refinements, not requirements.`,
+        );
+      }
       out.push("", "**Scenarios.**");
       for (const key of ["A", "B", "C", "D"]) out.push(`- **${sc[key].label}.** ${sc[key].text}`);
       if (sc.partials.length) out.push(`- Partials on the way: ${sc.partials.map((p) => `${fmt(p.price)}${p.kind === "lb" ? ` (LB ${zoneTxt(p.zone)})` : p.touches > 1 ? ` x${p.touches}` : ""}`).join(" → ")}.`);
