@@ -44,6 +44,16 @@
 //   * Deepened runs (v10, E1): a wick within eqTol through a zone younger than
 //     confirmBars is the same run deepened — the pending reopens against the
 //     ORIGINAL swept level with its taps and age, not the zone's x1 extreme.
+//   * The reaction origin (v11, V8 — docs/MARCO.md §3): "where did this
+//     reaction occur from? look to the left-hand side". The swing flips on
+//     any consumed level; the extreme of the swing an inducing move came from
+//     is that move's origin — where the induced crowd's stops rest, so its
+//     run is the trap. An LB born with the story (or with none) that leaves
+//     the origin intact is unrefined and still sets the bias; one born
+//     against a live story keeps E1's structure test (nearest x1 swing) and
+//     is inducement. "· trap" marks an LB whose run took an intact origin.
+//     Trap pointers: a dashed line + label at the intact origin per side
+//     ("trap ↓ L · buyers induced @H"), not drawn at an alive LB extreme.
 //@version=6
 indicator("Marco LB — Liquidity Blocks", "Marco LB", overlay = true,
      max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -85,6 +95,8 @@ keepSwept   = input.bool(true, "Keep swept build-up boxes (grey)", group = grpU,
 
 grpV = "Visuals"
 showLevels  = input.bool(true, "Show liquidity levels", group = grpV)
+showPointers = input.bool(true, "Trap pointers (V8 origins)", group = grpV,
+     tooltip = "After a high is run (buyers induced) a dashed line marks the low that move came from — where the induced buyers' stops rest; its run is the trap, a reclaim there the long. Mirror for sellers. Not drawn when the origin is an alive LB extreme (the box already says it). docs/MARCO.md §3, V8.")
 showTaps    = input.bool(true, "Label zone taps", group = grpV)
 showStops   = input.bool(true, "Stop line on strong zones", group = grpV)
 stopBufAtr  = input.float(0.1, "Stop buffer (ATR mult)", step = 0.05, minval = 0.0, group = grpV)
@@ -113,6 +125,10 @@ type Pending
     int   miss    = 0  // consecutive closes that failed to reclaim
     bool  deep    = false // v10: reopened by a deepened run (same trap)
     int   legStart = na   // v10: the structure bound carried from the deepened zone
+    int   runBar  = na    // v11: the bar the run started
+    float oP      = na    // v11: the reaction origin as of the run (V8)
+    int   oBar    = na
+    int   oAt     = na    // the bar of the run that induced the crowd
 
 type Block
     box   bx
@@ -129,10 +145,34 @@ type Block
     int   respects = 0 // later pivots that held within eqTol of the extreme (v9)
     int   sweptT   = 1  // v10: taps of the swept level (carried into a deepened run)
     int   sweptAge = 0  // v10: age of the swept level at the run
-    float leftLq   = na // v10: the nearest intact same-side level the run left beyond its extreme
+    float leftLq   = na // v10: the liquidity the run left intact beyond its extreme (v11: build-up, origin or swing)
     int   leftLqT  = 0
     int   legStart = na
     string grade   = "clean" // v10: clean / unrefined / invalid
+    string leftKind = "swing" // v11: buildup / origin / swing
+    bool  ind      = false  // v11: inducement — born against a live story without the grade to flip it
+    bool  trap     = false  // v11: the run took an origin that stood intact (V8)
+    float oP       = na     // v11: the origin carried for a deepened run
+    int   oBar     = na
+    int   oAt      = na
+
+// v11 (V8): the swing and the origins the next flip will read
+type Swing
+    int   dir = 0
+    float curMin = na   // lowest low since the last flip-down
+    int   curMinBar = na
+    float curMax = na   // highest high since the last flip-up
+    int   curMaxBar = na
+    float upP = na      // the low the buyers' move came from
+    int   upBar = na
+    float upLvl = na    // the high whose run induced them
+    int   upAt = na
+    int   upTaken = na  // bar the origin was traded through
+    float dnP = na
+    int   dnBar = na
+    float dnLvl = na
+    int   dnAt = na
+    int   dnTaken = na
 
 type SweptBox
     box bx
@@ -149,6 +189,13 @@ var int biasDir   = 0 // +1 long, -1 short, 0 none
 var int lastLbDir = 0 // side of the most recent clean LB created (Auto bias)
 var int lastBullLbBorn = na // v10: bar of the previous CLEAN bull LB — the structure bound
 var int lastBearLbBorn = na
+var Swing sw = Swing.new()  // v11
+var line  ptrBull  = na     // v11: trap pointer for longs (the buyers' origin)
+var label ptrBullL = na
+var line  ptrBear  = na
+var label ptrBearL = na
+bool originRunBull = false  // v11: alert flags
+bool originRunBear = false
 
 atrVal   = ta.atr(14)
 bodyLo   = math.min(open, close)
@@ -163,8 +210,10 @@ againstBias(bool isBull, int dir) =>
 
 // v10 (E1): the box label — "false" against the bias, else LB/lb with the
 // left-liquidity suffix (✗ invalid, ~ unrefined)
-blockText(bool against, bool strong, string grade, float leftLq) =>
+blockText(bool against, bool strong, string grade, float leftLq, bool trap) =>
     string txt = against ? "false" : (strong ? "LB" : "lb")
+    if trap and not against
+        txt := txt + " · trap"
     if grade != "clean"
         txt := txt + " · left " + str.tostring(leftLq, format.mintick) + (grade == "invalid" ? " ✗" : " ~")
     txt
@@ -175,35 +224,122 @@ applyBias(int dir) =>
             if not blk.dead
                 bool against = againstBias(blk.isBull, dir)
                 box.set_border_style(blk.bx, against ? line.style_dashed : (blk.grade == "invalid" ? line.style_dotted : line.style_solid))
-                box.set_text(blk.bx, blockText(against, blk.qualified, blk.grade, blk.leftLq))
+                box.set_text(blk.bx, blockText(against, blk.qualified, blk.grade, blk.leftLq, blk.trap))
 
-// docs/MARCO.md §3: a live clean, build-up-qualified LB anchors the story; an
-// LB that cannot flip it (unqualified, or left liquidity intact — v10) born
-// against it is inducement and must not flip Auto bias.
+// docs/MARCO.md §3: a live build-up-qualified LB that is not invalid and not
+// inducement anchors the story (v11, V8: an unrefined LB with the story
+// counts); an LB born against it without the grade to flip it is inducement
+// and must not flip Auto bias.
 liveBuild(bool isBull) =>
     bool found = false
     if array.size(blocks) > 0
         for blk in blocks
-            if not blk.dead and blk.build and na(blk.leftLq) and blk.isBull == isBull
+            if not blk.dead and blk.build and blk.grade != "invalid" and not blk.ind and blk.isBull == isBull
                 found := true
     found
 
-// v10 (E1): the liquidity from the left — the nearest intact same-side level
-// of the structure (born after legStart) beyond the run's extreme, its taps,
-// and the strongest tap count among them
+// v11 (V8): an origin sitting at an alive same-side LB extreme is that zone's
+// stop side — the V6 refinement, never left liquidity (E1 build decision 1)
+atAliveExtreme(bool isBull, float p) =>
+    bool hit = false
+    if array.size(blocks) > 0
+        for blk in blocks
+            if not blk.dead and blk.isBull == isBull and math.abs((isBull ? blk.bot : blk.top) - p) <= eqTol * atrVal
+                hit := true
+    hit
+
+// v11 (V8): the lowest low / highest high over the bars from `fromBar` to now
+// (inclusive) — bounded, the origin lives inside the structure anyway
+lowestSince(int fromBar) =>
+    float v = low
+    int n = math.min(bar_index - fromBar, structBars + 50)
+    if n > 0
+        for k = 0 to n
+            v := math.min(v, low[k])
+    v
+highestSince(int fromBar) =>
+    float v = high
+    int n = math.min(bar_index - fromBar, structBars + 50)
+    if n > 0
+        for k = 0 to n
+            v := math.max(v, high[k])
+    v
+// the same over a closed window of past bars [fromBar, toBar]; na when empty
+lowestBetween(int fromBar, int toBar) =>
+    float v = na
+    if toBar >= fromBar
+        int a = math.max(bar_index - toBar, 0)
+        int b = math.min(bar_index - fromBar, structBars + 50)
+        if b >= a
+            for k = a to b
+                v := na(v) ? low[k] : math.min(v, low[k])
+    na(v) ? 1.0e12 : v
+highestBetween(int fromBar, int toBar) =>
+    float v = na
+    if toBar >= fromBar
+        int a = math.max(bar_index - toBar, 0)
+        int b = math.min(bar_index - fromBar, structBars + 50)
+        if b >= a
+            for k = a to b
+                v := na(v) ? high[k] : math.max(v, high[k])
+    na(v) ? -1.0e12 : v
+
+// v11 (V8): the swing flips on a consumed level — a low run turns it down and
+// reads the up-swing's top as the sell-off's origin; a high run turns it up
+// and reads the down-swing's bottom as the rally's origin ("where did this
+// reaction occur from?"). Consecutive runs one way keep the origin.
+flipSwing(Swing s, int dir, float lvl) =>
+    if s.dir != dir
+        s.dir := dir
+        if dir > 0
+            s.upP     := s.curMin
+            s.upBar   := s.curMinBar
+            s.upLvl   := lvl
+            s.upAt    := bar_index
+            s.upTaken := na
+            s.curMax    := high
+            s.curMaxBar := bar_index
+        else
+            s.dnP     := s.curMax
+            s.dnBar   := s.curMaxBar
+            s.dnLvl   := lvl
+            s.dnAt    := bar_index
+            s.dnTaken := na
+            s.curMin    := low
+            s.curMinBar := bar_index
+    true
+
+// an intact origin traded through: the induced crowd is trapped
+markTaken(Swing s) =>
+    bool bullRun = false
+    bool bearRun = false
+    if not na(s.upP) and na(s.upTaken) and low < s.upP
+        s.upTaken := bar_index
+        bullRun := true
+    if not na(s.dnP) and na(s.dnTaken) and high > s.dnP
+        s.dnTaken := bar_index
+        bearRun := true
+    [bullRun, bearRun]
+
+// v10/v11 (E1, V8): the liquidity from the left — inside the structure (born
+// after legStart) and beyond the run's extreme: the nearest build-up (the
+// invalid test) and the nearest single-touch swing (E1's refined point)
 leftLiq(array<LqLevel> lvls, bool isLow, float ext, int legStart) =>
     float best  = na
     int   bestT = 0
-    int   maxT  = 0
+    float strongP = na
+    int   strongT = 0
     if array.size(lvls) > 0
         for lv in lvls
             bool beyond = isLow ? lv.price < ext : lv.price > ext
             if beyond and lv.born > legStart
-                maxT := math.max(maxT, lv.touches)
                 if na(best) or (isLow ? lv.price > best : lv.price < best)
                     best  := lv.price
                     bestT := lv.touches
-    [best, bestT, maxT]
+                if lv.touches >= minTouches and (na(strongP) or (isLow ? lv.price > strongP : lv.price < strongP))
+                    strongP := lv.price
+                    strongT := lv.touches
+    [best, bestT, strongP, strongT]
 
 // docs/MARCO.md §2.1: a level with the build-up touch count is a liquidity
 // build-up — draw the box across its equal extremes (the local target)
@@ -326,15 +462,57 @@ drawBias() =>
                 dn += lv.touches
     up > dn ? 1 : dn > up ? -1 : 0
 
-// returns true when the run left liquidity intact beyond the zone (v10, E1)
-newBlock(bool isBull, int leftBar, float top, float bot, bool qualified, int sT, int sAge, int legStart) =>
+// returns the grade (clean / unrefined / invalid) and whether the LB is
+// inducement — born against a live story without the grade to flip it
+newBlock(bool isBull, int leftBar, float top, float bot, bool qualified, int sT, int sAge, int legStart,
+     float oP, int oBar, int oAt, int runBar) =>
     // docs/MARCO.md §7.1: a zone thinner than minZoneAtr is not entry-grade
     bool thin   = top - bot < minZoneAtr * atrVal
     bool strong = qualified and not thin
-    // v10 (E1): the liquidity from the left — invalid when a build-up (or an
-    // unqualified zone) is left behind, unrefined when only x1 swings are
-    [lqP, lqT, lqMax] = leftLiq(isBull ? lowLvls : highLvls, isBull, isBull ? bot : top, legStart)
-    string grade = na(lqP) ? "clean" : (lqMax >= minTouches or not qualified) ? "invalid" : "unrefined"
+    float ext   = isBull ? bot : top
+    // v10/v11 (E1, V8): the liquidity from the left. A build-up beyond the
+    // extreme inside the structure → invalid. Otherwise unrefined, naming the
+    // nearest x1 swing when born AGAINST a live story (E1), or the intact
+    // reaction origin when born with it / with none (V8), falling back to
+    // the swing. Nothing → clean.
+    [swP, swT, stP, stT] = leftLiq(isBull ? lowLvls : highLvls, isBull, ext, legStart)
+    bool counter = liveBuild(not isBull)
+    // the origin stood intact since the run that induced the crowd, is
+    // inside the structure, beyond the extreme, and is no alive LB extreme
+    bool oIntact = not na(oP) and oBar > legStart and (isBull ? oP < ext : oP > ext) and not atAliveExtreme(isBull, oP) and
+         (isBull ? lowestSince(oAt + 1) >= oP : highestSince(oAt + 1) <= oP)
+    float lqP = na
+    int   lqT = 0
+    string lqKind = "swing"
+    if not na(stP)
+        lqP := stP
+        lqT := stT
+        lqKind := "buildup"
+    else if counter
+        if not na(swP)
+            lqP := swP
+            lqT := swT
+        else if oIntact
+            lqP := oP
+            lqT := 1
+            lqKind := "origin"
+    else
+        if oIntact
+            lqP := oP
+            lqT := 1
+            lqKind := "origin"
+        else if not na(swP)
+            lqP := swP
+            lqT := swT
+    string grade = na(lqP) ? "clean" : (lqKind == "buildup" or not qualified) ? "invalid" : "unrefined"
+    bool ind = (grade != "clean" or not qualified) and counter
+    // V8: the run took an origin that stood intact when it started — the trap
+    bool trap = false
+    if not na(oP) and not na(oAt)
+        if isBull
+            trap := (runBar <= oAt + 1 or lowestBetween(oAt + 1, runBar - 1) >= oP) and lowestSince(runBar) < oP
+        else
+            trap := (runBar <= oAt + 1 or highestBetween(oAt + 1, runBar - 1) <= oP) and highestSince(runBar) > oP
     col   = isBull ? colBull : colBear
     fillT = strong ? 82 : 93
     bordT = strong ? 35 : 72
@@ -344,7 +522,7 @@ newBlock(bool isBull, int leftBar, float top, float bot, bool qualified, int sT,
          border_color = color.new(col, bordT), border_width = 1,
          border_style = against ? line.style_dashed : (grade == "invalid" ? line.style_dotted : line.style_solid),
          bgcolor = color.new(col, fillT),
-         text = blockText(against, strong, grade, lqP), text_size = size.tiny,
+         text = blockText(against, strong, grade, lqP, trap), text_size = size.tiny,
          text_color = color.new(col, txtT),
          text_halign = text.align_right,
          text_valign = isBull ? text.align_bottom : text.align_top)
@@ -355,13 +533,25 @@ newBlock(bool isBull, int leftBar, float top, float bot, bool qualified, int sT,
              color = color.new(col, 35), width = 1, style = line.style_dashed)
     array.push(blocks, Block.new(bx = b, st = st, top = top, bot = bot, isBull = isBull,
          qualified = strong, build = qualified, tapped = false, dead = false, born = bar_index, left = leftBar,
-         sweptT = sT, sweptAge = sAge, leftLq = lqP, leftLqT = lqT, legStart = legStart, grade = grade))
+         sweptT = sT, sweptAge = sAge, leftLq = lqP, leftLqT = lqT, legStart = legStart, grade = grade,
+         leftKind = lqKind, ind = ind, trap = trap, oP = oP, oBar = oBar, oAt = oAt))
     if array.size(blocks) > MAX_BLOCKS
         Block old = array.shift(blocks)
         box.delete(old.bx)
         if not na(old.st)
             line.delete(old.st)
-    not na(lqP)
+    [grade, ind]
+
+// ------------------------------------- 0. swings (v11, V8) -----------------
+if na(sw.curMin) or low < sw.curMin
+    sw.curMin    := low
+    sw.curMinBar := bar_index
+if na(sw.curMax) or high > sw.curMax
+    sw.curMax    := high
+    sw.curMaxBar := bar_index
+[tk0b, tk0s] = markTaken(sw)
+originRunBull := originRunBull or tk0b
+originRunBear := originRunBear or tk0s
 
 // ------------------------------------------------- 1. maintain LB zones ----
 bool tapBull  = false
@@ -414,6 +604,11 @@ if array.size(blocks) > 0
                             pendBull.extBar  := bar_index
                             pendBull.extBody := bodyLo
                             pendBull.miss    := 0
+                            pendBull.runBar  := bar_index
+                            // v11: the origin as of the run — a deepened run keeps the zone's
+                            pendBull.oP   := deep ? blk.oP : sw.upP
+                            pendBull.oBar := deep ? blk.oBar : sw.upBar
+                            pendBull.oAt  := deep ? blk.oAt : sw.upAt
                         else
                             pendBull.lvl     := math.min(pendBull.lvl, lvl)
                             pendBull.touches := math.max(pendBull.touches, tch)
@@ -421,6 +616,10 @@ if array.size(blocks) > 0
                         if deep
                             pendBull.deep     := true
                             pendBull.legStart := blk.legStart
+                            pendBull.oP   := blk.oP
+                            pendBull.oBar := blk.oBar
+                            pendBull.oAt  := blk.oAt
+                        flipSwing(sw, -1, lvl)
                     else
                         if na(pendBear.lvl)
                             pendBear.lvl     := lvl
@@ -430,6 +629,10 @@ if array.size(blocks) > 0
                             pendBear.extBar  := bar_index
                             pendBear.extBody := bodyHi
                             pendBear.miss    := 0
+                            pendBear.runBar  := bar_index
+                            pendBear.oP   := deep ? blk.oP : sw.dnP
+                            pendBear.oBar := deep ? blk.oBar : sw.dnBar
+                            pendBear.oAt  := deep ? blk.oAt : sw.dnAt
                         else
                             pendBear.lvl     := math.max(pendBear.lvl, lvl)
                             pendBear.touches := math.max(pendBear.touches, tch)
@@ -437,6 +640,10 @@ if array.size(blocks) > 0
                         if deep
                             pendBear.deep     := true
                             pendBear.legStart := blk.legStart
+                            pendBear.oP   := blk.oP
+                            pendBear.oBar := blk.oBar
+                            pendBear.oAt  := blk.oAt
+                        flipSwing(sw, 1, lvl)
                 killBlock(i, blk)
             else if bar_index > blk.born and not blk.tapped
                 bool against = againstBias(blk.isBull, biasDir)
@@ -517,6 +724,7 @@ if array.size(lowLvls) > 0
                 line.delete(lv.ln)
             retireBuildup(lv)
             array.remove(lowLvls, i)
+            flipSwing(sw, -1, lv.price)
         else if low < lv.price
             if na(pendBull.lvl)
                 pendBull.lvl     := lv.price
@@ -526,6 +734,10 @@ if array.size(lowLvls) > 0
                 pendBull.extBar  := bar_index
                 pendBull.extBody := bodyLo
                 pendBull.miss    := 0
+                pendBull.runBar  := bar_index
+                pendBull.oP   := sw.upP   // v11: the buyers' origin as of this run
+                pendBull.oBar := sw.upBar
+                pendBull.oAt  := sw.upAt
             else
                 pendBull.lvl     := math.min(pendBull.lvl, lv.price)
                 pendBull.touches := math.max(pendBull.touches, lv.touches)
@@ -534,6 +746,7 @@ if array.size(lowLvls) > 0
                 line.delete(lv.ln)
             retireBuildup(lv)
             array.remove(lowLvls, i)
+            flipSwing(sw, -1, lv.price)
 
 if array.size(highLvls) > 0
     for i = array.size(highLvls) - 1 to 0
@@ -543,6 +756,7 @@ if array.size(highLvls) > 0
                 line.delete(lv.ln)
             retireBuildup(lv)
             array.remove(highLvls, i)
+            flipSwing(sw, 1, lv.price)
         else if high > lv.price
             if na(pendBear.lvl)
                 pendBear.lvl     := lv.price
@@ -552,6 +766,10 @@ if array.size(highLvls) > 0
                 pendBear.extBar  := bar_index
                 pendBear.extBody := bodyHi
                 pendBear.miss    := 0
+                pendBear.runBar  := bar_index
+                pendBear.oP   := sw.dnP   // v11: the sellers' origin as of this run
+                pendBear.oBar := sw.dnBar
+                pendBear.oAt  := sw.dnAt
             else
                 pendBear.lvl     := math.max(pendBear.lvl, lv.price)
                 pendBear.touches := math.max(pendBear.touches, lv.touches)
@@ -560,6 +778,12 @@ if array.size(highLvls) > 0
                 line.delete(lv.ln)
             retireBuildup(lv)
             array.remove(highLvls, i)
+            flipSwing(sw, 1, lv.price)
+
+// v11: an origin born of this bar's flips may already be traded through
+[tk1b, tk1s] = markTaken(sw)
+originRunBull := originRunBull or tk1b
+originRunBear := originRunBear or tk1s
 
 // ------------------------------- 4. pending sweeps: reclaim or abandon -----
 if not na(pendBull.lvl)
@@ -575,14 +799,16 @@ if not na(pendBull.lvl)
         // LB, within structBars; a deepened run keeps its structure
         int legStart = not na(pendBull.legStart) ? pendBull.legStart :
              na(lastBullLbBorn) ? bar_index - structBars : math.max(lastBullLbBorn, bar_index - structBars)
-        bool leftIn = newBlock(true, pendBull.extBar, zTop, pendBull.ext, qual, pendBull.touches, pendBull.age, legStart)
-        bool ind  = not (qual and not leftIn) and liveBuild(false) // inducement: never flips the story (§3, E1)
-        if not ind and not leftIn
+        [gradeB, indB] = newBlock(true, pendBull.extBar, zTop, pendBull.ext, qual, pendBull.touches, pendBull.age, legStart,
+             pendBull.oP, pendBull.oBar, pendBull.oAt, na(pendBull.runBar) ? pendBull.extBar : pendBull.runBar)
+        // v11 (V8): an unrefined LB sets the bias too — the trap stands, the
+        // deeper x1 is the refined entry; invalid or inducement never flips
+        if qual and gradeB != "invalid" and not indB
             lastLbDir := 1
             if biasMode == "Auto" and biasDir != 1
                 biasDir := 1
                 applyBias(biasDir)
-        if not leftIn
+        if gradeB == "clean"
             lastBullLbBorn := bar_index
         pendBull := Pending.new()
     else
@@ -601,14 +827,14 @@ if not na(pendBear.lvl)
         bool qual = pendBear.touches >= minTouches or pendBear.age >= minLevelAge
         int legStart = not na(pendBear.legStart) ? pendBear.legStart :
              na(lastBearLbBorn) ? bar_index - structBars : math.max(lastBearLbBorn, bar_index - structBars)
-        bool leftIn = newBlock(false, pendBear.extBar, pendBear.ext, zBot, qual, pendBear.touches, pendBear.age, legStart)
-        bool ind  = not (qual and not leftIn) and liveBuild(true) // inducement: never flips the story (§3, E1)
-        if not ind and not leftIn
+        [gradeS, indS] = newBlock(false, pendBear.extBar, pendBear.ext, zBot, qual, pendBear.touches, pendBear.age, legStart,
+             pendBear.oP, pendBear.oBar, pendBear.oAt, na(pendBear.runBar) ? pendBear.extBar : pendBear.runBar)
+        if qual and gradeS != "invalid" and not indS
             lastLbDir := -1
             if biasMode == "Auto" and biasDir != -1
                 biasDir := -1
                 applyBias(biasDir)
-        if not leftIn
+        if gradeS == "clean"
             lastBearLbBorn := bar_index
         pendBear := Pending.new()
     else
@@ -687,7 +913,49 @@ if not na(ph)
         else
             registerLevel(highLvls, false, bar_index - pivotLen, ph)
 
+// ------------------------------------------ 6. trap pointers (v11, V8) -----
+// "grab this low, drag it over": the intact origin of the last inducing move
+// per side, drawn from its bar to now; gone once run or once it becomes an
+// alive same-side LB extreme (the box says it then)
+// an origin older than the structure window (structBars) has left the structure the grade reads — the pointer expires with it
+bool showUp = showPointers and not na(sw.upP) and na(sw.upTaken) and bar_index - sw.upBar <= structBars and not atAliveExtreme(true, sw.upP) and not insideAliveZone(true, sw.upP)
+bool showDn = showPointers and not na(sw.dnP) and na(sw.dnTaken) and bar_index - sw.dnBar <= structBars and not atAliveExtreme(false, sw.dnP) and not insideAliveZone(false, sw.dnP)
+if showUp
+    string txtUp = "trap ↓ " + str.tostring(sw.upP, format.mintick) + " · buyers induced @" + str.tostring(sw.upLvl, format.mintick)
+    if na(ptrBull)
+        ptrBull  := line.new(sw.upBar, sw.upP, bar_index, sw.upP, color = color.new(colBull, 25), width = 1, style = line.style_dashed)
+        ptrBullL := label.new(bar_index, sw.upP, txtUp, style = label.style_label_left, color = color.new(colBull, 70),
+             textcolor = color.white, size = size.tiny)
+    else
+        line.set_xy1(ptrBull, sw.upBar, sw.upP)
+        line.set_xy2(ptrBull, bar_index, sw.upP)
+        label.set_xy(ptrBullL, bar_index, sw.upP)
+        label.set_text(ptrBullL, txtUp)
+else if not na(ptrBull)
+    line.delete(ptrBull)
+    label.delete(ptrBullL)
+    ptrBull  := na
+    ptrBullL := na
+if showDn
+    string txtDn = "trap ↑ " + str.tostring(sw.dnP, format.mintick) + " · sellers induced @" + str.tostring(sw.dnLvl, format.mintick)
+    if na(ptrBear)
+        ptrBear  := line.new(sw.dnBar, sw.dnP, bar_index, sw.dnP, color = color.new(colBear, 25), width = 1, style = line.style_dashed)
+        ptrBearL := label.new(bar_index, sw.dnP, txtDn, style = label.style_label_left, color = color.new(colBear, 70),
+             textcolor = color.white, size = size.tiny)
+    else
+        line.set_xy1(ptrBear, sw.dnBar, sw.dnP)
+        line.set_xy2(ptrBear, bar_index, sw.dnP)
+        label.set_xy(ptrBearL, bar_index, sw.dnP)
+        label.set_text(ptrBearL, txtDn)
+else if not na(ptrBear)
+    line.delete(ptrBear)
+    label.delete(ptrBearL)
+    ptrBear  := na
+    ptrBearL := na
+
 // ---------------------------------------------------------------- alerts ---
+alertcondition(originRunBull, "V8 — buyers' origin run (trap for longs)", "The low the buyers' move came from was run — the induced buyers are trapped; a reclaim there is the long")
+alertcondition(originRunBear, "V8 — sellers' origin run (trap for shorts)", "The high the sellers' move came from was run — the induced sellers are trapped; a reclaim there is the short")
 alertcondition(tapBullQ, "Tap — qualified bullish LB", "Price tapped a QUALIFIED bullish liquidity block")
 alertcondition(tapBearQ, "Tap — qualified bearish LB", "Price tapped a QUALIFIED bearish liquidity block")
 alertcondition(tapBull or tapBear, "Tap — any LB", "Price tapped a liquidity block")
