@@ -82,8 +82,64 @@ All four below were **built on 2026-09-11** (`src/core/marco_grid.js`, wired int
 `docs/MARCO.md` §3.1 and §6). Two things were learned in the build and are
 recorded under *Rule candidates* → pocket flag.
 
-- **Intraday brief format** (user, 2026-09-10; built — `renderDailyMarkdown`,
-  `marco daily --compact`, `briefs/daily/<date>.md`). Per instrument, in this order:
+- **Intraday brief format v2 — `entry when` grammar** (user, 2026-09-22, after four
+  losing trades of which two were entered while the 4h was PENDING; worked example
+  `briefs/daily/2026-09-22.v2.md`; built the same day — `renderDailyMarkdown`, the
+  `journal-weekly-plan` / `journal-midweek-addendum` templates). Supersedes the
+  2026-09-10 layout below. The trader's words: "less noise, more concentrated information
+  on the scenarios on the table; `entry when` instead of `no-entry` — a negative
+  connotation reads harder, during the live market there is no time to untangle it".
+  Per instrument, five blocks, one screen:
+  1. **Bias** — header `SYM · LONG/SHORT · price · inval <rule level>`; one line W/D
+     mode, regime, week targets, global target (≈Nw);
+  2. **Now** — one state word **WAITING / PENDING / VALID / DONE**, the event that made
+     it (TF, level, time), the trap pointer, and *the exact event that changes the state*
+     (which TF must close where, when the bars close). Replaces "since the last check"
+     and "what we wait for";
+  3. **Grid** — the H4 edges and rungs, current levels only (unchanged), plus *beyond the
+     grid*;
+  4. **Scenarios** — numbered by priority, **named by the event** (RECLAIM, DEEPER RUN,
+     BREAKDOWN, TOP, BUILD-UP RUN, AGGRESSIVE TAP), never lettered. Each one is
+     `entry when:` (a positive condition: TF + level + time window, the 1h condition
+     folded in) → `entry · stop · $ · RR · T1 · T2 · BE` → `→ next:` (the scenario it
+     turns into when the condition fails). A grid break is `state when:`, not a trade.
+     **No "don't" lists**: what is allowed is listed exhaustively and one closing line
+     says *everything else = wait*;
+  5. **Windows** — the sessions an entry is open in, as local time ranges ("London
+     10:00–18:30 · NY 16:30–23:00"; the gate 17:00–21:00), never "no entry at 16:45".
+     `[CALIBRATION, trader 2026-09-22]` **Europe + US sessions, not NY only**: Marco
+     trades NY (V5) but keeps alerts and reads a level hit at another hour with the
+     full picture; the trader wants the system exercised, so London and NY are both
+     windows and a level hit outside them is an alert to read with the grid, not an
+     entry by itself. A London event still leaves the entry to the LB it prints, on
+     the same TF conditions — the session is a window, not a signal.
+  The journal `setup_description` uses the same grammar: header · `entry when:` ·
+  K-lines · `BE:` · `deeper run:` · `breakdown:` · `aggressive tap … skip` · `global:` ·
+  `replaces:`. The labels `no-entry:` and `timing:` are retired into `entry when:`.
+  Refinements come pointwise in use (trader, 2026-09-22).
+  **v2.1 (trader, 2026-09-23, built the same day):** a summary table first (state + the
+  main scenario per instrument); the sessions, the gate and the next 4h closes stated once
+  at the top; scenarios a trader can act on today first — within `3 × 4h ATR` of the price
+  `[CALIBRATION]` and inside the $ cap — with "(main)" on the first of them, the rest
+  marked "not today"; an over-cap zone headlines its refined rung; prices on the contract
+  tick (`contracts.json`), $ risk from the rounded stop; wall-clock bar times instead of
+  "N bars ago"; the 1h reduced to one line (mode, alignment, frame); TOP says
+  "partial" when the counter-trend window is closed; an `Alerts:` line per instrument.
+  Open: the language of the engine render (EN now, the hand brief is UA).
+- **Scenario horizon — levels from 4h/D, stops from 15m/1h** (trader, 2026-09-23 09:40,
+  on the first v2.1 brief: "the grid is too narrow — the position horizon is a day or two;
+  4351.9 / 4346.2 → 4384.4 is a couple of hours, not a couple of days"; built the same
+  day in `dailyScenarios`, test *horizon*). A scenario is a 4h/1h level or zone — the
+  H4 edge, the nearest bias-side H4 rung, a 4h/1h trigger; its targets are 4h/D
+  liquidity. 15m/5m structure only refines the stop inside that level (the V6
+  refinement) and gives partials and alerts; it is never the scenario. An H4 anchor
+  over the $ cap does not make a sweep scenario unactionable — the stop comes from the
+  1h/15m LB the reclaim leaves. Open for the weekend review: the `BE:` line on a 15m
+  level (22.09 MGC 4386.4) moves the stop into the zone the day-two scenario expects to
+  be run — BE on the first 4h target-side level instead?
+- **Intraday brief format v1** (user, 2026-09-10; built — `renderDailyMarkdown`,
+  `marco daily --compact`, `briefs/daily/<date>.md`; **superseded by v2 above on
+  2026-09-22** — kept for the history of the sections). Per instrument, in this order:
   1. global reminder — W/D bias, big targets (≈Nw), invalidation, one line;
   2. H4 grid — **current levels only** (user, 2026-09-11, after the first rendered
      brief): the lower edge, the upper edge, and the ladder between them — one line
@@ -158,6 +214,41 @@ recorded under *Rule candidates* → pocket flag.
   (see the case for the check).
 
 ## Rule candidates
+
+- **MTF leg layer (D + 4h)** `[CALIBRATION, user-raised, 2026-09-23 — case U2; not built]`.
+  The stack reads the global W story and the *latest event* per timeframe; the
+  divergence rule (MARCO.md §3.1) turns "D continuation against a live W trap" into
+  `pullback` = "enter with the weekly once the daily's run is in". Nothing reads the
+  **leg** itself — how far the pullback runs and where it ends — so every fresh
+  with-bias 4h LB inside a counter leg reads as the trap. 6E W38–W39: W buy_story
+  (LB 1.1404–1.1408) while D/4h fell from 1.16965 (9 Sep) for two weeks; the with-bias
+  4h LBs 1.1495–1.14965 (Fri 18), 1.1473–1.1495 and 1.1468–1.1473 (Tue 22) all died, the
+  counter LBs 1.15935–1.15975, 1.1530–1.15355, 1.1518 all held; the trader's three
+  longs of 22 Sep sat in that leg. Proposal:
+  1. **MTF state from liquidity only** — which side's LBs hold and which die on D/4h
+     since the last HTF-side event: **WITH** (with-HTF LBs hold, the leg extends toward
+     the HTF target) · **AGAINST** (with-HTF LBs born mid-leg die, counter LBs hold) ·
+     **TURNING** (the leg reached the HTF zone and printed a with-HTF LB that held).
+     The **turn** = the run of the leg's last counter extreme (the build-up of lower
+     highs in a long HTF) with a 1h/4h close beyond.
+  2. **Alignment rule.** WITH → the current stack unchanged. AGAINST → with-HTF entries
+     only (a) at the HTF zone the pullback is heading to (the D/W LB, the invalidation
+     area) or (b) on the retest after the turn; a with-HTF 4h LB born mid-leg is
+     inducement of the leg — V1's "LBs against the story are marked, never entered",
+     applied one layer down. TURNING → with-HTF entries at the zone, the turn is the
+     confirmation.
+  3. **MTF-continuation trades against the HTF** (U2's arrows): in a confirmed AGAINST
+     leg, the run of a build-up / origin inside the leg + reclaim → entry on the retest
+     of the LB it leaves (the V8 trap, mirrored), nearest leg liquidity only, flat before
+     the HTF zone. Extends the Mon–Tue counter-trend allowance to any day, but only
+     inside a confirmed AGAINST leg. **No [SOURCE]**: Marco does not enter counter-bias
+     LBs (V1); V7's intraday/intraweek layering and our Mon–Tue allowance are the
+     precedent. Needs strategy rev 4 (weekend 26–27 Sep, with the two-session windows)
+     and a setup type (`mtf-continuation`).
+  4. **Engine**: a leg read on D/240 (LB births and deaths per side since the last
+     HTF-side event, the last counter extreme, the HTF zone ahead) → an `MTF:` line in
+     the brief's Bias block and the scenario ranking keyed on it. Piloted by hand in
+     `briefs/daily/2026-09-23.manual.md`.
 
 - **Ladder split** (from U1; **built 2026-09-11** — `storyRead` marks counter-side
   zones `pullback_origin` / `extreme`, the reads print "(LB, pullback origin)" vs
@@ -671,3 +762,36 @@ spot ran it by a pip — the basis decides a V8 trap at 5m granularity; Principl
 run, not a touch) says "not yet", which is what the engine said. (3) Elijah's 5m
 pink boxes and our `invalid` (pocket over the x2 1.15135) coincide — the E1/V8 grade
 matches his hand on the bull side too.
+
+### U2 — user's 6E 30m markup, 2026-09-23 09:06 Athens (price 1.14655, weekly LONG, inval 1.1404)
+
+**What the user drew.** Two arrows at bear LBs above price — "potentially very good
+entries, even though against the HTF … a liquidity block, a build-up, the build-up gets
+run and price goes the other way" — and three losing longs of 22 Sep, "all three against
+the MTF trend, as is already visible". Asked for the MTF layer: how to read it, when it
+agrees with the HTF.
+
+**Bars (1h feed aggregated, Athens).**
+- Leg: D highs 1.16965 (9 Sep) → 1.1683 → 1.1658 → 1.15975 (16) → 1.15385 (17) →
+  1.15355 (21) → 1.1518 (22) → 1.1494 (23); D lows 1.16625 → … → 1.14965 (17) →
+  1.1468 (22) → 1.1461 (23 05–09).
+- Arrow 1 — Wed 16 Sep, 4h 09–13: high 1.15975 runs the 15 Sep 17:00 high 1.15935 and
+  closes back → bear LB 1.15935–1.15975 (thin); next day 1.14965 (FOMC).
+- Arrow 2 — Mon 21 Sep, 4h 13–17 (the 06–10 ET gate candle): high 1.15355 runs the equal
+  highs 1.15300 / 1.15315 of 18 Sep — 1.15315 is the short-side trap pointer case D2 named —
+  and closes back → bear LB 1.1530–1.15355; 1.1461 by
+  23 Sep 09:00 (−89 pips).
+- With-bias 4h LBs inside the leg: 1.1495–1.14965 (Fri 18) killed Tue 22 09–13;
+  1.1473–1.1495 killed Tue; 1.1468–1.1473 killed Wed 23 05–09 → PENDING 1.1468.
+
+**Our read at the time.** Weekly and daily briefs called 6E "aligned, weakest", the 4h
+LB 1.1495 the trap, and every bear LB above `false` (pullback origin). The 22 Sep brief's
+counter-trend short (Tuesday allowance) asked for **the run of 1.15385 x2**; the trap had
+already happened on Monday at 1.1530–1.15315, 3 pips lower — requiring the structural
+high when the build-up was run is pattern trading (b) by our own V8 rule.
+
+**Verdict.** Two gaps, one layer: (1) no leg state, so mid-leg with-bias LBs read as
+traps; (2) the counter-trend trigger took the structural high instead of the build-up
+that was actually run. Rule candidate *MTF leg layer* above; (2) is already the V8 rule —
+the counter-trend rows must apply the origin / build-up test the same way the with-bias
+rows do.

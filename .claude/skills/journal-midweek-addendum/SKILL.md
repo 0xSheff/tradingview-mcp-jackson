@@ -93,9 +93,11 @@ T1 (long → below, short → above).
 ## Step 5 — Write
 
 `plan_add_addendum(plan_id, items=[...])`. `setup_description` uses the compact line-list
-format from [[journal-weekly-plan]] — K-indexed rungs (two at most, close together; rungs far
-apart are separate items), entry model on every line, a `BE:` line, no closing sentence. Put
-the primary rung's RR in `planned_r`.
+format from [[journal-weekly-plan]] — an `entry when:` first bullet (the positive condition:
+TF + level + time window; never a `no-entry:` or `timing:` line, trader 2026-09-22), K-indexed
+rungs (two at most, close together; rungs far apart are separate items), entry model on every
+line, a `BE:` line, `deeper run:` / `breakdown:` as the state transitions, no closing sentence.
+Put the primary rung's RR in `planned_r`.
 
 Targets get re-set when the locked ones have been taken; say so on the `replaces:` bullet, so
 the retro can tell the two apart.

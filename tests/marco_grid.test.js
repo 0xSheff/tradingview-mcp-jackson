@@ -199,7 +199,7 @@ test("storyRead: counter-side LB zones on the path are pullback origins; only th
   ]);
 });
 
-test("dailyScenarios + renderDailyMarkdown: A is inducement when pocketed, B is the run of the bias edge, C redraws, D names the continuation; the brief carries the approved sections", () => {
+test("dailyScenarios + renderDailyMarkdown: A is inducement when pocketed, B is the run of the bias edge, C redraws, D names the continuation; the v2 brief carries Bias · Now · Grid · Scenarios (entry when) · Windows", () => {
   const m = handMap();
   const grid = h4Grid(m, BARS, CFG, { bias: 1 });
   const triggers = triggerSetups(m, BARS, CFG, { direction: 1, max: 6 });
@@ -268,25 +268,34 @@ test("dailyScenarios + renderDailyMarkdown: A is inducement when pocketed, B is 
     ],
   });
   for (const needle of [
-    "## X · LONG · 100 · CONTRACT ROLLED",
+    "| X | LONG | VALID | edge run 98.2 (−1.8) → long · T1 101 |",
+    "**Today.** Sessions London 10:00–18:30 · NY 16:30–23:00 Europe/Athens",
+    "Gate: the 13:00–17:00 4h candle; from 17:00 to 21:00 with-bias entries once price trades beyond that candle's extreme (V5). Next 4h closes: 13:00 · 17:00 · 21:00. Counter-trend: closed today (Mon–Tue only).",
+    "## X · LONG · 100 · inval weekly close below 90 · CONTRACT ROLLED",
     "**Roll.**",
-    "**Global.** W long/aligned · target 110 (≈2.4w) · invalidation weekly close below 90.",
-    "**H4 grid**",
+    "**Bias.** W long/aligned · global target 110 (≈2.4w).",
+    "**Now: VALID (4h).** lows were run and reclaimed in the 05:00–09:00 bar (trap) · bull LB 98.6–99.4.",
+    "reclaim → bull LB 98.6–99.4 Q in the 05:00–09:00 bar",
+    "State changes on: a 4h trade below 98 without a reclaim → BREAKDOWN · the run of 102.4 → TOP.",
+    "**Grid 4h**",
     "▲ 102.4 counter edge — LB 101.8–102.4 [Q tapped]",
     "▼ 98.2 bias edge — pocket: LB 98.6–99.4 [Q] + 98.2 x1",
     "● 100 price",
-    "**Since the last check (H4):**",
-    "reclaim → bull LB 98.6–99.4 Q 1 bar ago",
-    "**Beyond the grid.** ▲ 104 x2 · ▼ 95 x3.",
-    "**What we wait for.** Bias-side run + reclaim: **YES** (4h)",
-    "- **A — inducement, not an entry.**",
-    "- **B — run of the bias-side edge (main).**",
-    "- **Grid break — redraw, not a trade.**",
-    "- **D — the counter edge 102.4.**",
-    "- Partials on the way: 100.8 x2.",
-    "**1h.** NOISE — highs were run… (60)",
-    "Local frame inside the grid: 99.7 x1 (ltf) ↔ 100.8 x2 (ltf)",
-    "**Timing.** NY session only; the 06:00–10:00 ET H4 candle (13:00–17:00 Europe/Athens, gate open until 21:00) sets the gate",
+    "  beyond: ▲ 104 x2 · ▼ 95 x3",
+    "**Scenarios** (actionable today first).",
+    "1. **EDGE RUN 98.2 → long (main).**",
+    "entry when: a 1h/15m close below 98.2 and the next close back above it → tap of the LB that bar leaves",
+    "2. **TAP 98.6–99.4 — inducement, skip.**",
+    "3. **BREAKDOWN → next edge.**",
+    "state when: a 4h trade below 98 without a reclaim → the edge 98.2 is consumed, the grid redraws to 95 x3",
+    "4. **TOP 102.4 → partial.**",
+    "partial on the long at 102.4 · counter-trend closed today (Mon–Tue only)",
+    "the build-up its false reaction leaves is the next long trigger",
+    "continuation when: a 1h close beyond 102.4 → the path to 104 x2 is open, stop to BE",
+    "Everything else = wait. Partials: 100.8 x2.",
+    "1h: NOISE · sell story against the bias — enter from a 15m reclaim structure · frame 99.7 x1 ↔ 100.8 x2.",
+    "Gate candle (2026-09-10): H 101.5 / L 99.2 — closed.",
+    "**Alerts:** 102.4 ↑ · 98.2 ↓.",
     "## TEST:SKIP — skipped",
   ]) {
     assert.ok(md.includes(needle), `brief is missing: ${needle}\n---\n${md}`);
@@ -369,7 +378,16 @@ test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run le
   });
   assert.ok(md.includes("▼ 99.6 bias edge — PENDING: run to 99.1 2 bars ago, reclaim not confirmed (2 of 3 bars left)"), md);
   assert.ok(md.includes("● 100 price — the run is unresolved (PENDING)"), md);
-  assert.ok(md.includes("Bias-side run + reclaim: **PENDING** (4h)"), md);
+  assert.ok(md.includes("**Now: PENDING (4h).** low 99.6 x2 run 2 bars ago to 99.1 — the reclaim decides."), md);
+  assert.ok(md.includes("State changes on: a 4h close back above 99.6 within 2 4h bar(s) → VALID (bull LB 99.1–99.6) · a miss, or a 4h trade below 99.1 → BREAKDOWN."), md);
+  assert.ok(md.includes("| T | LONG | PENDING | reclaim 99.6 within 2 4h bar(s) → tap 99.1–99.6 · stop 98.9 · $70 · T1 101 |"), md);
+  assert.ok(md.includes("1. **RECLAIM 99.6 → long (main).**"), md);
+  assert.ok(md.includes("entry when: a 1h/15m close back above 99.6 within 2 4h bar(s) → tap of the bull LB 99.1–99.6 it leaves"), md);
+  assert.ok(md.includes("entry 99.6 · stop 98.9 · T1 101 · RR 2 · $70"), md);
+  assert.ok(md.includes("2. **DEEPER RUN → the same trade, lower.**"), md);
+  assert.ok(md.includes("3. **BREAKDOWN → next edge.**"), md);
+  assert.ok(md.includes("state when: no close back above 99.6 within 2 4h bar(s), or a 4h trade below 99.1 → the grid redraws to 98.2 x1"), md);
+  assert.ok(!/no-entry|Not done:|NY session only/.test(md), md);
 });
 
 test("basisReference: the freshest stored basis wins — a daily older than the new weekly hands over to the weekly and its shift stays behind", () => {
@@ -502,6 +520,39 @@ test("dailyScenarios (E1): an unrefined A is the aggressive grade with its refin
     timeframes: ["240"],
     results: [{ symbol: "TEST:X1!", quote: { last: 100 }, weekly: { bias: "long", regime: "aligned" }, grid, scenarios: sc, timeframes: { 240: r240 } }],
   });
-  assert.ok(md.includes("bull LB 98.8–99.4 deepened to 98.6 2 bars ago — the same trap; the reclaim of 99.4 decides"), md);
-  assert.ok(md.includes("- **A — tap of the bias-side LB (aggressive).**"), md);
+  assert.ok(md.includes("bull LB 98.8–99.4 deepened to 98.6 in the 18:00–22:00 bar — the same trap; the reclaim of 99.4 decides"), md);
+  assert.ok(/\*\*TAP [0-9.–]+ \(aggressive\) → long\.\*\*/.test(md), md);
+  assert.ok(md.includes("refined entry when: its 1h/15m sweep closes back, same stop"), md);
+});
+
+// ---------------------------------------------------------------------------
+// Horizon (trader, 2026-09-23): positions are held a day or two — a scenario is
+// a 4h/1h level; 15m/5m structure only refines the stop inside it.
+
+test("dailyScenarios (horizon): a 5m trap next to price never becomes the scenario — the nearest H4 rung run does, and a 15m tap only refines the 4h zone", () => {
+  const edge = (e, extra = {}) => ({ edge: e, anchor: { kind: "level", price: e, touches: 3 }, cluster: [], weak: false, chained: false, floor_kind: "level", rungs: [], beyond: [], kill: e, ...extra });
+  const grid = {
+    price: 1000,
+    atr: 10,
+    inside: true,
+    lower: edge(900, { rungs: [{ kind: "level", price: 960, touches: 1 }], beyond: [{ kind: "level", price: 880, touches: 2 }], kill: 898 }),
+    upper: edge(1060, { rungs: [{ kind: "level", price: 1030, touches: 1 }], beyond: [{ kind: "level", price: 1100, touches: 2 }] }),
+    since: [],
+  };
+  const trig = (tf, kind, trigger, stop, zone = null) => ({ tf, kind, side: "long", trigger, stop, stop_anchor: zone, target: 1010, rr: 3, distance: Math.abs(1000 - trigger), confirmed: false, touches: 1, risk_usd: Math.abs(trigger - stop) * 2, over_cap: false, note: null });
+  const read = (triggers) => ({ story: { mode: "buy_story", direction: 1, fresh: true, read: "lows were run and reclaimed 2 bars ago (trap)", lb: { zone: [900, 940] } }, triggers, false_reactions: [], liquidity: { intact_above: [], intact_below: [] }, alignment: "aligned" });
+  const reads = {
+    240: read([{ ...trig("240", "tap", 940, 890, [900, 940]), over_cap: true }]),
+    15: read([trig("15", "tap", 925, 919, [920, 925])]),
+    5: read([trig("5", "sweep", 995, 992, [992, 994])]),
+  };
+  const sc = dailyScenarios({ grid, reads, bias: 1, cfg: CFG, tfs: ["240", "15", "5"], spec: { usd_per_point: 2 }, cap: 60 });
+  assert.equal(sc.B.trigger, 960);
+  assert.match(sc.B.label, /nearest H4 rung/);
+  assert.equal(sc.B.target, 1030);
+  assert.equal(sc.A.tf, "240");
+  assert.equal(sc.A.trigger, 940);
+  // the 4h tap is over the cap; the 15m tap inside the zone is its refinement, not a scenario
+  assert.equal(sc.A.refined.tf, "15");
+  assert.equal(sc.A.refined.trigger, 925);
 });

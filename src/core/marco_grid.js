@@ -491,10 +491,15 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
   // A — the nearest bias-side LB tap (240 first at equal distance). Over the
   // cap, the V6 refinement is a nested same-side LB inside the zone with a
   // stop the cap allows — name it instead of just saying "refine".
-  const taps = all("tap");
+  // Horizon (trader, 2026-09-23): positions are held a day or two, so a
+  // scenario is a 4h/1h level or zone; 15m/5m structure only refines the
+  // stop inside it (the V6 refinement below), it never is the scenario.
+  const htf = (t) => t.tf === "240" || t.tf === "60";
+  const tapsAll = all("tap");
+  const taps = tapsAll.filter(htf);
   const A = taps[0] ?? null;
   if (A?.over_cap && A.stop_anchor) {
-    const inside = taps.find(
+    const inside = tapsAll.find(
       (t) =>
         t !== A &&
         !t.over_cap &&
@@ -507,11 +512,12 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
   }
 
   // B — the run of the bias-side edge
-  const sweeps = all("sweep");
+  const sweepsAll = all("sweep");
+  const sweeps = sweepsAll.filter(htf);
   // E1: an unrefined tap's refined counterpart — the sweep of the left swing
   const refinedOf = (t) => {
     if (!t?.unrefined) return null;
-    const s = sweeps.find((x) => Math.abs(x.trigger - t.unrefined.floor) <= eqTol) ?? null;
+    const s = sweepsAll.find((x) => Math.abs(x.trigger - t.unrefined.floor) <= eqTol) ?? null;
     return s
       ? `the refined entry is its sweep: ${fmt(s.trigger)} → stop ${fmt(s.stop)} → T1 ${fmt(s.target)} (RR ${fmtRr(s.rr)})${money(s)}`
       : "the refined entry is its sweep with a 1h/15m reclaim structure and the same stop";
@@ -528,8 +534,33 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
       (t.rr ?? 0) >= minRr &&
       !t.over_cap,
   );
-  let B = atEdge ?? insideGrid ?? null;
-  let Bkind = atEdge ? "edge" : insideGrid ? "inside" : null;
+  // the nearest bias-side H4 rung between price and the edge: its run with a
+  // 1h/15m reclaim is the next 4h-level trap before the edge itself
+  const rung = (long ? [...biasEdge.rungs].sort((a, b) => b.price - a.price) : [...biasEdge.rungs].sort((a, b) => a.price - b.price)).find(
+    (it) => it.price != null && (long ? it.price < grid.price : it.price > grid.price),
+  ) ?? null;
+  const rungRun =
+    !atEdge && !insideGrid && rung && !pendBias
+      ? {
+          tf: "240",
+          kind: "sweep",
+          side,
+          trigger: rung.price,
+          distance: round(Math.abs(grid.price - rung.price)),
+          stop: null,
+          stop_anchor: null,
+          target: counterEdge.rungs[0]?.price ?? counterEdge.edge ?? null,
+          rr: null,
+          confirmed: (rung.touches ?? 1) >= (cfg.min_touches ?? 2),
+          touches: rung.touches ?? 1,
+          synthetic: true,
+          risk_usd: null,
+          over_cap: null,
+          note: null,
+        }
+      : null;
+  let B = atEdge ?? insideGrid ?? rungRun ?? null;
+  let Bkind = atEdge ? "edge" : insideGrid ? "inside" : rungRun ? "rung" : null;
   if (!B && biasEdge.edge !== null && !pendBias) {
     // the edge is an LB extreme (or a level no sweep trigger reached): the
     // run of the edge itself, with the stop under the next LB beyond it
@@ -654,7 +685,7 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
     B: pendB ?? (B
       ? {
           ...B,
-          label: Bkind === "edge" ? "B — run of the bias-side edge (main)" : "B — the next LTF trap inside the grid",
+          label: Bkind === "edge" ? "B — run of the bias-side edge (main)" : Bkind === "rung" ? "B — run of the nearest H4 rung" : "B — the next trap inside the grid",
           text:
             `${Bkind === "edge" ? "run" : "sweep"} of ${fmt(B.trigger)}${B.confirmed ? ` (x${B.touches})` : ""}${B.tf !== "240" ? ` (${tfLabel(B.tf)})` : ""} with a 1h/15m reclaim structure` +
             (B.stop == null
@@ -688,6 +719,7 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
       reads["60"] && !reads["60"].error
         ? {
             story: reads["60"].story.read,
+            mode: reads["60"].story.mode ?? null,
             alignment: reads["60"].alignment,
             noise_note: reads["60"].noise_note ?? null,
             lb: reads["60"].story.lb,
@@ -776,46 +808,128 @@ function sinceLines(grid) {
   });
 }
 
-function hourIn(tz, day, hourEt, exchangeTz) {
-  // the wall-clock hour `hourEt` of `day` in the exchange zone, rendered in `tz`
+function hourIn(tz, day, hourEt, exchangeTz, minute = 0) {
+  // the wall-clock time `hourEt:minute` of `day` in the exchange zone, rendered in `tz`
   try {
     const probe = new Date(`${day}T12:00:00Z`);
     const partsIn = (d, zone) => {
       const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: zone, hour12: false, hour: "2-digit", minute: "2-digit", day: "2-digit" }).formatToParts(d).map((x) => [x.type, x.value]));
-      return { hour: Number(p.hour === "24" ? 0 : p.hour), day: Number(p.day) };
+      return { hour: Number(p.hour === "24" ? 0 : p.hour), minute: Number(p.minute), day: Number(p.day) };
     };
     const exch = partsIn(probe, exchangeTz);
-    const target = new Date(probe.getTime() + (hourEt - exch.hour) * 3600000);
+    const target = new Date(probe.getTime() + (hourEt - exch.hour) * 3600000 + minute * 60000);
     const loc = partsIn(target, tz);
-    return `${String(loc.hour).padStart(2, "0")}:00`;
+    return `${String(loc.hour).padStart(2, "0")}:${String(loc.minute).padStart(2, "0")}`;
   } catch {
     return null;
   }
 }
 
-/** The approved intraday brief (docs/MARCO-CASES.md → Approved changes). */
+/**
+ * The approved intraday brief, v2.1 (docs/MARCO-CASES.md → Approved changes,
+ * 2026-09-22, refined 2026-09-23): a summary table first, then per instrument
+ * Bias · Now · Grid · Scenarios · Alerts. Every scenario is an `entry when` — a
+ * positive condition (TF + level + clock time) — followed by the numbers and
+ * `→ next`. Scenarios a trader can act on today (within reach of the price and
+ * inside the $ cap) come first; the rest follow, marked. Prices are on the
+ * contract's tick, times are wall-clock in the trader's zone, the sessions and
+ * the gate are stated once at the top.
+ */
+const H_MS = 3600000;
+const REACH_ATR = 3; // [CALIBRATION] "reachable today" = within 3 × the 4h ATR of the price
+
+function briefClock(daily) {
+  const now = Date.parse(daily.generated_at);
+  if (!Number.isFinite(now)) return null;
+  const exch = daily.exchange_tz ?? "America/New_York";
+  const tz = daily.local_tz ?? exch;
+  try {
+    const etHour = (ms) =>
+      Number(new Intl.DateTimeFormat("en-US", { timeZone: exch, hour12: false, hour: "2-digit" }).formatToParts(new Date(ms)).find((p) => p.type === "hour").value) % 24;
+    // CME 4h bars open at 18/22/02/06/10/14 ET
+    let open = Math.floor(now / H_MS) * H_MS;
+    for (let i = 0; i < 8 && (etHour(open) + 6) % 4 !== 0; i++) open -= H_MS;
+    const hm = (ms) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour12: false, hour: "2-digit", minute: "2-digit" }).format(new Date(ms)).replace(/^24/, "00");
+    return {
+      bar: (k) => `${hm(open - k * 4 * H_MS)}–${hm(open - (k - 1) * 4 * H_MS)}`,
+      closes: (n) => Array.from({ length: Math.max(0, n) }, (_, i) => hm(open + (i + 1) * 4 * H_MS)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function tickFns(tick) {
+  if (!tick || !Number.isFinite(tick)) return { near: (n) => n, down: (n) => n, up: (n) => n };
+  const dec = (String(tick).split(".")[1] ?? "").length;
+  const q = (n, f) => (n === null || n === undefined || !Number.isFinite(n) ? n : Number((f(n) * tick).toFixed(dec)));
+  return {
+    near: (n) => q(n, (x) => Math.round(x / tick)),
+    down: (n) => q(n, (x) => Math.floor(x / tick + 1e-9)),
+    up: (n) => q(n, (x) => Math.ceil(x / tick - 1e-9)),
+  };
+}
+
+const MODE_WORD = {
+  buy_story: "buy story",
+  sell_story: "sell story",
+  up_continuation: "continuation up",
+  down_continuation: "continuation down",
+  no_mans_land: "no-man's land",
+};
+
 export function renderDailyMarkdown(daily) {
-  const out = [
-    `# Marco daily brief — ${daily.trading_day} (${daily.weekday})`,
-    "",
-    `Generated ${daily.generated_at}. Direction from ${daily.direction_from}; structure live on ${daily.timeframes?.map(tfLabel).join("/") ?? "4h/1h/15m/5m"}; risk at size 1, cap $${daily.risk_cap}. Format: docs/MARCO-CASES.md → Approved changes; thresholds [CALIBRATION] (docs/MARCO.md §6).`,
-    `Counter-trend: ${daily.counter_trend_note}.`,
-    "",
-  ];
   const tz = daily.local_tz ?? null;
   const exch = daily.exchange_tz ?? "America/New_York";
+  const clock = briefClock(daily);
+  const ctOpen = !/^closed/i.test(daily.counter_trend_note ?? "");
+  const at = (h, zone, m = 0) => (tz ? hourIn(tz, daily.trading_day, h, zone, m) : null);
+  const barTxt = (k) => (clock ? `in the ${clock.bar(k)} bar` : k === 0 ? "this bar" : k === 1 ? "1 bar ago" : `${k} bars ago`);
+  const reClock = (txt) =>
+    clock && txt ? txt.replace(/\b(this bar|1 bar ago|(\d+) bars ago)\b/g, (m, _a, n) => barTxt(m === "this bar" ? 0 : m === "1 bar ago" ? 1 : Number(n))) : txt;
+  const closesTxt = (n) => (clock ? `at ${clock.closes(n).join(" or ")}` : `within ${n} 4h bar(s)`);
+  const byTxt = (n) => (clock && n > 0 ? `by ${clock.closes(n).at(-1)}` : `within ${n} 4h bar(s)`);
+
+  const summary = [];
+  const blocks = [];
   for (const r of daily.results) {
     if (r.skipped) {
-      out.push(`## ${r.symbol} — skipped: ${r.skipped}`, "");
+      blocks.push(`## ${r.symbol} — skipped: ${r.skipped}`, "");
       continue;
     }
     if (r.error) {
-      out.push(`## ${r.symbol} — ERROR: ${r.error}`, "");
+      blocks.push(`## ${r.symbol} — ERROR: ${r.error}`, "");
       continue;
     }
+    const out = [];
     const long = r.weekly.bias === "long";
     const w = r.weekly;
-    out.push(`## ${r.contract?.journal ?? r.symbol} · ${(w.bias ?? "none").toUpperCase()} · ${fmt(r.quote?.last)}${r.roll?.status === "rolled" ? " · CONTRACT ROLLED" : ""}`);
+    const side = long ? "long" : "short";
+    const above = long ? "above" : "below";
+    const below = long ? "below" : "above";
+    const lowWord = long ? "low" : "high";
+    const lbWord = long ? "bull" : "bear";
+    const cLbWord = long ? "bear" : "bull";
+    const T = tickFns(r.contract?.tick ?? null);
+    const stopPx = (n) => (long ? T.down(n) : T.up(n));
+    const name = r.contract?.journal ?? r.symbol;
+    const g = r.grid;
+    const sc = r.scenarios;
+    const price = r.quote?.last ?? g?.price ?? null;
+    const atr = g?.atr ?? null;
+    const dist = (p) => (p == null || price == null ? "" : `${p >= price ? "+" : "−"}${fmt(T.near(Math.abs(p - price)))}`);
+    const reachable = (p) => (p == null || price == null || !atr ? true : Math.abs(p - price) / atr <= REACH_ATR);
+    const farTxt = (p) => `not today: ${dist(p)} ≈ ${Math.round(Math.abs(p - price) / atr)}× the 4h ATR`;
+    const biasEdge = g ? (long ? g.lower : g.upper) : null;
+    const counterEdge = g ? (long ? g.upper : g.lower) : null;
+    const pend = biasEdge?.pending ?? null;
+    const kill = biasEdge?.kill != null ? stopPx(biasEdge.kill) : null;
+    const upp = r.contract?.usd_per_point ?? null;
+    const usd = (entry, stop, fb) => (upp && entry != null && stop != null ? Math.round(Math.abs(entry - stop) * upp) : fb != null ? Math.round(fb) : null);
+    const usdTxt = (n) => (n == null ? "" : ` · $${n}${daily.risk_cap != null && n > daily.risk_cap ? " ⚠ over cap" : ""}`);
+
+    const inval = w.invalidation ? ` · inval ${w.invalidation.rule} ${fmt(w.invalidation.level)}` : "";
+    out.push(`## ${name} · ${(w.bias ?? "none").toUpperCase()} · ${fmt(r.quote?.last)}${inval}${r.roll?.status === "rolled" ? " · CONTRACT ROLLED" : ""}`);
     if (r.roll?.status === "rolled") {
       out.push(
         `**Roll.** ${r.roll.note} Every level of the weekly layer below is shifted by ${r.roll.offset > 0 ? "+" : ""}${fmt(r.roll.offset)}; redraw your lines and the journal plan by the same amount.`,
@@ -823,50 +937,225 @@ export function renderDailyMarkdown(daily) {
     } else if (r.roll?.status === "inconsistent") {
       out.push(`**Data warning.** ${r.roll.note}`);
     }
-    out.push(
-      `**Global.** W ${w.bias}/${w.regime}${w.stale ? " (stale)" : ""} · target ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""} · invalidation ${w.invalidation ? `${w.invalidation.rule} ${fmt(w.invalidation.level)}` : "—"}.`,
-    );
-    const g = r.grid;
-    if (g) {
-      out.push("", "**H4 grid** (levels are for alerts, not orders):");
-      out.push(...gridLines(g, long));
-      out.push("", "**Since the last check (H4):**", ...sinceLines(g));
-      const beyond = (s) => (s.beyond.length ? s.beyond.map(itemTxt).join(" → ") : "nothing in view");
-      out.push("", `**Beyond the grid.** ▲ ${beyond(g.upper)} · ▼ ${beyond(g.lower)}.`);
-    }
-    const sc = r.scenarios;
+    out.push(`**Bias.** W ${w.bias}/${w.regime}${w.stale ? " (stale)" : ""} · global target ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""}.`);
+
+    // ---- Now: one state word, the event behind it (clock time), what changes it
+    let state = "—";
     if (sc) {
-      out.push(
-        "",
-        `**What we wait for.** Bias-side run + reclaim: **${sc.wait_for.answer.toUpperCase()}**${sc.wait_for.timeframe ? ` (${tfLabel(sc.wait_for.timeframe)})` : ""}${sc.wait_for.fresh === false ? " — stale" : ""}. ${sc.wait_for.read ?? ""}`,
-      );
-      if (sc.wait_for.pointer) {
-        const p = sc.wait_for.pointer;
+      const wf = sc.wait_for;
+      state = wf.answer === "pending" ? "PENDING" : wf.answer === "yes" ? "VALID" : "WAITING";
+      const now = [];
+      if (pend) {
+        now.push(
+          `**Now: PENDING (4h).** ${lowWord} ${fmt(pend.level)}${pend.touches > 1 ? ` x${pend.touches}` : ""} run ${barTxt(pend.bars_since_run)} to ${fmt(pend.ext)} — the reclaim decides.`,
+        );
+      } else {
+        const tf = wf.timeframe ?? "240";
+        const ev = (wf.read ?? "no bias-side event on the 4h or 1h").split(" — ")[0];
+        const lb = wf.answer === "yes" ? r.timeframes?.[tf]?.story?.lb?.zone : null;
+        now.push(`**Now: ${state}${wf.timeframe ? ` (${tfLabel(wf.timeframe)})` : ""}${wf.fresh === false ? ", stale" : ""}.** ${tf === "240" ? reClock(ev) : ev}${lb ? ` · ${lbWord} LB ${zoneTxt(lb)}` : ""}.`);
+      }
+      if (wf.pointer) {
+        const p = wf.pointer;
+        now.push(`Trap pointer (${tfLabel(p.timeframe)}): the ${p.induced.who} induced by the run of ${fmt(p.induced.level)} have their stops ${long ? "under" : "over"} **${fmt(p.price)}** — its run is the trap.`);
+      }
+      if (g?.since?.length) now.push(`Since the last check: ${sinceLines(g).slice(-4).map((l) => reClock(l.trim())).join(" · ")}.`);
+      if (counterEdge?.pending) {
+        const pc = counterEdge.pending;
+        now.push(`Counter edge ${fmt(pc.level)} PENDING: run ${barTxt(pc.bars_since_run)} to ${fmt(pc.ext)} — a 1h close back = pullback origin, a miss = continuation.`);
+      }
+      const changes = pend
+        ? `a 4h close back ${above} ${fmt(pend.level)} ${closesTxt(pend.bars_left)} → VALID (${lbWord} LB ${zoneTxt(pend.lb_if_reclaimed)}) · a miss, or a 4h trade ${below} ${fmt(kill)} → BREAKDOWN`
+        : wf.answer === "yes"
+          ? `a 4h trade ${below} ${fmt(kill)} without a reclaim → BREAKDOWN · the run of ${fmt(counterEdge?.edge)} → TOP`
+          : `the run of ${fmt(biasEdge?.edge)} with a 1h/15m close back → VALID · a 4h trade ${below} ${fmt(kill)} without a reclaim → BREAKDOWN`;
+      now.push(`State changes on: ${changes}.`);
+      out.push(now.join("\n"));
+    }
+
+    // ---- Grid
+    if (g) {
+      out.push("", "**Grid 4h** (levels are for alerts, not orders):");
+      out.push(...gridLines(g, long).map(reClock));
+      const beyond = (s) => (s.beyond.length ? s.beyond.map(itemTxt).join(" → ") : "nothing in view");
+      out.push(`  beyond: ▲ ${beyond(g.upper)} · ▼ ${beyond(g.lower)}`);
+    }
+
+    // ---- Scenarios
+    let mainShort = null;
+    const alerts = [];
+    const addAlert = (p) => {
+      if (p == null || price == null || !Number.isFinite(p)) return;
+      const v = T.near(p);
+      if (!alerts.some((a) => a === v)) alerts.push(v);
+    };
+    if (sc) {
+      const nextEdge = sc.C?.next_edge ? itemTxt(sc.C.next_edge) : "no level in view";
+      const edgeLvl = (it) => (!it ? null : it.kind === "lb" ? it.zone[long ? 1 : 0] : it.price);
+      const opp = []; // entry scenarios, ranked
+      const tail = []; // structure: deeper run, breakdown, top
+      if (pend) {
+        const A = sc.A;
+        const stop = stopPx(A.stop);
+        const risk = usd(A.trigger, stop, A.risk_usd);
+        opp.push({
+          trigger: A.trigger,
+          actionable: !A.over_cap,
+          title: `RECLAIM ${fmt(A.trigger)} → ${side}`,
+          lines: [
+            `entry when: a 1h/15m close back ${above} ${fmt(A.trigger)} ${byTxt(pend.bars_left)} → tap of the ${lbWord} LB ${zoneTxt(A.stop_anchor)} it leaves (not on the run itself, V6)`,
+            `entry ${fmt(A.trigger)} · stop ${fmt(stop)} · T1 ${fmt(A.target)} · RR ${fmtRr(A.rr)}${usdTxt(risk)}${A.over_cap ? " — refine on a lower-TF LB or pass" : ""}`,
+            `→ next: a new ${lowWord} beyond ${fmt(pend.ext)} = DEEPER RUN · no close back = BREAKDOWN`,
+          ],
+          short: `reclaim ${fmt(A.trigger)} ${byTxt(pend.bars_left)} → tap ${zoneTxt(A.stop_anchor)} · stop ${fmt(stop)}${usdTxt(risk)} · T1 ${fmt(A.target)}`,
+        });
+        addAlert(A.trigger);
+        addAlert(pend.ext);
+        tail.push({
+          title: `DEEPER RUN → the same trade, ${long ? "lower" : "higher"}`,
+          lines: [`entry when: a new ${lowWord} beyond ${fmt(pend.ext)} first, then the same close back ${above} ${fmt(A.trigger)} · the stop follows the new ${lowWord} · recheck $ against the cap`],
+        });
+        tail.push({
+          title: "BREAKDOWN → next edge",
+          lines: [
+            `state when: no close back ${above} ${fmt(A.trigger)} ${byTxt(pend.bars_left)}, or a 4h trade ${below} ${fmt(kill)} → the grid redraws to ${nextEdge}`,
+            "entry when: the run of that edge closes back on the 4h/1h · stop beyond the run extreme",
+          ],
+        });
+        addAlert(edgeLvl(sc.C?.next_edge));
+      } else {
+        const B = sc.B;
+        const A = sc.A;
+        if (B && B.trigger != null) {
+          const edgeKind = /run of the bias-side edge/.test(B.label ?? "") ? "EDGE RUN" : /nearest H4 rung/.test(B.label ?? "") ? "4H LEVEL RUN" : B.tf === "60" ? "1H TRAP" : "4H TRAP";
+          const stop = B.stop == null ? null : stopPx(B.stop);
+          const risk = usd(B.trigger, stop, B.risk_usd);
+          const near = reachable(B.trigger);
+          opp.push({
+            trigger: B.trigger,
+            actionable: near,
+            title: `${edgeKind} ${fmt(B.trigger)}${B.confirmed ? ` x${B.touches}` : ""}${B.tf && B.tf !== "240" ? ` (${tfLabel(B.tf)})` : ""} → ${side}`,
+            lines: [
+              `entry when: a 1h/15m close ${below} ${fmt(B.trigger)} and the next close back ${above} it → tap of the LB that bar leaves`,
+              stop == null
+                ? `stop = the 1h/15m LB left by the reclaim · T1 ${fmt(B.target)} · ${dist(B.trigger)} from price`
+                : `stop ${fmt(stop)} (${long ? "under" : "over"} LB ${zoneTxt(B.stop_anchor)}) · T1 ${fmt(B.target)} · RR ${fmtRr(B.rr)}${usdTxt(risk)} · ${dist(B.trigger)} from price${B.over_cap ? " — the H4 anchor is over the cap: take the stop from the 1h/15m LB left by the reclaim" : ""}`,
+              ...(near ? [] : [farTxt(B.trigger)]),
+              `→ next: no reclaim within a few bars and a 4h trade ${below} ${fmt(kill)} = BREAKDOWN`,
+            ],
+            short: `${edgeKind.toLowerCase()} ${fmt(B.trigger)} (${dist(B.trigger)}) → ${side}${stop != null ? ` · stop ${fmt(stop)}` : ""}${usdTxt(risk)} · T1 ${fmt(B.target)}`,
+          });
+          addAlert(B.trigger);
+        }
+        if (A && A.trigger != null) {
+          const ext = A.stop_anchor ? A.stop_anchor[long ? 0 : 1] : null;
+          if (A.pocket) {
+            opp.push({
+              trigger: A.trigger,
+              actionable: false,
+              title: `TAP ${zoneTxt(A.stop_anchor)}${A.tf !== "240" ? ` (${tfLabel(A.tf)})` : ""} — inducement, skip`,
+              lines: [`a sweep of ${fmt(ext)} that closes back is another respect of ${fmt(A.pocket.floor)}; its ${long ? "buyers" : "sellers"} fuel the run of ${fmt(A.pocket.floor)} — that run is the entry`],
+            });
+          } else {
+            // the rung a trader can place an order on comes first
+            const use = A.over_cap && A.refined ? A.refined : A;
+            const near = reachable(use.trigger);
+            const stop = stopPx(use.stop);
+            const risk = usd(use.trigger, stop, use.risk_usd);
+            const lines = [
+              `entry when: a 1h close back into LB ${zoneTxt(use.stop_anchor)} plus a 5m sweep of ${fmt(use.stop_anchor?.[long ? 0 : 1])} that closes back — that 5m ${lowWord} is the stop`,
+              `tap ${fmt(use.trigger)} · stop ${fmt(stop)} · T1 ${fmt(use.target ?? A.target)} · RR ${fmtRr(use.rr)}${usdTxt(risk)} · ${dist(use.trigger)} from price${/thin zone/.test(A.note ?? "") ? " · thin zone, stop from the 5m LB" : ""}`,
+            ];
+            if (use !== A) lines.push(`refined inside the ${tfLabel(A.tf)} LB ${zoneTxt(A.stop_anchor)} (its own stop ${fmt(stopPx(A.stop))} is $${Math.round(A.risk_usd)}, over the cap) — a deeper stab takes this stop, not the idea: re-enter (V7)`);
+            else if (A.over_cap) lines.push("over the cap — refine the stop on a lower-TF LB inside the zone or pass");
+            if (A.unrefined) {
+              lines.push(`unrefined (E1): the ${lowWord} ${fmt(A.unrefined.floor)}${A.unrefined.touches > 1 ? ` x${A.unrefined.touches}` : ""} from the left is intact — refined entry when: its 1h/15m sweep closes back, same stop`);
+            }
+            if (!near) lines.push(farTxt(use.trigger));
+            lines.push(`→ next: a trade past ${fmt(stop)} = re-entry from the reclaim (V7), not a wider stop`);
+            opp.push({
+              trigger: use.trigger,
+              actionable: near && !use.over_cap,
+              title: `TAP ${zoneTxt(use.stop_anchor)}${A.unrefined ? " (aggressive)" : ""}${use.tf && use.tf !== "240" ? ` (${tfLabel(use.tf)})` : ""} → ${side}`,
+              lines,
+              short: `tap ${fmt(use.trigger)} (${dist(use.trigger)}) → ${side} · stop ${fmt(stop)}${usdTxt(risk)} · T1 ${fmt(use.target ?? A.target)}`,
+            });
+            addAlert(use.trigger);
+          }
+        }
+        tail.push({
+          title: "BREAKDOWN → next edge",
+          lines: [
+            biasEdge?.edge == null
+              ? "state when: no bias-side edge in view"
+              : `state when: a 4h trade ${below} ${fmt(kill)} without a reclaim → the edge ${fmt(biasEdge.edge)} is consumed, the grid redraws to ${nextEdge}`,
+            "entry when: the run of that edge closes back on the 4h/1h · stop beyond the run extreme",
+          ],
+        });
+        addAlert(biasEdge?.edge);
+      }
+      if (counterEdge?.edge != null) {
+        const pc = counterEdge.pending;
+        const lines = [];
+        if (pc) lines.push(`state: run ${barTxt(pc.bars_since_run)} to ${fmt(pc.ext)}, reclaim ${byTxt(pc.bars_left)}`);
+        lines.push(
+          ctOpen
+            ? `entry when (${long ? "short" : "long"}): run of ${fmt(counterEdge.edge)} with a 1h close back → a new ${cLbWord} LB = pullback origin · counter-trend to the nearest rung only, flat the same session`
+            : `partial on the ${side} at ${fmt(counterEdge.edge)} · counter-trend closed today (Mon–Tue only)`,
+        );
+        lines.push(`the build-up its false reaction leaves is the next ${side} trigger`);
+        lines.push(`continuation when: a 1h close beyond ${fmt(counterEdge.edge)} → the path to ${sc.D?.beyond ? itemTxt(sc.D.beyond) : "the next level beyond"} is open, stop to BE`);
+        tail.push({ title: `TOP ${fmt(counterEdge.edge)}${pc ? " (PENDING)" : ""} → ${ctOpen ? "partial / counter-trend" : "partial"}`, lines });
+        addAlert(counterEdge.edge);
+      }
+      // actionable today first, original priority kept inside each group
+      const ranked = [...opp.filter((o) => o.actionable), ...opp.filter((o) => !o.actionable)];
+      const main = ranked.find((o) => o.actionable) ?? null;
+      mainShort = main ? main.short : `nothing actionable in reach — wait${opp[0]?.trigger != null ? ` for ${fmt(opp[0].trigger)} (${dist(opp[0].trigger)})` : ""}`;
+      out.push("", "**Scenarios** (actionable today first).");
+      [...ranked, ...tail].forEach((it, i) => {
+        out.push(`${i + 1}. **${it.title}${it === main ? " (main)" : ""}.**`);
+        for (const l of it.lines) out.push(`   ${l}`);
+      });
+      out.push(`Everything else = wait.${sc.partials.length ? ` Partials: ${sc.partials.map((p) => `${fmt(p.price)}${p.kind === "lb" ? ` (LB ${zoneTxt(p.zone)})` : p.touches > 1 ? ` x${p.touches}` : ""}`).join(" → ")}.` : ""}`);
+      if (sc.h1) {
+        const f = sc.h1.local_frame;
+        const sideTxt = (x) => (x ? `${fmt(x.price)}${x.touches ? ` x${x.touches}` : ""}` : "—");
+        const against = sc.h1.alignment === "noise" || sc.h1.alignment === "against";
+        const st = sc.h1.story ?? "";
+        const mode = sc.h1.mode ?? (/^highs were consumed/.test(st) ? "up_continuation" : /^lows were consumed/.test(st) ? "down_continuation" : /^lows were run and reclaimed/.test(st) ? "buy_story" : /^highs were run and reclaimed/.test(st) ? "sell_story" : null);
         out.push(
-          `**Trap pointer** (${tfLabel(p.timeframe)}, V8). ${p.induced.who} induced ${p.induced.bars_ago === 0 ? "this bar" : `${p.induced.bars_ago} bars ago`} by the run of ${fmt(p.induced.level)} — their stops rest ${long ? "under" : "over"} the origin **${fmt(p.price)}** that move came from. Its run is the trap, a ${tfLabel("60")}/${tfLabel("15")} reclaim there the entry; the deeper x1 rungs are refinements, not requirements.`,
+          `1h: ${sc.h1.alignment === "noise" ? "NOISE · " : ""}${MODE_WORD[mode] ?? mode ?? "—"}${against ? " against the bias — enter from a 15m reclaim structure" : ""}${f ? ` · frame ${sideTxt(f.below)} ↔ ${sideTxt(f.above)}` : ""}.`,
         );
       }
-      out.push("", "**Scenarios.**");
-      for (const key of ["A", "B", "C", "D"]) out.push(`- **${sc[key].label}.** ${sc[key].text}`);
-      if (sc.partials.length) out.push(`- Partials on the way: ${sc.partials.map((p) => `${fmt(p.price)}${p.kind === "lb" ? ` (LB ${zoneTxt(p.zone)})` : p.touches > 1 ? ` x${p.touches}` : ""}`).join(" → ")}.`);
-      out.push(`- Not done: ${sc.not_done.join("; ")}.`);
-      if (sc.h1) {
-        out.push("", `**1h.** ${sc.h1.alignment === "noise" ? "NOISE — " : ""}${sc.h1.story}${sc.h1.noise_note ? ` (${sc.h1.noise_note})` : ""}`);
-        if (sc.h1.local_frame) {
-          const f = sc.h1.local_frame;
-          const side = (x) => (x ? `${fmt(x.price)}${x.touches ? ` x${x.touches}` : ""} (${x.source})` : "—");
-          out.push(`  Local frame inside the grid: ${side(f.below)} ↔ ${side(f.above)}`);
-        }
-        for (const c of sc.h1.conditions) out.push(`  ${c}`);
-      }
     }
+
     const gate = Object.values(r.timeframes ?? {}).map((t) => t?.h4_model).find((h) => h?.available);
-    const local = tz ? ` (${hourIn(tz, daily.trading_day, 6, exch)}–${hourIn(tz, daily.trading_day, 10, exch)} ${tz}, gate open until ${hourIn(tz, daily.trading_day, 14, exch)})` : "";
-    out.push(
-      "",
-      `**Timing.** NY session only; the 06:00–10:00 ET H4 candle${local} sets the gate (V5): after 10:00 ET, ${long ? "longs" : "shorts"} only once price trades ${long ? "below" : "above"} that candle's ${long ? "low" : "high"}; window to 14:00 ET.${gate ? ` Last candle (${gate.h4_date}): H ${fmt(gate.h4_high)} / L ${fmt(gate.h4_low)} — ${gate.phase}.` : ""}`,
-    );
+    if (gate) out.push(`Gate candle (${gate.h4_date}): H ${fmt(gate.h4_high)} / L ${fmt(gate.h4_low)} — ${gate.phase}.`);
+    if (alerts.length && price != null) {
+      out.push(`**Alerts:** ${alerts.sort((a, b) => b - a).slice(0, 5).map((a) => `${fmt(a)} ${a >= price ? "↑" : "↓"}`).join(" · ")}.`);
+    }
     out.push("");
+    blocks.push(...out);
+    summary.push(`| ${name} | ${(w.bias ?? "none").toUpperCase()} | ${state} | ${mainShort ?? "—"} |`);
   }
-  return out.join("\n");
+
+  const sessions = tz
+    ? `London ${at(8, "Europe/London")}–${at(16, "Europe/London", 30)} · NY ${at(9, exch, 30)}–${at(16, exch)} ${tz}`
+    : "London 08:00–16:30 UK · NY 09:30–16:00 ET";
+  const gl = tz ? `${at(6, exch)}–${at(10, exch)}` : "06:00–10:00 ET";
+  const gw = tz ? `${at(10, exch)}–${at(14, exch)}` : "10:00–14:00 ET";
+  return [
+    `# Marco daily brief — ${daily.trading_day} (${daily.weekday})`,
+    "",
+    `Generated ${daily.generated_at}. Direction from ${daily.direction_from}; structure live on ${daily.timeframes?.map(tfLabel).join("/") ?? "4h/1h/15m/5m"}; risk at size 1, cap $${daily.risk_cap}. Format v2.1 — every scenario is an \`entry when\`, everything not named is a wait (docs/MARCO-CASES.md → Approved changes; thresholds [CALIBRATION], docs/MARCO.md §6).`,
+    "",
+    "| | Bias | Now | Main scenario |",
+    "|---|---|---|---|",
+    ...summary,
+    "",
+    `**Today.** Sessions ${sessions} — a level hit outside them is an alert to read with the grid, not an entry by itself. Gate: the ${gl} 4h candle; from ${gw.split("–")[0]} to ${gw.split("–")[1]} with-bias entries once price trades beyond that candle's extreme (V5).${clock ? ` Next 4h closes: ${clock.closes(3).join(" · ")}${tz ? "" : " ET"}.` : ""} Counter-trend: ${ctOpen ? "open today — nearest target only, never held against the global bias" : "closed today (Mon–Tue only)"}.`,
+    "",
+    ...blocks,
+  ].join("\n");
 }

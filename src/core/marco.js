@@ -2324,7 +2324,7 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
       results.push({
         symbol,
         quote,
-        contract: spec ? { usd_per_point: spec.usd_per_point, journal: spec.journal } : null,
+        contract: spec ? { usd_per_point: spec.usd_per_point, journal: spec.journal, tick: spec.tick ?? null } : null,
         roll,
         weekly_shift: weeklyShift,
         weekly: {

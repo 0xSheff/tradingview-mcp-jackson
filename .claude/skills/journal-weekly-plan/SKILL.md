@@ -103,25 +103,32 @@ trigger). Propose the mapping to the trader; do not silently pick a subset of tr
 
 **`setup_description` — a compact bullet list, never prose.** This is the one field the coach
 reads that the structured fields cannot carry: the stop (no field exists for it), the entry
-model per rung, the $ risk, the RR, the invalidation, the no-entry zones. Write it as short
+model per rung, the $ risk, the RR, the invalidation, the condition that opens the trade. Write it as short
 scannable bullets, one per rung, so the trader can place an order without reading a paragraph.
 Do not restate instrument, direction, key levels, targets or size — `K1/K2/K3` are positional
 indexes into `key_levels`, which is what keeps the levels out of the text.
 
 ```
 <weekly mode>/<regime> · inval <level> <Wclose|Dclose>
+- entry when: <the positive condition — TF + level + time window; the 1h/15m structure and the session folded in>
 - K1 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n> · <why, ≤6 words>
 - K2 <tap|sweep+reclaim> · stop <price> · $<risk> · RR <n> · <why, ≤6 words>
 - BE: <level> · stop → entry once taken
-- skip: <level> <model> · $<risk> > cap
-- no-entry: <zone> · <zone>
+- deeper run: <what moves the extreme and the stop> · same entry when
+- breakdown: <state when the scenario dies> → grid redraws to <next edge> · entry when its run closes back
+- aggressive tap <level> (<TF> LB): skip · <why, ≤6 words>
 - global: <levels> (≈<Nw>) final draw only
 - replaces: <what this supersedes — addenda only>
-- timing: <gate / event, if any>
 ```
 
-One line per bullet, `·` between fields, fixed labels (`BE:`, `skip:`, `no-entry:`, `global:`,
-`replaces:`, `timing:`), each at most once, dropped when empty. **No closing sentence or
+One line per bullet, `·` between fields, fixed labels (`entry when:`, `BE:`, `deeper run:`,
+`breakdown:`, `aggressive tap … skip`, `global:`, `replaces:`), each at most once, dropped when
+empty. **`entry when:` is the first bullet and is always positive** — it names the condition that
+opens the trade (TF + level + time window); the old `no-entry:` and `timing:` labels are retired
+into it (trader, 2026-09-22: "a negative connotation reads harder, during the live market there
+is no time to untangle it"). A prohibition is written as the window or the state that permits:
+"US PMI 16:45 no entry" → "NY 16:30–16:45 · 16:50–21:00"; "no-entry while 4h PENDING" →
+"entry when: 4h close over 4371.2 (13:00 / 17:00) → tap …". **No closing sentence or
 paragraph** — the reasoning behind a rung lives in the chat and the retro, not here. Trader
 feedback 2026-09-10: the 09.09 and 10.09 addenda ended in a paragraph of numbers and were hard
 to read. On a locked plan an addendum item cannot be edited — the 10.09 pair was rewritten as a
@@ -137,19 +144,20 @@ the same item, which told the retro nothing).
 per the strategy's "First target-side level taken → break-even". The review checks it (trader
 rule 2026-09-12, after W37: three trades held the full stop past T1).
 
-Example (the 2026-09-10 6E addendum, rewritten in the format; invalidation levels come from
-the brief — the 4036.5 that once appeared for MGC was wrong, the brief says 4016):
+Example (the 2026-09-22 MGC addendum as it reads in the v2 grammar; the full worked brief is
+`briefs/daily/2026-09-22.v2.md`; invalidation levels come from the brief — the 4036.5 that
+once appeared for MGC was wrong, the brief said 4016):
 
 ```
-buy_story/aligned · inval 1.13635 Wclose
-- K1 tap · stop 1.16105 · $132 · RR 2.1 · Q bull LB from the ECB stab, stop under K2
-- K2 sweep+reclaim (5m) · stop under the run extreme · max 20 pips = $250 · x5 floor intact
-- BE: 1.16435 (T1) · stop → entry once taken
-- skip: sweep K2 at engine anchor 1.158714 · $298 > cap
-- no-entry: 1.1642–1.1643 · 1.1652–1.16565 (4h bear LB) · 1.1668–1.1672
-- global: 1.19235 (≈2.4w) final draw only
-- replaces: 09.09 K1 1.16235 (run, no reclaim, untraded) · 09.09 K2 1.16015 alive
-- timing: H4 gate reads 17:00 · ECB presser 15:45 no entry
+buy_story/aligned · inval 4273.1 Wclose
+- entry when: 4h close over 4371.2 (13:00 / 17:00) → tap 4352.6–4371.2 in NY 16:30–16:45 · 16:50–21:00, or gate 17:00–21:00
+- K1 tap 4371.2 · stop 4349.0 · $222 · RR 2.3 · 4h LB 4352.6–4371.2, same trap deepened
+- K2 tap 4358.4 · stop 4351.7 · $67 · RR 9.5 · 15m LB inside K1
+- BE: 4386.4 · stop → entry once taken
+- deeper run: new low < 4352.6 (next 4343.7) moves the extreme and the stop · same entry when
+- breakdown: no 4h close over 4371.2 by 17:00, or 4h trade < 4349 → grid redraws to 4273.1–4280.8 · entry when its run closes back
+- global: 4755 (≈1.7w) final draw only
+- replaces: 22.09 locked tap 4375.5 (level run 07:00, filled and stopped)
 ```
 
 Rules that make the list work:
@@ -160,8 +168,9 @@ Rules that make the list work:
   typed `sweep-trigger` but carried a tap-style stop 2.7 ticks under the low, and the
   resulting R figure was a fiction that only a limit order would have earned.
 - **Put the primary rung's RR in `planned_r`**, not only in the text — it is a real field.
-- **No closing sentence.** What changed goes on the `replaces:` bullet, an event or gate on
-  `timing:`; deeper reasoning belongs in the chat with the trader, not in the journal.
+- **No closing sentence.** What changed goes on the `replaces:` bullet, an event, gate or
+  session goes into `entry when:` as a window; deeper reasoning belongs in the chat with the
+  trader, not in the journal.
 
 ## Step 4 — Summary, go, lock
 
