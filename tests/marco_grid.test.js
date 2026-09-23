@@ -15,7 +15,9 @@ import {
   basisReference,
   shiftPrices,
   basisBars,
+  splitForming,
   dailyScenarios,
+  dailySetups,
   renderDailyMarkdown,
   triggerSetups,
   storyRead,
@@ -199,7 +201,7 @@ test("storyRead: counter-side LB zones on the path are pullback origins; only th
   ]);
 });
 
-test("dailyScenarios + renderDailyMarkdown: A is inducement when pocketed, B is the run of the bias edge, C redraws, D names the continuation; the v2 brief carries Bias · Now · Grid · Scenarios (entry when) · Windows", () => {
+test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when pocketed, B is the run of the bias edge, C redraws, D names the continuation; the v3 brief prints Bias · Now · Grid and every scenario as a journal setup in Ukrainian", () => {
   const m = handMap();
   const grid = h4Grid(m, BARS, CFG, { bias: 1 });
   const triggers = triggerSetups(m, BARS, CFG, { direction: 1, max: 6 });
@@ -243,63 +245,115 @@ test("dailyScenarios + renderDailyMarkdown: A is inducement when pocketed, B is 
   assert.equal(sc.h1.alignment, "noise");
   assert.ok(sc.h1.conditions.length >= 3);
 
-  const md = renderDailyMarkdown({
-    generated_at: "2026-09-11T06:37:55.806Z",
+  // the engine analysed the closed 09:00–13:00 Athens bar; the 13:00–17:00 bar is still open
+  const r1 = {
+    symbol: "TEST:X1!",
+    quote: { last: 100 },
+    contract: { journal: "X", usd_per_point: 100 },
+    roll: { status: "rolled", offset: 0.5, note: "the 240m series moved by +0.5 on every shared bar since weekly 2026-W37 — a contract roll with back-adjustment." },
+    weekly: { week: "2026-W37", bias: "long", regime: "aligned", stale: false, primary_target: 110, primary_atr_weeks: 2.4, invalidation: { level: 90, rule: "weekly close below" } },
+    grid,
+    scenarios: sc,
+    timeframes: reads,
+    exec_bars: {
+      timeframe: "240",
+      last_closed_time: Date.parse("2026-09-11T06:00:00Z") / 1000,
+      forming: { time: Date.parse("2026-09-11T10:00:00Z") / 1000, open: 100, high: 100.6, low: 99.5, close: 100.2 },
+    },
+  };
+  const daily = {
+    generated_at: "2026-09-11T10:37:55.806Z",
     trading_day: "2026-09-11",
     weekday: "Fri",
+    counter_trend_open: false,
     counter_trend_note: "closed — counter-trend entries are Mon–Tue only",
     direction_from: "briefs/weekly/2026-W37 (global layer)",
     risk_cap: 250,
     timeframes: ["240", "60"],
     exchange_tz: "America/New_York",
     local_tz: "Europe/Athens",
-    results: [
-      {
-        symbol: "TEST:X1!",
-        quote: { last: 100 },
-        contract: { journal: "X", usd_per_point: 100 },
-        roll: { status: "rolled", offset: 0.5, note: "the 240m series moved by +0.5 on every shared bar since weekly 2026-W37 — a contract roll with back-adjustment." },
-        weekly: { week: "2026-W37", bias: "long", regime: "aligned", stale: false, primary_target: 110, primary_atr_weeks: 2.4, invalidation: { level: 90, rule: "weekly close below" } },
-        grid,
-        scenarios: sc,
-        timeframes: reads,
-      },
-      { symbol: "TEST:SKIP", skipped: "not in the weekly brief" },
+    results: [r1, { symbol: "TEST:SKIP", skipped: "not in the weekly brief" }],
+  };
+
+  // the setups in the journal's shape: the edge run is the main one, the next edge beyond the grid a setup of its own, the pocketed tap only a skip line
+  const S = dailySetups(r1, daily);
+  assert.equal(S.state, "VALID");
+  assert.deepEqual(
+    S.setups.map((s) => [s.n, s.main, s.instrument, s.direction, s.setup_type, s.key_levels, s.targets, s.planned_size, s.planned_r]),
+    [
+      [1, true, "X", "long", "sweep-trigger", [98.2], [101, 102.4, 104], 1, null],
+      [2, false, "X", "long", "sweep-trigger", [95], [98.2, 100.8, 102.4], 1, null],
     ],
-  });
+  );
+  for (const s of S.setups) assert.ok(s.key_levels.some((k) => k < s.targets[0]), "journal invariant: a key level on the entry side of T1");
+  assert.ok(S.setups[0].setup_description.startsWith("long/aligned · inval 90 Wclose\n- entry when: "), S.setups[0].setup_description);
+  assert.ok(!/no-entry|timing:|not done/i.test(S.setups[0].setup_description));
+  assert.ok(!S.setups.some((s) => s.setup_type === "early-week-counter-trend"), "Friday: no counter-trend setup");
+  // Monday: the counter edge becomes an early-week-counter-trend setup against the bias, nearest with-bias liquidity as the only target
+  const ct = dailySetups(r1, { ...daily, weekday: "Mon", counter_trend_open: true }).setups.find((s) => s.setup_type === "early-week-counter-trend");
+  assert.ok(ct, "counter-trend setup on Monday");
+  assert.equal(ct.direction, "short");
+  assert.deepEqual(ct.key_levels, [102.4]);
+  assert.deepEqual(ct.targets, [100.8]);
+  assert.match(ct.setup_description, /^контр-тренд \(пн–вт\) проти W long · long\/aligned · inval 90 Wclose\n- entry when: run 102.4 \+ 1h-закриття назад під ним → short/);
+
+  const md = renderDailyMarkdown(daily);
   for (const needle of [
-    "| X | LONG | VALID | edge run 98.2 (−1.8) → long · T1 101 |",
-    "**Today.** Sessions London 10:00–18:30 · NY 16:30–23:00 Europe/Athens",
-    "Gate: the 13:00–17:00 4h candle; from 17:00 to 21:00 with-bias entries once price trades beyond that candle's extreme (V5). Next 4h closes: 13:00 · 17:00 · 21:00. Counter-trend: closed today (Mon–Tue only).",
-    "## X · LONG · 100 · inval weekly close below 90 · CONTRACT ROLLED",
+    "Знято 13:37 Europe/Athens.",
+    "| X | LONG | VALID | 1. sweep+reclaim 98.2 (−1.8 пт) → long · stop з 1h/15m LB · T1 101 |",
+    "**Сьогодні.** Вікна London 10:00–18:30 · NY 16:30–23:00 Europe/Athens",
+    "Гейт: 4h-свічка 13:00–17:00; з 17:00 до 21:00 входи з біасом після трейду за її екстремум (V5). Наступні 4h-закриття: 17:00 · 21:00 · 01:00. Контр-тренд: закритий (лише пн–вт).",
+    "## X · LONG · 100 · inval W close < 90 · CONTRACT ROLLED",
     "**Roll.**",
-    "**Bias.** W long/aligned · global target 110 (≈2.4w).",
-    "**Now: VALID (4h).** lows were run and reclaimed in the 05:00–09:00 bar (trap) · bull LB 98.6–99.4.",
-    "reclaim → bull LB 98.6–99.4 Q in the 05:00–09:00 bar",
-    "State changes on: a 4h trade below 98 without a reclaim → BREAKDOWN · the run of 102.4 → TOP.",
+    "**Bias.** W long/aligned · глобальна ціль 110 (≈2.4w).",
+    "**Now: VALID (4h).** trap: лоу run і повернення у барі 05:00–09:00 → bull LB 98.6–99.4.",
+    "повернення → bull LB 98.6–99.4 Q у барі 05:00–09:00",
+    "Стан змінить: 4h-трейд під 98 без повернення → BREAKDOWN · run 102.4 → TOP.",
+    "Бар 13:00–17:00 ще відкритий: H 100.6 / L 99.5 / зараз 100.2 — до закриття не рахується.",
     "**Grid 4h**",
-    "▲ 102.4 counter edge — LB 101.8–102.4 [Q tapped]",
-    "▼ 98.2 bias edge — pocket: LB 98.6–99.4 [Q] + 98.2 x1",
-    "● 100 price",
-    "  beyond: ▲ 104 x2 · ▼ 95 x3",
-    "**Scenarios** (actionable today first).",
-    "1. **EDGE RUN 98.2 → long (main).**",
-    "entry when: a 1h/15m close below 98.2 and the next close back above it → tap of the LB that bar leaves",
-    "2. **TAP 98.6–99.4 — inducement, skip.**",
-    "3. **BREAKDOWN → next edge.**",
-    "state when: a 4h trade below 98 without a reclaim → the edge 98.2 is consumed, the grid redraws to 95 x3",
-    "4. **TOP 102.4 → partial.**",
-    "partial on the long at 102.4 · counter-trend closed today (Mon–Tue only)",
-    "the build-up its false reaction leaves is the next long trigger",
-    "continuation when: a 1h close beyond 102.4 → the path to 104 x2 is open, stop to BE",
-    "Everything else = wait. Partials: 100.8 x2.",
-    "1h: NOISE · sell story against the bias — enter from a 15m reclaim structure · frame 99.7 x1 ↔ 100.8 x2.",
-    "Gate candle (2026-09-10): H 101.5 / L 99.2 — closed.",
-    "**Alerts:** 102.4 ↑ · 98.2 ↓.",
-    "## TEST:SKIP — skipped",
+    "▲ 102.4 контр-край — LB 101.8–102.4 [Q tapped]",
+    "▼ 98.2 край біасу — кишеня: LB 98.6–99.4 [Q] + 98.2 x1",
+    "● 100 ціна",
+    "  далі: ▲ 104 x2 · ▼ 95 x3",
+    "**Сетапи** (спочатку досяжні сьогодні; size 1, ліміт $250).",
+    "### 1. X · long · sweep-trigger · K 98.2 · T 101 / 102.4 / 104 · R — · size 1 — головний",
+    "```\nlong/aligned · inval 90 Wclose\n- entry when: 1h/15m-закриття під 98.2 і наступне закриття назад над ним → тап LB, яку лишить той бар · London 10:00–18:30 · NY 16:30–23:00 · після 17:00 через гейт\n",
+    "- K1 sweep+reclaim 98.2 · stop під лоу run з 1h/15m LB, макс 2.5 пт = $250 · RR — · run краю біасу x1",
+    "- BE: 101 · стоп → вхід після взяття",
+    "- breakdown: 4h-трейд під 98 без повернення → край 98.2 знято, сітка перемальовується до 95 x3 · entry when: run того краю закривається назад",
+    "- aggressive tap 98.6–99.4 (4h LB): skip · inducement, під нею кишеня до 98.2",
+    "- global: 110 (≈2.4w) лише фінальна ціль\n```",
+    "### 2. X · long · sweep-trigger · K 95 · T 98.2 / 100.8 / 102.4 · R — · size 1",
+    "- entry when: run 95 (95 x3) + 1h/15m-закриття назад над ним → тап LB, яку лишить закриття",
+    "- breakdown: тижневе закриття під 90 = інвалідація W-біасу, лонгів нема",
+    "Все інше = чекаємо. Часткова фіксація: 100.8 x2.",
+    "TOP 102.4: часткова фіксація на long біля 102.4 · контр-тренд закритий (лише пн–вт) · білдап, який лишить його хибна реакція, = наступний тригер на long · continuation when: 1h-закриття над 102.4 → шлях до 104 x2 відкритий, стоп у BE.",
+    "1h: NOISE · sell story проти біасу — вхід лише з 15m-структури повернення · рамка 99.7 x1 ↔ 100.8 x2.",
+    "Гейт-свічка (2026-09-10): H 101.5 / L 99.2 — закрита.",
+    "**Alerts:** 102.4 ↑ · 98.2 ↓ · 95 ↓.",
+    "## TEST:SKIP — пропущено",
   ]) {
     assert.ok(md.includes(needle), `brief is missing: ${needle}\n---\n${md}`);
   }
+  assert.ok(!/no-entry|Not done:|NY session only|Scenarios|entry when: a /.test(md), md);
+});
+
+test("splitForming: the bar still open is cut from the series and returned as forming; a closed last bar and D/W timeframes pass through untouched", () => {
+  const bars = [
+    { time: 1000, open: 1, high: 1, low: 1, close: 1 },
+    { time: 1000 + 14400, open: 2, high: 2, low: 2, close: 2 },
+    { time: 1000 + 28800, open: 3, high: 3, low: 3, close: 3 },
+  ];
+  const mid = splitForming(bars, "240", 1000 + 28800 + 120);
+  assert.equal(mid.closed.length, 2);
+  assert.equal(mid.forming.time, 1000 + 28800);
+  assert.equal(mid.forming.closes_at, 1000 + 43200);
+  const done = splitForming(bars, "240", 1000 + 43200);
+  assert.equal(done.closed.length, 3);
+  assert.equal(done.forming, null);
+  assert.equal(splitForming(bars, "D", 0).closed.length, 3);
+  assert.equal(splitForming(bars, "W", 0).forming, null);
+  assert.equal(splitForming([bars[0]], "240", 0).closed.length, 1);
 });
 
 test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run level, the map exposes the sweep, the scenarios make the reclaim the event", () => {
@@ -376,18 +430,58 @@ test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run le
     timeframes: ["240", "60"],
     results: [{ symbol: "T", quote: { last: 100 }, contract: { journal: "T" }, roll: { status: "unknown" }, weekly: { bias: "long", regime: "aligned", primary_target: 110, invalidation: null }, grid: g, scenarios: sc, timeframes: reads }],
   });
-  assert.ok(md.includes("▼ 99.6 bias edge — PENDING: run to 99.1 2 bars ago, reclaim not confirmed (2 of 3 bars left)"), md);
-  assert.ok(md.includes("● 100 price — the run is unresolved (PENDING)"), md);
-  assert.ok(md.includes("**Now: PENDING (4h).** low 99.6 x2 run 2 bars ago to 99.1 — the reclaim decides."), md);
-  assert.ok(md.includes("State changes on: a 4h close back above 99.6 within 2 4h bar(s) → VALID (bull LB 99.1–99.6) · a miss, or a 4h trade below 99.1 → BREAKDOWN."), md);
-  assert.ok(md.includes("| T | LONG | PENDING | reclaim 99.6 within 2 4h bar(s) → tap 99.1–99.6 · stop 98.9 · $70 · T1 101 |"), md);
-  assert.ok(md.includes("1. **RECLAIM 99.6 → long (main).**"), md);
-  assert.ok(md.includes("entry when: a 1h/15m close back above 99.6 within 2 4h bar(s) → tap of the bull LB 99.1–99.6 it leaves"), md);
-  assert.ok(md.includes("entry 99.6 · stop 98.9 · T1 101 · RR 2 · $70"), md);
-  assert.ok(md.includes("2. **DEEPER RUN → the same trade, lower.**"), md);
-  assert.ok(md.includes("3. **BREAKDOWN → next edge.**"), md);
-  assert.ok(md.includes("state when: no close back above 99.6 within 2 4h bar(s), or a 4h trade below 99.1 → the grid redraws to 98.2 x1"), md);
-  assert.ok(!/no-entry|Not done:|NY session only/.test(md), md);
+  for (const needle of [
+    "▼ 99.6 край біасу — PENDING: run до 99.1 2 бар(ів) тому, повернення не підтверджене (2 з 3 барів лишилось)",
+    "● 100 ціна — run не вирішений (PENDING)",
+    "**Now: PENDING (4h).** лоу 99.6 x2 run 2 бар(ів) тому до 99.1 — вирішує повернення.",
+    "Стан змінить: 4h-закриття назад над 99.6 протягом 2 4h-бар(ів) → VALID (bull LB 99.1–99.6) · пропуск або 4h-трейд під 99.1 → BREAKDOWN.",
+    "| T | LONG | PENDING | 1. sweep+reclaim 99.6 протягом 2 4h-бар(ів) → тап 99.1–99.6 · stop 98.9 · $70 · T1 101 |",
+    "### 1. T · long · sweep-trigger · K 99.6 · T 101 / 102.4 / 104 · R 2 · size 1 — головний",
+    "- entry when: 1h/15m-закриття назад над 99.6 протягом 2 4h-бар(ів) → тап bull LB 99.1–99.6, яку лишить закриття (не на самому run, V6) · London 08:00–16:30 UK · NY 09:30–16:00 ET · після 10:00 ET через гейт",
+    "- K1 sweep+reclaim 99.6 · stop 98.9 · $70 · RR 2 · run краю 99.6 x2, повернення = trap",
+    "- BE: 101 · стоп → вхід після взяття",
+    "- deeper run: новий лоу під 99.1 — екстремум і стоп їдуть за ним, $ перерахувати проти ліміту · те саме entry when",
+    "- breakdown: нема закриття назад над 99.6 протягом 2 4h-бар(ів), або 4h-трейд під 99.1 → сітка перемальовується до 98.2 x1 · entry when: run того краю закривається назад",
+    "### 2. T · long · sweep-trigger · K 98.2 · T 99.6 / 101 / 102.4 · R — · size 1",
+    "- K1 sweep+reclaim 98.2 · stop під лоу run з 1h/15m LB · RR — · наступний край за сіткою, −1.8 пт від ціни",
+    "**Alerts:** 102.4 ↑ · 99.6 ↓ · 99.1 ↓ · 98.2 ↓.",
+  ]) {
+    assert.ok(md.includes(needle), `brief is missing: ${needle}\n---\n${md}`);
+  }
+  assert.ok(!/no-entry|Not done:|NY session only|not on the run/.test(md), md);
+
+  // the bar in progress (2026-09-23 engine gap): shown, never counted — a deeper low and a
+  // price back over the level are named as "in progress", the state stays PENDING
+  const md2 = renderDailyMarkdown({
+    generated_at: "2026-09-12T10:07:00.000Z",
+    trading_day: "2026-09-12",
+    weekday: "Sat",
+    counter_trend_note: "closed",
+    direction_from: "w",
+    risk_cap: 250,
+    timeframes: ["240", "60"],
+    results: [
+      {
+        symbol: "T",
+        quote: { last: 99.8 },
+        contract: { journal: "T" },
+        roll: { status: "unknown" },
+        weekly: { bias: "long", regime: "aligned", primary_target: 110, invalidation: null },
+        grid: g,
+        scenarios: sc,
+        timeframes: reads,
+        exec_bars: {
+          timeframe: "240",
+          last_closed_time: Date.parse("2026-09-12T06:00:00Z") / 1000,
+          forming: { time: Date.parse("2026-09-12T10:00:00Z") / 1000, open: 100, high: 100.3, low: 99, close: 99.8 },
+        },
+      },
+    ],
+  });
+  assert.ok(md2.includes("| T | LONG | PENDING |"), md2);
+  assert.ok(md2.includes("**Now: PENDING (4h).** лоу 99.6 x2 run у барі 18:00–22:00 до 99.1 — вирішує повернення."), md2);
+  assert.ok(md2.includes("Бар 06:00–10:00 ще відкритий: H 100.3 / L 99 / зараз 99.8 — до закриття не рахується · новий лоу за 99.1 · ціна над 99.6, повернення лише на закритті 10:00."), md2);
+  assert.ok(md2.includes("- entry when: 1h/15m-закриття назад над 99.6 до 14:00 → тап bull LB 99.1–99.6"), md2);
 });
 
 test("basisReference: the freshest stored basis wins — a daily older than the new weekly hands over to the weekly and its shift stays behind", () => {
@@ -520,9 +614,10 @@ test("dailyScenarios (E1): an unrefined A is the aggressive grade with its refin
     timeframes: ["240"],
     results: [{ symbol: "TEST:X1!", quote: { last: 100 }, weekly: { bias: "long", regime: "aligned" }, grid, scenarios: sc, timeframes: { 240: r240 } }],
   });
-  assert.ok(md.includes("bull LB 98.8–99.4 deepened to 98.6 in the 18:00–22:00 bar — the same trap; the reclaim of 99.4 decides"), md);
-  assert.ok(/\*\*TAP [0-9.–]+ \(aggressive\) → long\.\*\*/.test(md), md);
-  assert.ok(md.includes("refined entry when: its 1h/15m sweep closes back, same stop"), md);
+  assert.ok(md.includes("bull LB 98.8–99.4 поглиблена до 98.6 у барі 18:00–22:00 — той самий trap; вирішує повернення за 99.4"), md);
+  assert.ok(/### \d\. TEST:X1! · long · lb-zone-tap · K [0-9.]+/.test(md), md);
+  assert.ok(/- K1 tap [0-9.]+ · stop [0-9.]+ · \$\d+ · RR [0-9.—]+ · 4h LB [0-9.–]+, агресивний вхід \(E1\)/.test(md), md);
+  assert.ok(/- refined \(E1\): лоу 97( x\d)? зліва цілий — уточнений вхід, коли його 1h\/15m-run закриється назад, той самий стоп/.test(md), md);
 });
 
 // ---------------------------------------------------------------------------

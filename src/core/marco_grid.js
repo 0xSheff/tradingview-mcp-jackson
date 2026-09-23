@@ -425,6 +425,23 @@ export function shiftPrices(obj, offset) {
   return walk(obj, null);
 }
 
+/**
+ * The closed bars of an intraday series and the bar still forming, split
+ * (docs/MARCO-CASES.md → Engine gaps, 2026-09-23: two minutes into the 6E
+ * 17–21 bar the daily read the unclosed bar as the close back and printed
+ * VALID). Every state — run, reclaim, PENDING, breakdown — is computed on
+ * the closed bars only; the forming bar is returned so the brief can show it
+ * as "in progress". A bar is forming while now < its open + the timeframe.
+ * Minute timeframes only: a D/W bar does not end at time + tf.
+ */
+export function splitForming(bars, tf, nowSec = Date.now() / 1000) {
+  const mins = Number(tf);
+  if (!Array.isArray(bars) || bars.length < 2 || !Number.isFinite(mins) || mins <= 0) return { closed: bars, forming: null };
+  const last = bars[bars.length - 1];
+  if (!Number.isFinite(last?.time) || last.time + mins * 60 <= nowSec) return { closed: bars, forming: null };
+  return { closed: bars.slice(0, -1), forming: { ...last, closes_at: last.time + mins * 60 } };
+}
+
 /** The last `count` CLOSED bars of a series — the basis a later run compares against. */
 export function basisBars(bars, count = 30) {
   if (!Array.isArray(bars) || bars.length < 2) return [];
@@ -714,6 +731,7 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
       ...(pendCounter ? { pending: pendCounter } : {}),
     },
     partials,
+    stop_buffer: round((cfg.stop_buffer_atr ?? 0) * (grid.atr ?? 0)),
     not_done: notDone,
     h1:
       reads["60"] && !reads["60"].error
@@ -745,68 +763,35 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
 
 // ---------------------------------------------------------------- render --
 
-function gridLines(grid, long) {
-  const lines = [];
-  const rung = (it) => `    ${itemTxt(it)}`;
-  const edgeLine = (side) => {
-    const s = side === "upper" ? grid.upper : grid.lower;
-    if (s.edge === null) return `  ${side === "upper" ? "▲" : "▼"} no ${side} edge in view`;
-    const isBias = side === "upper" ? !long : long;
-    if (s.pending) {
-      const p = s.pending;
-      const ago = p.bars_since_run === 0 ? "this bar" : p.bars_since_run === 1 ? "1 bar ago" : `${p.bars_since_run} bars ago`;
-      return `  ${side === "upper" ? "▲" : "▼"} ${fmt(s.edge)} ${isBias ? "bias edge" : "counter edge"} — PENDING: run to ${fmt(p.ext)} ${ago}, reclaim not confirmed (${p.bars_left} of ${p.confirm_bars} bars left)${p.deepened ? ` — deepened past LB ${zoneTxt(p.deepened)}, the same trap` : ""}`;
-    }
-    const members = s.cluster.length > 1 ? ` — ${isBias && s.floor_kind === "level" ? "pocket" : "cluster"}: ${s.cluster.map(itemTxt).join(" + ")}` : ` — ${itemTxt(s.anchor)}`;
-    return `  ${side === "upper" ? "▲" : "▼"} ${fmt(s.edge)} ${isBias ? "bias edge" : "counter edge"}${s.weak ? " (weak: single-touch)" : ""}${members}`;
-  };
-  lines.push(edgeLine("upper"));
-  for (const r of [...grid.upper.rungs].sort((a, b) => b.price - a.price)) lines.push(rung(r));
-  const state = grid.state ?? (grid.inside ? "inside" : "outside");
-  lines.push(
-    `  ● ${fmt(grid.price)} price${state === "inside" ? "" : state.startsWith("pending") ? " — the run is unresolved (PENDING)" : " — OUTSIDE the grid, redraw pending"}`,
-  );
-  for (const r of [...grid.lower.rungs].sort((a, b) => b.price - a.price)) lines.push(rung(r));
-  lines.push(edgeLine("lower"));
-  return lines;
-}
+/**
+ * The daily brief v3 — every scenario as a JOURNAL SETUP, in Ukrainian
+ * (trader, 2026-09-23: "the result in the format of setups, exactly as we
+ * add them to the journal, so I can go through them and pick which ones to
+ * add"). Per instrument: Bias · Now · Grid, then the setups ranked with the
+ * ones a trader can act on today first — each one the journal's own fields
+ * (`instrument · direction · setup_type · K · T · R · size`) and its
+ * `setup_description` line list (header · entry when · K-rows · BE · deeper
+ * run · breakdown · aggressive tap … skip · global). `dailySetups` builds the
+ * objects — `runMarcoDaily` stores them in the JSON as `setups`, ready for
+ * plan_add_setup — and `renderDailyMarkdown` prints them. Method terms stay
+ * English inside the Ukrainian text (trap, run, LB, tap), a reclaim is
+ * "закриття назад", per the trader's glossary. Spec: docs/MARCO-CASES.md →
+ * Approved changes (v3); the 2026-09-22 `entry when` grammar (v2) and the
+ * v2.1 refinements (summary table, reachable first, tick prices, clock
+ * times, alerts) all carry over.
+ */
+const H_MS = 3600000;
+const REACH_ATR = 3; // [CALIBRATION] "reachable today" = within 3 × the 4h ATR of the price
+const WINDOWS_FALLBACK = "London 08:00–16:30 UK · NY 09:30–16:00 ET";
 
-function sinceLines(grid) {
-  if (!grid.since.length) return ["  nothing — no run, no reclaim on the H4"];
-  return grid.since.slice(-8).map((e) => {
-    const ago = e.bars_ago === 0 ? "this bar" : e.bars_ago === 1 ? "1 bar ago" : `${e.bars_ago} bars ago`;
-    switch (e.type) {
-      case "low_swept":
-      case "high_swept":
-        return `  ${e.type === "low_swept" ? "low" : "high"} ${fmt(e.level)}${e.touches > 1 ? ` x${e.touches}` : ""} run ${ago}`;
-      case "bull_lb_created":
-      case "bear_lb_created":
-        return `  reclaim → ${e.type.startsWith("bull") ? "bull" : "bear"} LB ${zoneTxt(e.zone)}${e.qualified ? " Q" : ""} ${ago}`;
-      case "bull_lb_invalidated":
-      case "bear_lb_invalidated":
-        return `  ${e.type.startsWith("bull") ? "bull" : "bear"} LB ${zoneTxt(e.zone)} killed ${ago} (trade beyond the extreme)`;
-      case "bull_lb_deepened":
-      case "bear_lb_deepened":
-        return `  ${e.type.startsWith("bull") ? "bull" : "bear"} LB ${zoneTxt(e.zone)} deepened to ${fmt(e.ext)} ${ago} — the same trap; the reclaim of ${fmt(e.level)} decides`;
-      case "low_poke":
-      case "high_poke":
-        return `  poke of ${fmt(e.level)} to ${fmt(e.ext)} ${ago} — floor ${fmt(e.floor)} intact (inducement into the pocket)`;
-      case "bull_lb_tap":
-      case "bear_lb_tap":
-        return `  tap of ${e.type.startsWith("bull") ? "bull" : "bear"} LB ${zoneTxt(e.zone)} ${ago}`;
-      case "low_breakdown":
-      case "high_breakdown":
-        return `  ${e.type === "low_breakdown" ? "low" : "high"} ${fmt(e.level)} consumed without a reclaim ${ago} — continuation`;
-      case "buyers_induced":
-      case "sellers_induced":
-        return `  ${e.type === "buyers_induced" ? "buyers" : "sellers"} induced ${ago} (${e.type === "buyers_induced" ? "high" : "low"} ${fmt(e.level)} run) — origin ${fmt(e.origin)} is where their stops rest (V8)`;
-      case "origin_run":
-        return `  origin ${fmt(e.origin)} run ${ago} — the ${e.side === "bull" ? "buyers" : "sellers"} induced earlier are trapped; the reclaim decides (V8)`;
-      default:
-        return `  ${e.type} ${ago}`;
-    }
-  });
-}
+const MODE_UA = {
+  buy_story: "buy story",
+  sell_story: "sell story",
+  up_continuation: "continuation вгору",
+  down_continuation: "continuation вниз",
+  no_mans_land: "no-man's land",
+};
+const PHASE_UA = { forming: "ще формується", active: "активна", closed: "закрита" };
 
 function hourIn(tz, day, hourEt, exchangeTz, minute = 0) {
   // the wall-clock time `hourEt:minute` of `day` in the exchange zone, rendered in `tz`
@@ -826,33 +811,40 @@ function hourIn(tz, day, hourEt, exchangeTz, minute = 0) {
 }
 
 /**
- * The approved intraday brief, v2.1 (docs/MARCO-CASES.md → Approved changes,
- * 2026-09-22, refined 2026-09-23): a summary table first, then per instrument
- * Bias · Now · Grid · Scenarios · Alerts. Every scenario is an `entry when` — a
- * positive condition (TF + level + clock time) — followed by the numbers and
- * `→ next`. Scenarios a trader can act on today (within reach of the price and
- * inside the $ cap) come first; the rest follow, marked. Prices are on the
- * contract's tick, times are wall-clock in the trader's zone, the sessions and
- * the gate are stated once at the top.
+ * The bar clock of one instrument. `bar(k)` is the wall-clock range of the
+ * bar the engine calls "k bars ago" — index 0 is the LAST BAR ANALYSED, i.e.
+ * the last closed 4h bar when `r.exec_bars` says one was still forming
+ * (2026-09-23: states come from closed bars only). `closes(n)` are the next
+ * n 4h closes counted from the bar in progress; `cur` is that bar's range.
+ * Without `exec_bars` (older JSONs, hand-built tests) it falls back to the
+ * wall clock at `generated_at`, index 0 being the bar open at that moment.
  */
-const H_MS = 3600000;
-const REACH_ATR = 3; // [CALIBRATION] "reachable today" = within 3 × the 4h ATR of the price
-
-function briefClock(daily) {
-  const now = Date.parse(daily.generated_at);
-  if (!Number.isFinite(now)) return null;
+function briefClock(daily, r = null) {
   const exch = daily.exchange_tz ?? "America/New_York";
   const tz = daily.local_tz ?? exch;
   try {
-    const etHour = (ms) =>
-      Number(new Intl.DateTimeFormat("en-US", { timeZone: exch, hour12: false, hour: "2-digit" }).formatToParts(new Date(ms)).find((p) => p.type === "hour").value) % 24;
-    // CME 4h bars open at 18/22/02/06/10/14 ET
-    let open = Math.floor(now / H_MS) * H_MS;
-    for (let i = 0; i < 8 && (etHour(open) + 6) % 4 !== 0; i++) open -= H_MS;
     const hm = (ms) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour12: false, hour: "2-digit", minute: "2-digit" }).format(new Date(ms)).replace(/^24/, "00");
+    const eb = r?.exec_bars ?? null;
+    let last = Number.isFinite(eb?.last_closed_time) ? eb.last_closed_time * 1000 : null;
+    let cur = Number.isFinite(eb?.forming?.time) ? eb.forming.time * 1000 : null;
+    if (last == null) {
+      const now = Date.parse(daily.generated_at);
+      if (!Number.isFinite(now)) return null;
+      const etHour = (ms) =>
+        Number(new Intl.DateTimeFormat("en-US", { timeZone: exch, hour12: false, hour: "2-digit" }).formatToParts(new Date(ms)).find((p) => p.type === "hour").value) % 24;
+      // CME 4h bars open at 18/22/02/06/10/14 ET
+      let open = Math.floor(now / H_MS) * H_MS;
+      for (let i = 0; i < 8 && (etHour(open) + 6) % 4 !== 0; i++) open -= H_MS;
+      last = open;
+      cur = open;
+    } else if (cur == null) {
+      cur = last + 4 * H_MS; // nothing forming — the market is closed, the next bar is the next close
+    }
     return {
-      bar: (k) => `${hm(open - k * 4 * H_MS)}–${hm(open - (k - 1) * 4 * H_MS)}`,
-      closes: (n) => Array.from({ length: Math.max(0, n) }, (_, i) => hm(open + (i + 1) * 4 * H_MS)),
+      bar: (k) => `${hm(last - k * 4 * H_MS)}–${hm(last - (k - 1) * 4 * H_MS)}`,
+      cur: `${hm(cur)}–${hm(cur + 4 * H_MS)}`,
+      closes: (n) => Array.from({ length: Math.max(0, n) }, (_, i) => hm(cur + (i + 1) * 4 * H_MS)),
+      stamp: (ms) => hm(ms),
     };
   } catch {
     return null;
@@ -870,291 +862,618 @@ function tickFns(tick) {
   };
 }
 
-const MODE_WORD = {
-  buy_story: "buy story",
-  sell_story: "sell story",
-  up_continuation: "continuation up",
-  down_continuation: "continuation down",
-  no_mans_land: "no-man's land",
-};
+// "N bars ago" inside an engine read → the bar index, or null
+function agoOf(read) {
+  const m = /(?:^|\s)(?:(this bar)|(1) bar ago|(\d+) bars ago)/.exec(read ?? "");
+  return !m ? null : m[1] ? 0 : m[2] ? 1 : Number(m[3]);
+}
+
+// the weekly invalidation rule in the two spellings the brief uses
+const invalUa = (rule) => (/weekly close below/.test(rule ?? "") ? "тижневе закриття під" : /weekly close above/.test(rule ?? "") ? "тижневе закриття над" : /daily close below/.test(rule ?? "") ? "денне закриття під" : /daily close above/.test(rule ?? "") ? "денне закриття над" : rule ?? "");
+const invalShort = (rule) => (/weekly close below/.test(rule ?? "") ? "W close <" : /weekly close above/.test(rule ?? "") ? "W close >" : /daily close below/.test(rule ?? "") ? "D close <" : /daily close above/.test(rule ?? "") ? "D close >" : rule ?? "");
+const invalTag = (rule) => (/weekly/.test(rule ?? "") ? "Wclose" : /daily/.test(rule ?? "") ? "Dclose" : rule ?? "");
+
+const row = (...parts) => parts.filter((p) => p !== null && p !== undefined && p !== "").join(" · ");
+
+function gridLinesUa(grid, long, barTxt) {
+  const lines = [];
+  const rung = (it) => `    ${itemTxt(it)}`;
+  const edgeLine = (side) => {
+    const s = side === "upper" ? grid.upper : grid.lower;
+    const arrow = side === "upper" ? "▲" : "▼";
+    if (s.edge === null) return `  ${arrow} ${side === "upper" ? "верхнього" : "нижнього"} краю в полі зору нема`;
+    const isBias = side === "upper" ? !long : long;
+    const role = isBias ? "край біасу" : "контр-край";
+    if (s.pending) {
+      const p = s.pending;
+      return `  ${arrow} ${fmt(s.edge)} ${role} — PENDING: run до ${fmt(p.ext)} ${barTxt(p.bars_since_run)}, повернення не підтверджене (${p.bars_left} з ${p.confirm_bars} барів лишилось)${p.deepened ? ` — поглиблено за LB ${zoneTxt(p.deepened)}, той самий trap` : ""}`;
+    }
+    const members = s.cluster.length > 1 ? ` — ${isBias && s.floor_kind === "level" ? "кишеня" : "кластер"}: ${s.cluster.map(itemTxt).join(" + ")}` : ` — ${itemTxt(s.anchor)}`;
+    return `  ${arrow} ${fmt(s.edge)} ${role}${s.weak ? " (слабкий: один дотик)" : ""}${members}`;
+  };
+  lines.push(edgeLine("upper"));
+  for (const r of [...grid.upper.rungs].sort((a, b) => b.price - a.price)) lines.push(rung(r));
+  const state = grid.state ?? (grid.inside ? "inside" : "outside");
+  lines.push(`  ● ${fmt(grid.price)} ціна${state === "inside" ? "" : state.startsWith("pending") ? " — run не вирішений (PENDING)" : " — ПОЗА сіткою, перемалювання попереду"}`);
+  for (const r of [...grid.lower.rungs].sort((a, b) => b.price - a.price)) lines.push(rung(r));
+  lines.push(edgeLine("lower"));
+  return lines;
+}
+
+function sinceLinesUa(grid, barTxt) {
+  if (!grid.since.length) return ["нічого — ні run, ні повернення на 4h"];
+  const lb = (t) => (t.startsWith("bull") ? "bull" : "bear");
+  return grid.since.slice(-8).map((e) => {
+    const when = barTxt(e.bars_ago);
+    switch (e.type) {
+      case "low_swept":
+      case "high_swept":
+        return `${e.type === "low_swept" ? "лоу" : "хай"} ${fmt(e.level)}${e.touches > 1 ? ` x${e.touches}` : ""} run ${when}`;
+      case "bull_lb_created":
+      case "bear_lb_created":
+        return `повернення → ${lb(e.type)} LB ${zoneTxt(e.zone)}${e.qualified ? " Q" : ""} ${when}`;
+      case "bull_lb_invalidated":
+      case "bear_lb_invalidated":
+        return `${lb(e.type)} LB ${zoneTxt(e.zone)} killed ${when} (трейд за екстремум)`;
+      case "bull_lb_deepened":
+      case "bear_lb_deepened":
+        return `${lb(e.type)} LB ${zoneTxt(e.zone)} поглиблена до ${fmt(e.ext)} ${when} — той самий trap; вирішує повернення за ${fmt(e.level)}`;
+      case "low_poke":
+      case "high_poke":
+        return `прокол ${fmt(e.level)} до ${fmt(e.ext)} ${when} — дно ${fmt(e.floor)} ціле (inducement у кишеню)`;
+      case "bull_lb_tap":
+      case "bear_lb_tap":
+        return `тап ${lb(e.type)} LB ${zoneTxt(e.zone)} ${when}`;
+      case "low_breakdown":
+      case "high_breakdown":
+        return `${e.type === "low_breakdown" ? "лоу" : "хай"} ${fmt(e.level)} пройдено без повернення ${when} — continuation`;
+      case "buyers_induced":
+      case "sellers_induced":
+        return `${e.type === "buyers_induced" ? "покупців" : "продавців"} індуковано ${when} (run ${e.type === "buyers_induced" ? "хаю" : "лоу"} ${fmt(e.level)}) — їхні стопи біля origin ${fmt(e.origin)} (V8)`;
+      case "origin_run":
+        return `origin ${fmt(e.origin)} run ${when} — індуковані ${e.side === "bull" ? "покупці" : "продавці"} в пастці; вирішує повернення (V8)`;
+      default:
+        return `${e.type} ${when}`;
+    }
+  });
+}
+
+/**
+ * The setups of one instrument in the journal's shape — the fields
+ * `plan_add_setup` takes (instrument, direction, setup_type, key_levels,
+ * targets ≤ 3, planned_size, planned_r, setup_description) plus what the
+ * brief needs to rank and print them (trigger, actionable, over_cap, far,
+ * short, title). Rules from .claude/skills/journal-weekly-plan/SKILL.md:
+ * tap → lb-zone-tap, run + reclaim → sweep-trigger, a counter-edge trade →
+ * early-week-counter-trend (Mon–Tue only); two rungs at most per setup and
+ * only in one zone; targets nearest first from the rung's own T1; the global
+ * target never in `targets`; `BE:` = the first target-side level; the $ risk
+ * from the tick-rounded stop; every `entry when` a positive condition with
+ * the two session windows and the gate folded in.
+ */
+export function dailySetups(r, daily = {}) {
+  const g = r.grid;
+  const sc = r.scenarios;
+  const w = r.weekly ?? {};
+  const empty = { state: "—", setups: [], alerts: [], partials: [], top: null, skip: [], windows: null };
+  if (!g || !sc || !w.bias) return empty;
+  const long = w.bias === "long";
+  const side = long ? "long" : "short";
+  const cSide = long ? "short" : "long";
+  const over = long ? "над" : "під"; // a close back OVER the level (long) / UNDER it (short)
+  const under = long ? "під" : "над"; // the stop / a trade UNDER (long) / OVER (short)
+  const lowWord = long ? "лоу" : "хай";
+  const lbWord = long ? "bull" : "bear";
+  const cLbWord = long ? "bear" : "bull";
+  const tz = daily.local_tz ?? null;
+  const exch = daily.exchange_tz ?? "America/New_York";
+  const clock = briefClock(daily, r);
+  const at = (h, zone, m = 0) => (tz ? hourIn(tz, daily.trading_day, h, zone, m) : null);
+  const windows = tz ? `London ${at(8, "Europe/London")}–${at(16, "Europe/London", 30)} · NY ${at(9, exch, 30)}–${at(16, exch)}` : WINDOWS_FALLBACK;
+  const gateFrom = tz ? at(10, exch) : "10:00 ET";
+  const win = `${windows} · після ${gateFrom} через гейт`;
+  const ctOpen = daily.counter_trend_open ?? !/^closed/i.test(daily.counter_trend_note ?? "");
+  const byTxt = (n) => (clock && n > 0 ? `до ${clock.closes(n).at(-1)}` : `протягом ${n} 4h-бар(ів)`);
+  const barTxt = (k) => (clock ? `у барі ${clock.bar(k)}` : k === 0 ? "у цьому барі" : `${k} бар(ів) тому`);
+
+  const tick = r.contract?.tick ?? null;
+  const T = tickFns(tick);
+  const fx = (tick ?? 1) < 0.001;
+  const stopPx = (n) => (n == null ? null : long ? T.down(n) : T.up(n));
+  const price = r.quote?.last ?? g.price ?? null;
+  const atr = g.atr ?? null;
+  const pts = (n) => (n == null ? "—" : fx ? `${Number((n / 0.0001).toFixed(1))} pips` : `${fmt(T.near(n))} пт`);
+  const dist = (p) => (p == null || price == null ? "" : `${p >= price ? "+" : "−"}${pts(Math.abs(p - price))}`);
+  const reachable = (p) => (p == null || price == null || !atr ? true : Math.abs(p - price) / atr <= REACH_ATR);
+  const farTxt = (p) => `не сьогодні: ${dist(p)} ≈ ${Math.round(Math.abs(p - price) / atr)}× ATR 4h`;
+  const upp = r.contract?.usd_per_point ?? null;
+  const cap = daily.risk_cap ?? null;
+  const usd = (entry, stop, fb) => (upp && entry != null && stop != null ? Math.round(Math.abs(entry - stop) * upp) : fb != null ? Math.round(fb) : null);
+  const overCap = (n) => cap != null && n != null && n > cap;
+  const capPts = upp && cap != null ? cap / upp : null;
+  const stopRule = `stop ${under} ${lowWord} run з 1h/15m LB${capPts != null ? `, макс ${pts(capPts)} = $${cap}` : ""}`;
+  const usdTxt = (n) => (n == null ? null : `$${n}${overCap(n) ? " ⚠ над лімітом" : ""}`);
+  const rrOf = (entry, stop, t1) => (entry == null || stop == null || t1 == null || entry === stop ? null : Math.round((Math.abs(t1 - entry) / Math.abs(entry - stop)) * 10) / 10);
+  const beLine = (t1) => (t1 == null ? null : `BE: ${fmt(t1)} · стоп → вхід після взяття`);
+
+  const biasEdge = long ? g.lower : g.upper;
+  const counterEdge = long ? g.upper : g.lower;
+  const pend = biasEdge?.pending ?? null;
+  const kill = biasEdge?.kill != null ? stopPx(biasEdge.kill) : null;
+  const respect = g.respect ?? 0;
+  const buf = sc.stop_buffer ?? (atr ? atr * 0.1 : 0);
+  const edgeLvl = (it) => (!it ? null : it.kind === "lb" ? it.zone[long ? 1 : 0] : it.price);
+  const nextEdgeItem = sc.C?.next_edge ?? null;
+  const nextEdge = nextEdgeItem ? itemTxt(nextEdgeItem) : "рівня в полі зору нема";
+  const redrawTo = nextEdgeItem ? `сітка перемальовується до ${nextEdge}` : "сітка перемальовується, наступного рівня в полі зору нема";
+  const nextLvl = edgeLvl(nextEdgeItem);
+  const header = row(`${w.mode ?? side}/${w.regime ?? "—"}`, w.invalidation ? `inval ${fmt(w.invalidation.level)} ${invalTag(w.invalidation.rule)}` : null);
+  const globalLine = w.primary_target != null ? `global: ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""} лише фінальна ціль` : null;
+  const invalLine = w.invalidation ? `breakdown: ${invalUa(w.invalidation.rule)} ${fmt(w.invalidation.level)} = інвалідація W-біасу, ${long ? "лонгів" : "шортів"} нема` : null;
+
+  // the target ladder beyond an entry: the rung's own T1 first, then the
+  // counter rungs, the counter edge and what lies beyond it — at most three
+  const ladder = [...(sc.partials ?? []).map((p) => p.price), counterEdge?.edge ?? null, edgeLvl(sc.D?.beyond)].filter((p) => p != null);
+  const targetsFrom = (entry, t1) => {
+    if (entry == null) return [];
+    const beyond = (p) => (long ? p > entry : p < entry);
+    const cands = [t1, ...ladder].filter((p) => p != null && beyond(p)).sort((a, b) => (long ? a - b : b - a));
+    const out = [];
+    for (const p of cands) {
+      if (t1 != null && (long ? p < t1 : p > t1)) continue;
+      if (!out.some((q) => fmt(q) === fmt(p) || Math.abs(q - p) <= respect / 3)) out.push(p);
+      if (out.length === 3) break;
+    }
+    return out;
+  };
+
+  const alerts = [];
+  const addAlert = (p) => {
+    if (p == null || price == null || !Number.isFinite(p)) return;
+    const v = T.near(p);
+    if (!alerts.includes(v)) alerts.push(v);
+  };
+  const name = r.contract?.journal ?? r.symbol;
+  const mk = (o) => ({ instrument: name, direction: side, planned_size: 1, header, far: null, over_cap: false, ...o });
+  const opp = [];
+  const skip = [];
+
+  const wf = sc.wait_for;
+  const state = wf.answer === "pending" ? "PENDING" : wf.answer === "yes" ? "VALID" : "WAITING";
+
+  if (pend) {
+    // the reclaim is the event; the tap of the LB it leaves is the entry (V6)
+    const A = sc.A;
+    const stop = stopPx(A.stop);
+    const risk = usd(A.trigger, stop, A.risk_usd);
+    const targets = targetsFrom(A.trigger, A.target);
+    const rr = rrOf(A.trigger, stop, targets[0]);
+    opp.push(
+      mk({
+        kind: "reclaim",
+        setup_type: "sweep-trigger",
+        trigger: A.trigger,
+        key_levels: [A.trigger],
+        targets,
+        stop,
+        risk,
+        planned_r: rr,
+        actionable: !overCap(risk),
+        over_cap: overCap(risk),
+        lines: [
+          `entry when: 1h/15m-закриття назад ${over} ${fmt(A.trigger)} ${byTxt(pend.bars_left)} → тап ${lbWord} LB ${zoneTxt(A.stop_anchor)}, яку лишить закриття (не на самому run, V6) · ${win}`,
+          row(`K1 sweep+reclaim ${fmt(A.trigger)}`, `stop ${fmt(stop)}`, usdTxt(risk), `RR ${fmtRr(rr)}`, `run краю ${fmt(pend.level)}${pend.touches > 1 ? ` x${pend.touches}` : ""}, повернення = trap`, overCap(risk) ? "над лімітом: стоп з 1h/15m LB після повернення або пропуск" : null),
+          beLine(targets[0]),
+          `deeper run: новий ${lowWord} ${under} ${fmt(pend.ext)} — екстремум і стоп їдуть за ним, $ перерахувати проти ліміту · те саме entry when`,
+          `breakdown: нема закриття назад ${over} ${fmt(A.trigger)} ${byTxt(pend.bars_left)}, або 4h-трейд ${under} ${fmt(kill)} → ${redrawTo} · entry when: run того краю закривається назад`,
+          globalLine,
+        ].filter(Boolean),
+        short: row(`sweep+reclaim ${fmt(A.trigger)} ${byTxt(pend.bars_left)} → тап ${zoneTxt(A.stop_anchor)}`, `stop ${fmt(stop)}`, usdTxt(risk), `T1 ${fmt(targets[0])}`),
+      }),
+    );
+    addAlert(A.trigger);
+    addAlert(pend.ext);
+  } else {
+    const B = sc.B;
+    const A = sc.A;
+    const hasB = !!(B && B.trigger != null);
+    const hasA = !!(A && A.trigger != null && !A.pocket);
+    const useA = hasA ? (A.over_cap && A.refined ? A.refined : A) : null;
+    const bKind = /run of the bias-side edge/.test(B?.label ?? "") ? "edge" : /nearest H4 rung/.test(B?.label ?? "") ? "rung" : "trap";
+    const bWhy = !hasB
+      ? null
+      : bKind === "edge"
+        ? `run краю біасу${B.confirmed ? ` x${B.touches}` : " x1"}`
+        : bKind === "rung"
+          ? `найближчий 4h-рівень${B.touches > 1 ? ` x${B.touches}` : " x1"} перед краєм ${fmt(biasEdge?.edge)}`
+          : `${tfLabel(B.tf)} trap усередині сітки`;
+    const bEntryWhen = (lvl) => `1h/15m-закриття ${under} ${fmt(lvl)} і наступне закриття назад ${over} ним → тап LB, яку лишить той бар`;
+    const bStop = hasB && B.stop != null && !B.over_cap ? stopPx(B.stop) : null;
+    const bStopTxt = !hasB ? null : bStop != null ? `stop ${fmt(bStop)} (${under} LB ${zoneTxt(B.stop_anchor)})` : stopRule;
+    const bRisk = hasB && bStop != null ? usd(B.trigger, bStop, B.risk_usd) : null;
+    const bOverNote = hasB && B.over_cap ? "4h-якір над лімітом — стоп з 1h/15m LB після повернення" : null;
+    const aEntryWhen = hasA ? `1h-закриття назад у LB ${zoneTxt(useA.stop_anchor)} + 5m-run ${fmt(useA.stop_anchor?.[long ? 0 : 1])} із закриттям назад — ${lowWord} того 5m-бара = стоп` : null;
+    const aStop = hasA ? stopPx(useA.stop) : null;
+    const aRisk = hasA ? usd(useA.trigger, aStop, useA.risk_usd) : null;
+    const aWhy = hasA
+      ? `${tfLabel(useA.tf ?? A.tf)} LB ${zoneTxt(useA.stop_anchor)}${useA !== A ? ` усередині ${tfLabel(A.tf)} LB ${zoneTxt(A.stop_anchor)}` : ""}${/thin zone/.test(A.note ?? "") ? ", тонка зона — стоп з 5m LB" : ""}${A.unrefined ? ", агресивний вхід (E1)" : ""}`
+      : null;
+    const aDeeper = !hasA
+      ? null
+      : useA !== A
+        ? `deeper run: глибший прокол у ${zoneTxt(A.stop_anchor)} (стоп 4h-зони ${fmt(stopPx(A.stop))} = $${Math.round(A.risk_usd)}, над лімітом) забирає цей стоп, не ідею — re-entry (V7)`
+        : `deeper run: трейд за ${fmt(aStop)} = re-entry з повернення (V7), не ширший стоп`;
+    const unrefinedLine = hasA && A.unrefined ? `refined (E1): ${lowWord} ${fmt(A.unrefined.floor)}${A.unrefined.touches > 1 ? ` x${A.unrefined.touches}` : ""} зліва цілий — уточнений вхід, коли його 1h/15m-run закриється назад, той самий стоп` : null;
+    const breakdownLine =
+      biasEdge?.edge == null
+        ? "breakdown: краю біасу в полі зору нема"
+        : `breakdown: 4h-трейд ${under} ${fmt(kill)} без повернення → край ${fmt(biasEdge.edge)} знято, ${redrawTo} · entry when: run того краю закривається назад`;
+    const tapSkip = A && A.pocket ? `aggressive tap ${zoneTxt(A.stop_anchor)}${A.tf !== "240" ? ` (${tfLabel(A.tf)} LB)` : " (4h LB)"}: skip · inducement, під нею кишеня до ${fmt(A.pocket.floor)}` : null;
+    const close =
+      hasA &&
+      hasB &&
+      !useA.over_cap &&
+      (Math.abs(useA.trigger - B.trigger) <= respect || (A.stop_anchor && B.trigger >= A.stop_anchor[0] - respect && B.trigger <= A.stop_anchor[1] + respect));
+
+    if (close) {
+      // one zone, two rungs: the tap first (nearer), the run of its extreme second
+      const targets = targetsFrom(useA.trigger, useA.target ?? A.target ?? B.target);
+      const rr = rrOf(useA.trigger, aStop, targets[0]);
+      const near = reachable(useA.trigger);
+      opp.push(
+        mk({
+          kind: "tap+run",
+          setup_type: "lb-zone-tap",
+          trigger: useA.trigger,
+          key_levels: [useA.trigger, B.trigger],
+          targets,
+          stop: aStop,
+          risk: aRisk,
+          planned_r: rr,
+          actionable: near,
+          far: near ? null : farTxt(useA.trigger),
+          lines: [
+            `entry when: K1 — ${aEntryWhen}; K2 — ${bEntryWhen(B.trigger)} · ${win}`,
+            row(`K1 tap ${fmt(useA.trigger)}`, `stop ${fmt(aStop)}`, usdTxt(aRisk), `RR ${fmtRr(rr)}`, aWhy),
+            row(`K2 sweep+reclaim ${fmt(B.trigger)}`, bStopTxt, usdTxt(bRisk), `RR ${fmtRr(rrOf(B.trigger, bStop, targets[0]))}`, bWhy, bOverNote),
+            beLine(targets[0]),
+            aDeeper,
+            breakdownLine,
+            unrefinedLine,
+            globalLine,
+          ].filter(Boolean),
+          short: row(`tap ${fmt(useA.trigger)} (${dist(useA.trigger)}) / run ${fmt(B.trigger)} → ${side}`, `stop ${fmt(aStop)}`, usdTxt(aRisk), `T1 ${fmt(targets[0])}`),
+        }),
+      );
+      addAlert(useA.trigger);
+      addAlert(B.trigger);
+    } else {
+      if (hasB) {
+        const targets = targetsFrom(B.trigger, B.target);
+        const rr = rrOf(B.trigger, bStop, targets[0]);
+        const near = reachable(B.trigger);
+        opp.push(
+          mk({
+            kind: bKind,
+            setup_type: "sweep-trigger",
+            trigger: B.trigger,
+            key_levels: [B.trigger],
+            targets,
+            stop: bStop,
+            risk: bRisk,
+            planned_r: rr,
+            actionable: near,
+            far: near ? null : farTxt(B.trigger),
+            lines: [
+              `entry when: ${bEntryWhen(B.trigger)} · ${win}`,
+              row(`K1 sweep+reclaim ${fmt(B.trigger)}`, bStopTxt, usdTxt(bRisk), `RR ${fmtRr(rr)}`, bWhy, bOverNote),
+              beLine(targets[0]),
+              breakdownLine,
+              tapSkip,
+              globalLine,
+            ].filter(Boolean),
+            short: row(`sweep+reclaim ${fmt(B.trigger)} (${dist(B.trigger)}) → ${side}`, bStop != null ? `stop ${fmt(bStop)}` : "stop з 1h/15m LB", usdTxt(bRisk), `T1 ${fmt(targets[0])}`),
+          }),
+        );
+        addAlert(B.trigger);
+      } else if (tapSkip) skip.push(tapSkip);
+      if (hasA) {
+        const targets = targetsFrom(useA.trigger, useA.target ?? A.target);
+        const rr = rrOf(useA.trigger, aStop, targets[0]);
+        const near = reachable(useA.trigger);
+        const oc = !!useA.over_cap;
+        opp.push(
+          mk({
+            kind: "tap",
+            setup_type: "lb-zone-tap",
+            trigger: useA.trigger,
+            key_levels: [useA.trigger],
+            targets,
+            stop: aStop,
+            risk: aRisk,
+            planned_r: rr,
+            actionable: near && !oc,
+            over_cap: oc,
+            far: near ? null : farTxt(useA.trigger),
+            lines: [
+              `entry when: ${aEntryWhen} · ${win}`,
+              row(`K1 tap ${fmt(useA.trigger)}`, `stop ${fmt(aStop)}`, usdTxt(aRisk), `RR ${fmtRr(rr)}`, aWhy, oc ? "над лімітом: стоп з LB нижчого ТФ усередині зони або пропуск" : null),
+              beLine(targets[0]),
+              aDeeper,
+              unrefinedLine,
+              hasB ? null : breakdownLine,
+              globalLine,
+            ].filter(Boolean),
+            short: row(`tap ${fmt(useA.trigger)} (${dist(useA.trigger)}) → ${side}`, `stop ${fmt(aStop)}`, usdTxt(aRisk), `T1 ${fmt(targets[0])}`),
+          }),
+        );
+        addAlert(useA.trigger);
+      }
+    }
+    addAlert(biasEdge?.edge);
+  }
+
+  // the next edge beyond the grid — the breakdown's own setup, a rung apart
+  // from the rest (journal rule: rungs far apart are separate setups)
+  if (nextLvl != null && nextEdgeItem) {
+    const near = reachable(nextLvl);
+    const isLb = nextEdgeItem.kind === "lb";
+    const t1 = pend ? pend.level : biasEdge?.edge ?? null;
+    const targets = targetsFrom(nextLvl, t1);
+    const far = isLb ? nextEdgeItem.zone[long ? 0 : 1] : null;
+    const stop = isLb ? stopPx(long ? far - buf : far + buf) : null;
+    const risk = usd(nextLvl, stop, null);
+    const rr = rrOf(nextLvl, stop, targets[0]);
+    opp.push(
+      mk({
+        kind: "next_edge",
+        setup_type: "sweep-trigger",
+        trigger: nextLvl,
+        key_levels: [nextLvl],
+        targets,
+        stop,
+        risk,
+        planned_r: rr,
+        actionable: near && !overCap(risk),
+        over_cap: overCap(risk),
+        far: near ? null : farTxt(nextLvl),
+        lines: [
+          `entry when: run ${fmt(nextLvl)} (${nextEdge}) + 1h/15m-закриття назад ${over} ${isLb ? fmt(nextLvl) : "ним"} → тап LB, яку лишить закриття · ${win}`,
+          row(`K1 sweep+reclaim ${fmt(nextLvl)}`, stop != null ? `stop ${fmt(stop)} (${under} ${fmt(far)} + буфер)` : stopRule, usdTxt(risk), `RR ${fmtRr(rr)}`, `наступний край за сіткою, ${dist(nextLvl)} від ціни`),
+          beLine(targets[0]),
+          invalLine,
+          globalLine,
+        ].filter(Boolean),
+        short: row(`sweep+reclaim ${fmt(nextLvl)} (${dist(nextLvl)}) → ${side}`, stop != null ? `stop ${fmt(stop)}` : "stop з 1h/15m LB", usdTxt(risk), `T1 ${fmt(targets[0])}`),
+      }),
+    );
+    addAlert(nextLvl);
+  }
+
+  // the counter edge: a partial always; a counter-trend setup on Mon–Tue only
+  let top = null;
+  if (counterEdge?.edge != null) {
+    const pc = counterEdge.pending;
+    const t1 = (sc.partials ?? []).at(-1)?.price ?? biasEdge?.edge ?? null;
+    const beyond = sc.D?.beyond ? itemTxt(sc.D.beyond) : "наступного рівня";
+    top = {
+      edge: counterEdge.edge,
+      pending: pc ?? null,
+      lines: [
+        pc ? `run ${barTxt(pc.bars_since_run)} до ${fmt(pc.ext)}, повернення ${byTxt(pc.bars_left)}` : null,
+        `часткова фіксація на ${side} біля ${fmt(counterEdge.edge)}${ctOpen ? "" : " · контр-тренд закритий (лише пн–вт)"}`,
+        `білдап, який лишить його хибна реакція, = наступний тригер на ${side}`,
+        `continuation when: 1h-закриття ${long ? "над" : "під"} ${fmt(counterEdge.edge)} → шлях до ${beyond} відкритий, стоп у BE`,
+      ].filter(Boolean),
+    };
+    if (ctOpen) {
+      const targets = t1 != null ? [t1] : [];
+      opp.push({
+        instrument: name,
+        direction: cSide,
+        planned_size: 1,
+        kind: "counter",
+        setup_type: "early-week-counter-trend",
+        trigger: counterEdge.edge,
+        key_levels: [counterEdge.edge],
+        targets,
+        stop: null,
+        risk: null,
+        planned_r: null,
+        actionable: reachable(counterEdge.edge),
+        over_cap: false,
+        far: reachable(counterEdge.edge) ? null : farTxt(counterEdge.edge),
+        header: row(`контр-тренд (пн–вт) проти W ${side}`, header),
+        lines: [
+          `entry when: run ${fmt(counterEdge.edge)} + 1h-закриття назад ${long ? "під" : "над"} ним → ${cSide} на ретесті ${cLbWord} LB, яку лишить закриття · до ${gateFrom}, flat у тій самій сесії`,
+          row(`K1 sweep+reclaim ${fmt(counterEdge.edge)}`, `stop ${long ? "над хаєм" : "під лоу"} run${capPts != null ? `, макс ${pts(capPts)} = $${cap}` : ""}`, "RR —", "pullback origin: лише до найближчої цілі, не тримати проти W-біасу, займає слот"),
+          t1 != null ? `BE: ${fmt(t1)} · це і єдина ціль` : null,
+          `breakdown: 1h-закриття ${long ? "над" : "під"} ${fmt(counterEdge.edge)} = continuation до ${beyond} — ${cSide} скасовано`,
+        ].filter(Boolean),
+        short: `CT ${cSide}: run ${fmt(counterEdge.edge)} + 1h-закриття назад · T1 ${fmt(t1)}`,
+      });
+    }
+    addAlert(counterEdge.edge);
+  }
+
+  // reachable and inside the cap first, the original priority kept inside each group
+  const ranked = [...opp.filter((o) => o.actionable), ...opp.filter((o) => !o.actionable)];
+  const main = ranked.find((o) => o.actionable && o.kind !== "counter") ?? ranked.find((o) => o.actionable) ?? null;
+  const setups = ranked.map((o, i) => {
+    const { lines, header: h, ...rest } = o;
+    return {
+      n: i + 1,
+      main: o === main,
+      ...rest,
+      title: row(`${o.instrument} · ${o.direction} · ${o.setup_type}`, `K ${o.key_levels.map(fmt).join(" / ")}`, o.targets.length ? `T ${o.targets.map(fmt).join(" / ")}` : "T —", `R ${fmtRr(o.planned_r)}`, `size ${o.planned_size}`),
+      setup_description: [h, ...lines.map((l) => `- ${l}`)].join("\n"),
+    };
+  });
+  return { state, setups, alerts, partials: sc.partials ?? [], top, skip, windows: win, dist };
+}
 
 export function renderDailyMarkdown(daily) {
   const tz = daily.local_tz ?? null;
   const exch = daily.exchange_tz ?? "America/New_York";
-  const clock = briefClock(daily);
-  const ctOpen = !/^closed/i.test(daily.counter_trend_note ?? "");
   const at = (h, zone, m = 0) => (tz ? hourIn(tz, daily.trading_day, h, zone, m) : null);
-  const barTxt = (k) => (clock ? `in the ${clock.bar(k)} bar` : k === 0 ? "this bar" : k === 1 ? "1 bar ago" : `${k} bars ago`);
-  const reClock = (txt) =>
-    clock && txt ? txt.replace(/\b(this bar|1 bar ago|(\d+) bars ago)\b/g, (m, _a, n) => barTxt(m === "this bar" ? 0 : m === "1 bar ago" ? 1 : Number(n))) : txt;
-  const closesTxt = (n) => (clock ? `at ${clock.closes(n).join(" or ")}` : `within ${n} 4h bar(s)`);
-  const byTxt = (n) => (clock && n > 0 ? `by ${clock.closes(n).at(-1)}` : `within ${n} 4h bar(s)`);
+  const ctOpen = daily.counter_trend_open ?? !/^closed/i.test(daily.counter_trend_note ?? "");
+  const cap = daily.risk_cap ?? null;
 
   const summary = [];
   const blocks = [];
+  let clock0 = null;
   for (const r of daily.results) {
     if (r.skipped) {
-      blocks.push(`## ${r.symbol} — skipped: ${r.skipped}`, "");
+      blocks.push(`## ${r.symbol} — пропущено: ${r.skipped}`, "");
       continue;
     }
     if (r.error) {
-      blocks.push(`## ${r.symbol} — ERROR: ${r.error}`, "");
+      blocks.push(`## ${r.symbol} — ПОМИЛКА: ${r.error}`, "");
       continue;
     }
     const out = [];
-    const long = r.weekly.bias === "long";
-    const w = r.weekly;
+    const w = r.weekly ?? {};
+    const long = w.bias === "long";
     const side = long ? "long" : "short";
-    const above = long ? "above" : "below";
-    const below = long ? "below" : "above";
-    const lowWord = long ? "low" : "high";
+    const over = long ? "над" : "під";
+    const under = long ? "під" : "над";
+    const lowWord = long ? "лоу" : "хай";
     const lbWord = long ? "bull" : "bear";
-    const cLbWord = long ? "bear" : "bull";
     const T = tickFns(r.contract?.tick ?? null);
-    const stopPx = (n) => (long ? T.down(n) : T.up(n));
+    const stopPx = (n) => (n == null ? null : long ? T.down(n) : T.up(n));
     const name = r.contract?.journal ?? r.symbol;
     const g = r.grid;
     const sc = r.scenarios;
     const price = r.quote?.last ?? g?.price ?? null;
-    const atr = g?.atr ?? null;
-    const dist = (p) => (p == null || price == null ? "" : `${p >= price ? "+" : "−"}${fmt(T.near(Math.abs(p - price)))}`);
-    const reachable = (p) => (p == null || price == null || !atr ? true : Math.abs(p - price) / atr <= REACH_ATR);
-    const farTxt = (p) => `not today: ${dist(p)} ≈ ${Math.round(Math.abs(p - price) / atr)}× the 4h ATR`;
     const biasEdge = g ? (long ? g.lower : g.upper) : null;
     const counterEdge = g ? (long ? g.upper : g.lower) : null;
     const pend = biasEdge?.pending ?? null;
     const kill = biasEdge?.kill != null ? stopPx(biasEdge.kill) : null;
-    const upp = r.contract?.usd_per_point ?? null;
-    const usd = (entry, stop, fb) => (upp && entry != null && stop != null ? Math.round(Math.abs(entry - stop) * upp) : fb != null ? Math.round(fb) : null);
-    const usdTxt = (n) => (n == null ? "" : ` · $${n}${daily.risk_cap != null && n > daily.risk_cap ? " ⚠ over cap" : ""}`);
+    const clock = briefClock(daily, r);
+    clock0 ??= clock;
+    const barTxt = (k) => (clock ? `у барі ${clock.bar(k)}` : k === 0 ? "у цьому барі" : `${k} бар(ів) тому`);
+    const closesTxt = (n) => (clock && n > 0 ? `о ${clock.closes(n).join(" або ")}` : `протягом ${n} 4h-бар(ів)`);
+    const S = dailySetups(r, daily);
 
-    const inval = w.invalidation ? ` · inval ${w.invalidation.rule} ${fmt(w.invalidation.level)}` : "";
-    out.push(`## ${name} · ${(w.bias ?? "none").toUpperCase()} · ${fmt(r.quote?.last)}${inval}${r.roll?.status === "rolled" ? " · CONTRACT ROLLED" : ""}`);
+    const inval = w.invalidation ? ` · inval ${invalShort(w.invalidation.rule)} ${fmt(w.invalidation.level)}` : "";
+    out.push(`## ${name} · ${(w.bias ?? "none").toUpperCase()} · ${fmt(price)}${inval}${r.roll?.status === "rolled" ? " · CONTRACT ROLLED" : ""}`);
     if (r.roll?.status === "rolled") {
-      out.push(
-        `**Roll.** ${r.roll.note} Every level of the weekly layer below is shifted by ${r.roll.offset > 0 ? "+" : ""}${fmt(r.roll.offset)}; redraw your lines and the journal plan by the same amount.`,
-      );
+      out.push(`**Roll.** ${r.roll.note} Кожен рівень тижневого шару нижче зсунуто на ${r.roll.offset > 0 ? "+" : ""}${fmt(r.roll.offset)}; перемалюй лінії і план у журналі на ту саму величину.`);
     } else if (r.roll?.status === "inconsistent") {
-      out.push(`**Data warning.** ${r.roll.note}`);
+      out.push(`**Дані.** ${r.roll.note}`);
     }
-    out.push(`**Bias.** W ${w.bias}/${w.regime}${w.stale ? " (stale)" : ""} · global target ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""}.`);
+    out.push(
+      `**Bias.** W ${w.mode ? (MODE_UA[w.mode] ?? w.mode) : (w.bias ?? "—")}/${w.regime ?? "—"}${w.daily_mode ? ` · D ${MODE_UA[w.daily_mode] ?? w.daily_mode}` : ""}${w.stale ? " (stale)" : ""} · глобальна ціль ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""}.`,
+    );
 
-    // ---- Now: one state word, the event behind it (clock time), what changes it
-    let state = "—";
-    if (sc) {
+    // ---- Now: one state word, the event behind it (bar time), what changes it
+    if (sc && g) {
       const wf = sc.wait_for;
-      state = wf.answer === "pending" ? "PENDING" : wf.answer === "yes" ? "VALID" : "WAITING";
       const now = [];
       if (pend) {
-        now.push(
-          `**Now: PENDING (4h).** ${lowWord} ${fmt(pend.level)}${pend.touches > 1 ? ` x${pend.touches}` : ""} run ${barTxt(pend.bars_since_run)} to ${fmt(pend.ext)} — the reclaim decides.`,
-        );
-      } else {
+        now.push(`**Now: PENDING (4h).** ${lowWord} ${fmt(pend.level)}${pend.touches > 1 ? ` x${pend.touches}` : ""} run ${barTxt(pend.bars_since_run)} до ${fmt(pend.ext)} — вирішує повернення.`);
+      } else if (wf.answer === "yes") {
         const tf = wf.timeframe ?? "240";
-        const ev = (wf.read ?? "no bias-side event on the 4h or 1h").split(" — ")[0];
-        const lb = wf.answer === "yes" ? r.timeframes?.[tf]?.story?.lb?.zone : null;
-        now.push(`**Now: ${state}${wf.timeframe ? ` (${tfLabel(wf.timeframe)})` : ""}${wf.fresh === false ? ", stale" : ""}.** ${tf === "240" ? reClock(ev) : ev}${lb ? ` · ${lbWord} LB ${zoneTxt(lb)}` : ""}.`);
+        const lb = r.timeframes?.[tf]?.story?.lb?.zone ?? null;
+        const k = agoOf(wf.read);
+        const when = k == null ? "" : tf === "240" ? ` ${barTxt(k)}` : ` ${k === 0 ? "у цьому барі" : `${k} бар(ів) тому`} (${tfLabel(tf)})`;
+        now.push(`**Now: VALID (${tfLabel(tf)})${wf.fresh === false ? ", stale" : ""}.** trap: ${lowWord} run і повернення${when}${lb ? ` → ${lbWord} LB ${zoneTxt(lb)}` : ""}.`);
+      } else {
+        const st = r.timeframes?.["240"]?.story;
+        const tail =
+          st?.mode === "no_mans_land"
+            ? ` · ${st.read.replace(/^build-up phase between (\S+) and (\S+).*/, "build-up між $1 і $2 — no-man's land").replace(/^no recent runs.*/, "run не було, мапа однобока")}`
+            : st?.mode
+              ? ` · 4h: ${MODE_UA[st.mode] ?? st.mode}`
+              : "";
+        now.push(`**Now: WAITING.** trap у бік біасу на 4h/1h нема${tail}.`);
       }
       if (wf.pointer) {
         const p = wf.pointer;
-        now.push(`Trap pointer (${tfLabel(p.timeframe)}): the ${p.induced.who} induced by the run of ${fmt(p.induced.level)} have their stops ${long ? "under" : "over"} **${fmt(p.price)}** — its run is the trap.`);
+        now.push(`Trap pointer (${tfLabel(p.timeframe)}): ${p.induced.who === "buyers" ? "покупці" : "продавці"}, індуковані run ${fmt(p.induced.level)}, тримають стопи ${long ? "під" : "над"} **${fmt(p.price)}** — його run = trap.`);
       }
-      if (g?.since?.length) now.push(`Since the last check: ${sinceLines(g).slice(-4).map((l) => reClock(l.trim())).join(" · ")}.`);
+      if (g.since?.length) now.push(`З останньої перевірки: ${sinceLinesUa(g, barTxt).slice(-4).join(" · ")}.`);
       if (counterEdge?.pending) {
         const pc = counterEdge.pending;
-        now.push(`Counter edge ${fmt(pc.level)} PENDING: run ${barTxt(pc.bars_since_run)} to ${fmt(pc.ext)} — a 1h close back = pullback origin, a miss = continuation.`);
+        now.push(`Контр-край ${fmt(pc.level)} PENDING: run ${barTxt(pc.bars_since_run)} до ${fmt(pc.ext)} — 1h-закриття назад = pullback origin, пропуск = continuation.`);
       }
       const changes = pend
-        ? `a 4h close back ${above} ${fmt(pend.level)} ${closesTxt(pend.bars_left)} → VALID (${lbWord} LB ${zoneTxt(pend.lb_if_reclaimed)}) · a miss, or a 4h trade ${below} ${fmt(kill)} → BREAKDOWN`
+        ? `4h-закриття назад ${over} ${fmt(pend.level)} ${closesTxt(pend.bars_left)} → VALID (${lbWord} LB ${zoneTxt(pend.lb_if_reclaimed)}) · пропуск або 4h-трейд ${under} ${fmt(kill)} → BREAKDOWN`
         : wf.answer === "yes"
-          ? `a 4h trade ${below} ${fmt(kill)} without a reclaim → BREAKDOWN · the run of ${fmt(counterEdge?.edge)} → TOP`
-          : `the run of ${fmt(biasEdge?.edge)} with a 1h/15m close back → VALID · a 4h trade ${below} ${fmt(kill)} without a reclaim → BREAKDOWN`;
-      now.push(`State changes on: ${changes}.`);
+          ? `4h-трейд ${under} ${fmt(kill)} без повернення → BREAKDOWN · run ${fmt(counterEdge?.edge)} → TOP`
+          : `run ${fmt(biasEdge?.edge)} з 1h/15m-закриттям назад → VALID · 4h-трейд ${under} ${fmt(kill)} без повернення → BREAKDOWN`;
+      now.push(`Стан змінить: ${changes}.`);
+      const fb = r.exec_bars?.forming ?? null;
+      if (fb && clock) {
+        const runOn = pend ? (long ? fb.low < pend.ext : fb.high > pend.ext) : biasEdge?.edge != null && (long ? fb.low < biasEdge.edge : fb.high > biasEdge.edge);
+        const back = pend && (long ? fb.close > pend.level : fb.close < pend.level);
+        now.push(
+          `Бар ${clock.cur} ще відкритий: H ${fmt(fb.high)} / L ${fmt(fb.low)} / зараз ${fmt(fb.close)} — до закриття не рахується${runOn ? ` · ${pend ? `новий ${lowWord} за ${fmt(pend.ext)}` : `run краю ${fmt(biasEdge.edge)} триває`}` : ""}${back ? ` · ціна ${over} ${fmt(pend.level)}, повернення лише на закритті ${clock.closes(1)[0]}` : ""}.`,
+        );
+      }
       out.push(now.join("\n"));
     }
 
     // ---- Grid
     if (g) {
-      out.push("", "**Grid 4h** (levels are for alerts, not orders):");
-      out.push(...gridLines(g, long).map(reClock));
-      const beyond = (s) => (s.beyond.length ? s.beyond.map(itemTxt).join(" → ") : "nothing in view");
-      out.push(`  beyond: ▲ ${beyond(g.upper)} · ▼ ${beyond(g.lower)}`);
+      out.push("", "**Grid 4h** (рівні — для алертів, не ордерів):");
+      out.push(...gridLinesUa(g, long, barTxt));
+      const beyond = (s) => (s.beyond.length ? s.beyond.map(itemTxt).join(" → ") : "нічого в полі зору");
+      out.push(`  далі: ▲ ${beyond(g.upper)} · ▼ ${beyond(g.lower)}`);
     }
 
-    // ---- Scenarios
+    // ---- Setups, in the journal's shape
     let mainShort = null;
-    const alerts = [];
-    const addAlert = (p) => {
-      if (p == null || price == null || !Number.isFinite(p)) return;
-      const v = T.near(p);
-      if (!alerts.some((a) => a === v)) alerts.push(v);
-    };
-    if (sc) {
-      const nextEdge = sc.C?.next_edge ? itemTxt(sc.C.next_edge) : "no level in view";
-      const edgeLvl = (it) => (!it ? null : it.kind === "lb" ? it.zone[long ? 1 : 0] : it.price);
-      const opp = []; // entry scenarios, ranked
-      const tail = []; // structure: deeper run, breakdown, top
-      if (pend) {
-        const A = sc.A;
-        const stop = stopPx(A.stop);
-        const risk = usd(A.trigger, stop, A.risk_usd);
-        opp.push({
-          trigger: A.trigger,
-          actionable: !A.over_cap,
-          title: `RECLAIM ${fmt(A.trigger)} → ${side}`,
-          lines: [
-            `entry when: a 1h/15m close back ${above} ${fmt(A.trigger)} ${byTxt(pend.bars_left)} → tap of the ${lbWord} LB ${zoneTxt(A.stop_anchor)} it leaves (not on the run itself, V6)`,
-            `entry ${fmt(A.trigger)} · stop ${fmt(stop)} · T1 ${fmt(A.target)} · RR ${fmtRr(A.rr)}${usdTxt(risk)}${A.over_cap ? " — refine on a lower-TF LB or pass" : ""}`,
-            `→ next: a new ${lowWord} beyond ${fmt(pend.ext)} = DEEPER RUN · no close back = BREAKDOWN`,
-          ],
-          short: `reclaim ${fmt(A.trigger)} ${byTxt(pend.bars_left)} → tap ${zoneTxt(A.stop_anchor)} · stop ${fmt(stop)}${usdTxt(risk)} · T1 ${fmt(A.target)}`,
-        });
-        addAlert(A.trigger);
-        addAlert(pend.ext);
-        tail.push({
-          title: `DEEPER RUN → the same trade, ${long ? "lower" : "higher"}`,
-          lines: [`entry when: a new ${lowWord} beyond ${fmt(pend.ext)} first, then the same close back ${above} ${fmt(A.trigger)} · the stop follows the new ${lowWord} · recheck $ against the cap`],
-        });
-        tail.push({
-          title: "BREAKDOWN → next edge",
-          lines: [
-            `state when: no close back ${above} ${fmt(A.trigger)} ${byTxt(pend.bars_left)}, or a 4h trade ${below} ${fmt(kill)} → the grid redraws to ${nextEdge}`,
-            "entry when: the run of that edge closes back on the 4h/1h · stop beyond the run extreme",
-          ],
-        });
-        addAlert(edgeLvl(sc.C?.next_edge));
-      } else {
-        const B = sc.B;
-        const A = sc.A;
-        if (B && B.trigger != null) {
-          const edgeKind = /run of the bias-side edge/.test(B.label ?? "") ? "EDGE RUN" : /nearest H4 rung/.test(B.label ?? "") ? "4H LEVEL RUN" : B.tf === "60" ? "1H TRAP" : "4H TRAP";
-          const stop = B.stop == null ? null : stopPx(B.stop);
-          const risk = usd(B.trigger, stop, B.risk_usd);
-          const near = reachable(B.trigger);
-          opp.push({
-            trigger: B.trigger,
-            actionable: near,
-            title: `${edgeKind} ${fmt(B.trigger)}${B.confirmed ? ` x${B.touches}` : ""}${B.tf && B.tf !== "240" ? ` (${tfLabel(B.tf)})` : ""} → ${side}`,
-            lines: [
-              `entry when: a 1h/15m close ${below} ${fmt(B.trigger)} and the next close back ${above} it → tap of the LB that bar leaves`,
-              stop == null
-                ? `stop = the 1h/15m LB left by the reclaim · T1 ${fmt(B.target)} · ${dist(B.trigger)} from price`
-                : `stop ${fmt(stop)} (${long ? "under" : "over"} LB ${zoneTxt(B.stop_anchor)}) · T1 ${fmt(B.target)} · RR ${fmtRr(B.rr)}${usdTxt(risk)} · ${dist(B.trigger)} from price${B.over_cap ? " — the H4 anchor is over the cap: take the stop from the 1h/15m LB left by the reclaim" : ""}`,
-              ...(near ? [] : [farTxt(B.trigger)]),
-              `→ next: no reclaim within a few bars and a 4h trade ${below} ${fmt(kill)} = BREAKDOWN`,
-            ],
-            short: `${edgeKind.toLowerCase()} ${fmt(B.trigger)} (${dist(B.trigger)}) → ${side}${stop != null ? ` · stop ${fmt(stop)}` : ""}${usdTxt(risk)} · T1 ${fmt(B.target)}`,
-          });
-          addAlert(B.trigger);
-        }
-        if (A && A.trigger != null) {
-          const ext = A.stop_anchor ? A.stop_anchor[long ? 0 : 1] : null;
-          if (A.pocket) {
-            opp.push({
-              trigger: A.trigger,
-              actionable: false,
-              title: `TAP ${zoneTxt(A.stop_anchor)}${A.tf !== "240" ? ` (${tfLabel(A.tf)})` : ""} — inducement, skip`,
-              lines: [`a sweep of ${fmt(ext)} that closes back is another respect of ${fmt(A.pocket.floor)}; its ${long ? "buyers" : "sellers"} fuel the run of ${fmt(A.pocket.floor)} — that run is the entry`],
-            });
-          } else {
-            // the rung a trader can place an order on comes first
-            const use = A.over_cap && A.refined ? A.refined : A;
-            const near = reachable(use.trigger);
-            const stop = stopPx(use.stop);
-            const risk = usd(use.trigger, stop, use.risk_usd);
-            const lines = [
-              `entry when: a 1h close back into LB ${zoneTxt(use.stop_anchor)} plus a 5m sweep of ${fmt(use.stop_anchor?.[long ? 0 : 1])} that closes back — that 5m ${lowWord} is the stop`,
-              `tap ${fmt(use.trigger)} · stop ${fmt(stop)} · T1 ${fmt(use.target ?? A.target)} · RR ${fmtRr(use.rr)}${usdTxt(risk)} · ${dist(use.trigger)} from price${/thin zone/.test(A.note ?? "") ? " · thin zone, stop from the 5m LB" : ""}`,
-            ];
-            if (use !== A) lines.push(`refined inside the ${tfLabel(A.tf)} LB ${zoneTxt(A.stop_anchor)} (its own stop ${fmt(stopPx(A.stop))} is $${Math.round(A.risk_usd)}, over the cap) — a deeper stab takes this stop, not the idea: re-enter (V7)`);
-            else if (A.over_cap) lines.push("over the cap — refine the stop on a lower-TF LB inside the zone or pass");
-            if (A.unrefined) {
-              lines.push(`unrefined (E1): the ${lowWord} ${fmt(A.unrefined.floor)}${A.unrefined.touches > 1 ? ` x${A.unrefined.touches}` : ""} from the left is intact — refined entry when: its 1h/15m sweep closes back, same stop`);
-            }
-            if (!near) lines.push(farTxt(use.trigger));
-            lines.push(`→ next: a trade past ${fmt(stop)} = re-entry from the reclaim (V7), not a wider stop`);
-            opp.push({
-              trigger: use.trigger,
-              actionable: near && !use.over_cap,
-              title: `TAP ${zoneTxt(use.stop_anchor)}${A.unrefined ? " (aggressive)" : ""}${use.tf && use.tf !== "240" ? ` (${tfLabel(use.tf)})` : ""} → ${side}`,
-              lines,
-              short: `tap ${fmt(use.trigger)} (${dist(use.trigger)}) → ${side} · stop ${fmt(stop)}${usdTxt(risk)} · T1 ${fmt(use.target ?? A.target)}`,
-            });
-            addAlert(use.trigger);
-          }
-        }
-        tail.push({
-          title: "BREAKDOWN → next edge",
-          lines: [
-            biasEdge?.edge == null
-              ? "state when: no bias-side edge in view"
-              : `state when: a 4h trade ${below} ${fmt(kill)} without a reclaim → the edge ${fmt(biasEdge.edge)} is consumed, the grid redraws to ${nextEdge}`,
-            "entry when: the run of that edge closes back on the 4h/1h · stop beyond the run extreme",
-          ],
-        });
-        addAlert(biasEdge?.edge);
+    if (sc && g) {
+      const main = S.setups.find((s) => s.main) ?? null;
+      const first = S.setups[0] ?? null;
+      mainShort = main ? `${main.n}. ${main.short}` : `нічого досяжного — чекаємо${first?.trigger != null ? ` на ${fmt(first.trigger)} (${S.dist(first.trigger)})` : ""}`;
+      out.push("", `**Сетапи** (спочатку досяжні сьогодні; size 1, ліміт $${cap ?? "—"}).`);
+      if (!S.setups.length) out.push("сетапів нема — краю біасу в полі зору немає.");
+      for (const s of S.setups) {
+        out.push(`### ${s.n}. ${s.title}${s.main ? " — головний" : s.over_cap ? " — над лімітом" : s.far ? ` — ${s.far}` : ""}`);
+        out.push("```", s.setup_description, "```");
       }
-      if (counterEdge?.edge != null) {
-        const pc = counterEdge.pending;
-        const lines = [];
-        if (pc) lines.push(`state: run ${barTxt(pc.bars_since_run)} to ${fmt(pc.ext)}, reclaim ${byTxt(pc.bars_left)}`);
-        lines.push(
-          ctOpen
-            ? `entry when (${long ? "short" : "long"}): run of ${fmt(counterEdge.edge)} with a 1h close back → a new ${cLbWord} LB = pullback origin · counter-trend to the nearest rung only, flat the same session`
-            : `partial on the ${side} at ${fmt(counterEdge.edge)} · counter-trend closed today (Mon–Tue only)`,
-        );
-        lines.push(`the build-up its false reaction leaves is the next ${side} trigger`);
-        lines.push(`continuation when: a 1h close beyond ${fmt(counterEdge.edge)} → the path to ${sc.D?.beyond ? itemTxt(sc.D.beyond) : "the next level beyond"} is open, stop to BE`);
-        tail.push({ title: `TOP ${fmt(counterEdge.edge)}${pc ? " (PENDING)" : ""} → ${ctOpen ? "partial / counter-trend" : "partial"}`, lines });
-        addAlert(counterEdge.edge);
-      }
-      // actionable today first, original priority kept inside each group
-      const ranked = [...opp.filter((o) => o.actionable), ...opp.filter((o) => !o.actionable)];
-      const main = ranked.find((o) => o.actionable) ?? null;
-      mainShort = main ? main.short : `nothing actionable in reach — wait${opp[0]?.trigger != null ? ` for ${fmt(opp[0].trigger)} (${dist(opp[0].trigger)})` : ""}`;
-      out.push("", "**Scenarios** (actionable today first).");
-      [...ranked, ...tail].forEach((it, i) => {
-        out.push(`${i + 1}. **${it.title}${it === main ? " (main)" : ""}.**`);
-        for (const l of it.lines) out.push(`   ${l}`);
-      });
-      out.push(`Everything else = wait.${sc.partials.length ? ` Partials: ${sc.partials.map((p) => `${fmt(p.price)}${p.kind === "lb" ? ` (LB ${zoneTxt(p.zone)})` : p.touches > 1 ? ` x${p.touches}` : ""}`).join(" → ")}.` : ""}`);
+      const partials = S.partials.length ? ` Часткова фіксація: ${S.partials.map((p) => `${fmt(p.price)}${p.kind === "lb" ? ` (LB ${zoneTxt(p.zone)})` : p.touches > 1 ? ` x${p.touches}` : ""}`).join(" → ")}.` : "";
+      out.push(`Все інше = чекаємо.${partials}${S.skip.length ? ` ${S.skip.join(" · ")}.` : ""}`);
+      if (S.top) out.push(`TOP ${fmt(S.top.edge)}${S.top.pending ? " (PENDING)" : ""}: ${S.top.lines.join(" · ")}.`);
       if (sc.h1) {
         const f = sc.h1.local_frame;
         const sideTxt = (x) => (x ? `${fmt(x.price)}${x.touches ? ` x${x.touches}` : ""}` : "—");
         const against = sc.h1.alignment === "noise" || sc.h1.alignment === "against";
         const st = sc.h1.story ?? "";
         const mode = sc.h1.mode ?? (/^highs were consumed/.test(st) ? "up_continuation" : /^lows were consumed/.test(st) ? "down_continuation" : /^lows were run and reclaimed/.test(st) ? "buy_story" : /^highs were run and reclaimed/.test(st) ? "sell_story" : null);
-        out.push(
-          `1h: ${sc.h1.alignment === "noise" ? "NOISE · " : ""}${MODE_WORD[mode] ?? mode ?? "—"}${against ? " against the bias — enter from a 15m reclaim structure" : ""}${f ? ` · frame ${sideTxt(f.below)} ↔ ${sideTxt(f.above)}` : ""}.`,
-        );
+        out.push(`1h: ${sc.h1.alignment === "noise" ? "NOISE · " : ""}${MODE_UA[mode] ?? mode ?? "—"}${against ? " проти біасу — вхід лише з 15m-структури повернення" : ""}${f ? ` · рамка ${sideTxt(f.below)} ↔ ${sideTxt(f.above)}` : ""}.`);
       }
+    } else if (!w.bias) {
+      out.push("", "Без біасу на тиждень — сетапів нема.");
     }
 
     const gate = Object.values(r.timeframes ?? {}).map((t) => t?.h4_model).find((h) => h?.available);
-    if (gate) out.push(`Gate candle (${gate.h4_date}): H ${fmt(gate.h4_high)} / L ${fmt(gate.h4_low)} — ${gate.phase}.`);
-    if (alerts.length && price != null) {
-      out.push(`**Alerts:** ${alerts.sort((a, b) => b - a).slice(0, 5).map((a) => `${fmt(a)} ${a >= price ? "↑" : "↓"}`).join(" · ")}.`);
+    if (gate) out.push(`Гейт-свічка (${gate.h4_date}): H ${fmt(gate.h4_high)} / L ${fmt(gate.h4_low)} — ${PHASE_UA[gate.phase] ?? gate.phase}.`);
+    if (S.alerts.length && price != null) {
+      out.push(`**Alerts:** ${[...S.alerts].sort((a, b) => b - a).slice(0, 6).map((a) => `${fmt(a)} ${a >= price ? "↑" : "↓"}`).join(" · ")}.`);
     }
     out.push("");
     blocks.push(...out);
-    summary.push(`| ${name} | ${(w.bias ?? "none").toUpperCase()} | ${state} | ${mainShort ?? "—"} |`);
+    summary.push(`| ${name} | ${(w.bias ?? "none").toUpperCase()} | ${S.state} | ${mainShort ?? "—"} |`);
   }
 
-  const sessions = tz
-    ? `London ${at(8, "Europe/London")}–${at(16, "Europe/London", 30)} · NY ${at(9, exch, 30)}–${at(16, exch)} ${tz}`
-    : "London 08:00–16:30 UK · NY 09:30–16:00 ET";
+  const sessions = tz ? `London ${at(8, "Europe/London")}–${at(16, "Europe/London", 30)} · NY ${at(9, exch, 30)}–${at(16, exch)} ${tz}` : WINDOWS_FALLBACK;
   const gl = tz ? `${at(6, exch)}–${at(10, exch)}` : "06:00–10:00 ET";
-  const gw = tz ? `${at(10, exch)}–${at(14, exch)}` : "10:00–14:00 ET";
+  const gw = tz ? [at(10, exch), at(14, exch)] : ["10:00 ET", "14:00 ET"];
+  const stampMs = Date.parse(daily.generated_at);
+  const stamp = clock0 && Number.isFinite(stampMs) ? `Знято ${clock0.stamp(stampMs)}${tz ? ` ${tz}` : ""}` : `Знято ${daily.generated_at}`;
   return [
-    `# Marco daily brief — ${daily.trading_day} (${daily.weekday})`,
+    `# Marco daily brief — ${daily.trading_day} (${daily.weekday}) · сетапи`,
     "",
-    `Generated ${daily.generated_at}. Direction from ${daily.direction_from}; structure live on ${daily.timeframes?.map(tfLabel).join("/") ?? "4h/1h/15m/5m"}; risk at size 1, cap $${daily.risk_cap}. Format v2.1 — every scenario is an \`entry when\`, everything not named is a wait (docs/MARCO-CASES.md → Approved changes; thresholds [CALIBRATION], docs/MARCO.md §6).`,
+    `${stamp}. Напрям із ${daily.direction_from}; структура на ${daily.timeframes?.map(tfLabel).join("/") ?? "4h/1h/15m/5m"}, лише закриті бари; ризик за size 1, ліміт $${cap ?? "—"}. Формат v3: кожен сценарій = сетап у граматиці журналу (header · entry when · K-рядки · BE · deeper run · breakdown · global), готовий до plan_add_setup; усе, що не назване, = чекаємо (docs/MARCO-CASES.md → Approved changes; пороги [CALIBRATION], docs/MARCO.md §6).`,
     "",
-    "| | Bias | Now | Main scenario |",
+    "| | Bias | Now | Головний сетап |",
     "|---|---|---|---|",
     ...summary,
     "",
-    `**Today.** Sessions ${sessions} — a level hit outside them is an alert to read with the grid, not an entry by itself. Gate: the ${gl} 4h candle; from ${gw.split("–")[0]} to ${gw.split("–")[1]} with-bias entries once price trades beyond that candle's extreme (V5).${clock ? ` Next 4h closes: ${clock.closes(3).join(" · ")}${tz ? "" : " ET"}.` : ""} Counter-trend: ${ctOpen ? "open today — nearest target only, never held against the global bias" : "closed today (Mon–Tue only)"}.`,
+    `**Сьогодні.** Вікна ${sessions} — рівень, узятий поза ними, = алерт, який читаємо з сіткою, не вхід сам по собі. Гейт: 4h-свічка ${gl}; з ${gw[0]} до ${gw[1]} входи з біасом після трейду за її екстремум (V5).${clock0 ? ` Наступні 4h-закриття: ${clock0.closes(3).join(" · ")}${tz ? "" : " ET"}.` : ""} Контр-тренд: ${ctOpen ? "відкритий — лише до найближчої цілі, ніколи не тримати проти глобального біасу" : "закритий (лише пн–вт)"}.`,
     "",
     ...blocks,
   ].join("\n");

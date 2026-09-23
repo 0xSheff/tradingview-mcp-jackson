@@ -82,6 +82,45 @@ All four below were **built on 2026-09-11** (`src/core/marco_grid.js`, wired int
 `docs/MARCO.md` §3.1 and §6). Two things were learned in the build and are
 recorded under *Rule candidates* → pocket flag.
 
+- **Intraday brief format v3 — journal setups, in Ukrainian** (trader, 2026-09-23 evening:
+  "the result in the format of setups, exactly as we add them to the journal, but in
+  Ukrainian — much clearer, and I can go through the setups and pick which ones to add";
+  built the same day — `dailySetups` + `renderDailyMarkdown` in `src/core/marco_grid.js`,
+  tests *dailySetups* / *renderDailyMarkdown* in `tests/marco_grid.test.js`). Supersedes
+  the v2/v2.1 *layout* below; the v2 grammar (`entry when`, event-named scenarios, no
+  "don't" lists, the two session windows) and the v2.1 refinements (summary table first,
+  reachable and inside-the-cap first, tick prices, wall-clock bar times, an `Alerts:`
+  line) all carry over. Per instrument: **Bias · Now · Grid**, then **Сетапи** — every
+  scenario rendered as one journal setup: a title line with the structured fields
+  (`SYM · long/short · setup_type · K <key_levels> · T <targets ≤ 3> · R <planned_r> ·
+  size 1`) and a fenced `setup_description` in the journal-weekly-plan grammar (header
+  `<W mode>/<regime> · inval <level> Wclose` · `entry when:` · `K1/K2` rows · `BE:` ·
+  `deeper run:` · `breakdown:` · `aggressive tap … skip` · `global:`), ranked with the
+  ones a trader can act on today first and "головний" on the first of them; then one
+  closing line (*все інше = чекаємо*, partials, the TOP/counter edge), the 1h line, the
+  gate candle, the alerts. Mapping (journal-weekly-plan rules): the reclaim of a PENDING
+  edge, the run of the bias edge / the nearest H4 rung and the next edge beyond the grid
+  → `sweep-trigger`; the bias-side LB tap (the refined rung when the 4h anchor is over
+  the cap) → `lb-zone-tap`; a tap and a run in ONE zone → one setup with K1 (tap) and K2
+  (run + reclaim); an inducement tap → an `aggressive tap … skip` line, never a setup;
+  the counter edge → `early-week-counter-trend` on Mon–Tue only, otherwise the TOP line;
+  `targets` = the rung's own T1, then the counter rungs, the counter edge and what lies
+  beyond it (max 3, the global target never); `BE:` = T1; `planned_r` = K1's RR from
+  the tick-rounded stop; every `entry when` carries London 10:00–18:30 · NY 16:30–23:00
+  and the gate. `runMarcoDaily` stores the same objects in the JSON as
+  `results[].setups` (the `plan_add_setup` fields + the UA `setup_description`), so
+  picking a setup for the journal is one call. Language: Ukrainian with the method terms
+  in English (trap, run, tap, LB, reclaim = "закриття назад"), per the trader's
+  glossary — this closes the v2.1 "EN vs UA" question. **Journal = the same text in
+  English** (trader, 2026-09-23 evening): a picked setup goes to `plan_add_setup` /
+  `plan_add_addendum` with its structured fields as they are and the `setup_description`
+  translated line by line, nothing added or dropped; `planned_size: 1` is the working
+  assumption the trader confirms on adding.
+  **Closed bars only** (same day): the engine gap below — the forming 4h bar read as a
+  reclaim — is fixed by `splitForming`: every timeframe's forming bar is cut before
+  `analyzeMarco` / `h4Grid`, travels as `exec_bars.forming` and prints in the Now
+  block as "бар … ще відкритий: H / L / зараз — до закриття не рахується"; the bar clock
+  is anchored on `exec_bars.last_closed_time` instead of the wall clock.
 - **Intraday brief format v2 — `entry when` grammar** (user, 2026-09-22, after four
   losing trades of which two were entered while the 4h was PENDING; worked example
   `briefs/daily/2026-09-22.v2.md`; built the same day — `renderDailyMarkdown`, the
@@ -319,6 +358,15 @@ recorded under *Rule candidates* → pocket flag.
   taken out and then respect this extreme"). `renderDailyMarkdown` only; no map change.
 
 ## Engine gaps observed
+
+**Forming bar read as a reclaim (2026-09-23 17:01, `marco daily`).** 6E: 1.14375 was run to
+1.14295 in the closed 13–17 bar (15m close 1.14355, under the level); two minutes into the 17–21 bar
+price sat at 1.14385 and the daily printed "Now: VALID (4h) … reclaim → bull LB 1.14295–1.14375 Q
+in the 17:00–21:00 bar" — the unclosed bar counted as the close back. States (VALID / PENDING /
+breakdown) must come from closed 4h bars only; the forming bar may only be shown as "in progress".
+**Built 2026-09-23 evening** — `splitForming` (src/core/marco_grid.js) cuts the forming bar of every
+intraday timeframe in `marco daily` and `marco brief`; the brief prints it as "ще відкритий" and
+names a run or a close back in progress; `exec_bars` in the daily JSON carries it. Test *splitForming*.
 
 **Flat neighbours / shelves.** A run of near-equal HTF lows (or highs) where no bar is
 a strict `pivot_len` swing never registers, so its tap count is lost:

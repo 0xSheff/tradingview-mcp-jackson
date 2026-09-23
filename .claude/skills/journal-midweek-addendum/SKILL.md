@@ -38,6 +38,17 @@ Three things depend on it:
 
 ## Step 2 — Rescan, lower timeframes first
 
+Start from the day's engine brief: `briefs/daily/<date>.json` → `results[].setups` is the
+list of journal-shaped setups the daily already derived (`instrument`, `direction`,
+`setup_type`, `key_levels`, `targets`, `planned_size`, `planned_r`, and a Ukrainian
+`setup_description` in the format below — since 2026-09-23). The trader picks from that
+list in the brief; carry the picked object into the addendum item with the structured fields
+as they are and the `setup_description` **translated to English line by line — the same text,
+nothing added or dropped** (trader, 2026-09-23: the journal is English, the brief Ukrainian);
+`planned_size: 1` is the brief's working assumption, confirm it on adding. Only re-derive a rung
+when the lower timeframes below change its stop or its trigger.
+
+
 ```
 node src/cli/index.js marco brief --compact --tf 3 --tf 5 --tf 15   # then --tf 60 separately
 ```

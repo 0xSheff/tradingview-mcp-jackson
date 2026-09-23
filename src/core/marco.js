@@ -19,11 +19,13 @@ import {
   detectRoll,
   shiftPrices,
   basisBars,
+  splitForming,
   dailyScenarios,
+  dailySetups,
   renderDailyMarkdown,
 } from "./marco_grid.js";
 
-export { h4Grid, flagPocket, clipToGrid, detectRoll, shiftPrices, basisBars, dailyScenarios, renderDailyMarkdown };
+export { h4Grid, flagPocket, clipToGrid, detectRoll, shiftPrices, basisBars, splitForming, dailyScenarios, dailySetups, renderDailyMarkdown };
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../");
 const WEEKLY_DIR = join(PROJECT_ROOT, "briefs", "weekly");
@@ -2000,7 +2002,7 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = 
         try {
           await chart.setTimeframe({ timeframe: cfg.htf.timeframe });
           await sleep(900);
-          htfBars = (await data.getOhlcv({ count: cfg.htf.bars_to_fetch })).bars;
+          htfBars = splitForming((await data.getOhlcv({ count: cfg.htf.bars_to_fetch })).bars, cfg.htf.timeframe).closed;
         } catch {
           htfBars = null; // HTF context is an enrichment, never a requirement
         }
@@ -2012,11 +2014,13 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = 
       for (const tf of tfs) {
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
-        const { bars } = await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch });
+        // closed bars only — the forming bar is reported, never read as an event
+        const { closed: bars, forming } = splitForming((await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars, tf);
         const read = analyzeMarco(bars, cfg, {
           bias: manualBias !== null ? manualBias : useWeekly ? wk?.bias?.bias || null : null,
           seed: htfMap ? seedFromMap(htfMap, htfBars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg }) : null,
         });
+        if (!read.error) read.forming_bar = forming;
         if (!read.error && htfBars) read.htf = htfContext(htfBars, read.last_price, cfg);
         if (!read.error && wk) {
           read.alignment = alignmentOf(read.story.direction, wk.bias.bias);
@@ -2154,7 +2158,9 @@ export function basisReference({ prev, prevDaily, weekly, wk0, execTf }) {
  * the weekend brief; everything actionable — the H4 grid, the LTF reads
  * clipped to it, scenarios A/B/C/D, stops, RR, dollar risk, the cap check,
  * the 10am gate — is computed live on Marco's own cascade the morning it is
- * used. Counter-trend triggers appear on Monday and Tuesday only. Every run
+ * used, on CLOSED bars only (the forming bar is reported, never read as an
+ * event), and rendered as journal-shaped setups in Ukrainian (v3,
+ * 2026-09-23). Counter-trend triggers appear on Monday and Tuesday only. Every run
  * records its price basis and compares the same bars against the previous
  * run (or the weekly brief) so a contract roll with back-adjustment shifts
  * the weekly layer instead of silently misplacing it. Writes
@@ -2217,6 +2223,7 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
       // 1. fetch every timeframe first — the roll check needs the exec TF
       // before anything is read off the weekly layer
       const barsBy = {};
+      const formingBy = {};
       let short = null;
       for (const tf of tfs) {
         await chart.setTimeframe({ timeframe: tf });
@@ -2242,7 +2249,11 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
           barsBy[tf] = { error: `insufficient history: ${bars.length} bars, needs ${need}` };
           continue;
         }
-        barsBy[tf] = bars;
+        // states come from closed bars only (docs/MARCO-CASES.md → Engine
+        // gaps, 2026-09-23); the forming bar travels to the brief as "in progress"
+        const split = splitForming(bars, tf);
+        barsBy[tf] = split.closed;
+        formingBy[tf] = split.forming;
       }
       if (short) {
         results.push({ symbol, error: short });
@@ -2331,6 +2342,8 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
           week: weekly.week,
           bias: wk.bias.bias_word,
           regime: wk.bias.regime,
+          mode: wk.bias.weekly?.mode ?? null,
+          daily_mode: wk.bias.daily?.mode ?? null,
           stale: wk.bias.stale === true,
           invalidation: wk.bias.invalidation,
           primary_target: wk.bias.primary_target,
@@ -2339,7 +2352,8 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
         grid,
         scenarios,
         timeframes: perTf,
-        basis: execBars ? { [execTf]: basisBars(execBars) } : {},
+        exec_bars: { timeframe: execTf, last_closed_time: execBars?.at(-1)?.time ?? null, forming: formingBy[execTf] ?? null },
+        basis: execBars ? { [execTf]: basisBars(formingBy[execTf] ? [...execBars, formingBy[execTf]] : execBars) } : {},
       });
     } catch (err) {
       results.push({ symbol, error: err.message });
@@ -2374,6 +2388,9 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
     methodology: "docs/MARCO.md — Accettone liquidity blocks; docs/MARCO-CASES.md — the nested read and the brief format",
     results,
   };
+  // the setups in the journal shape (plan_add_setup fields + the UA
+  // setup_description) — the brief prints them, the JSON carries them
+  for (const r of results) if (r.grid && r.scenarios) r.setups = dailySetups(r, result).setups;
   mkdirSync(dailyDir, { recursive: true });
   const jsonPath = join(dailyDir, `${result.trading_day}.json`);
   const mdPath = join(dailyDir, `${result.trading_day}.md`);
@@ -2408,6 +2425,7 @@ export function compactMarcoBrief(brief) {
                   ? { error: t.error }
                   : {
                       story: `${t.story.mode}: ${t.story.read}`,
+                      forming_bar: t.forming_bar ?? null,
                       draw: t.story.draw?.read ?? null,
                       alignment: t.alignment ?? null,
                       bias_used: t.bias_used,

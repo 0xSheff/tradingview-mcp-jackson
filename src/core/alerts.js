@@ -3,73 +3,83 @@
  */
 import { evaluate, evaluateAsync, getClient } from '../connection.js';
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Create a price alert on the chart's current symbol through the alert dialog.
+ * Verified 2026-09-23 on TradingView Desktop: the dialog carries no stable
+ * class or data-name, so the price field is found as the one visible input
+ * holding a number; the value is set with the native setter + input/change +
+ * blur (React commits it on blur, and the dialog's message line follows), and
+ * the result is confirmed against the pricealerts list. The dialog defaults to
+ * "Price · Crossing"; the default message ("<SYM> Crossing <price>") is kept —
+ * the message editor is a sub-dialog.
+ */
 export async function create({ condition, price, message }) {
+  const before = await list();
+  const known = new Set((before.alerts || []).map((a) => a.alert_id));
+
   const opened = await evaluate(`
     (function() {
-      var btn = document.querySelector('[aria-label="Create Alert"]')
-        || document.querySelector('[data-name="alerts"]');
+      var btn = document.querySelector('[data-name="set-alert-button"]')
+        || document.querySelector('[aria-label="Create Alert"]');
       if (btn) { btn.click(); return true; }
       return false;
     })()
   `);
-
   if (!opened) {
     const client = await getClient();
     await client.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 1, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
     await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
   }
-
-  await new Promise(r => setTimeout(r, 1000));
+  await sleep(1200);
 
   const priceSet = await evaluate(`
     (function() {
-      var inputs = document.querySelectorAll('[class*="alert"] input[type="text"], [class*="alert"] input[type="number"]');
-      for (var i = 0; i < inputs.length; i++) {
-        var label = inputs[i].closest('[class*="row"]')?.querySelector('[class*="label"]');
-        if (label && /value|price/i.test(label.textContent)) {
-          var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-          nativeSet.call(inputs[i], '${price}');
-          inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
-          inputs[i].dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }
-      }
-      if (inputs.length > 0) {
-        var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        nativeSet.call(inputs[0], '${price}');
-        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      }
-      return false;
+      var inp = Array.prototype.slice.call(document.querySelectorAll('input')).find(function(x) {
+        return x.offsetParent !== null && /^[0-9,.]+$/.test(x.value || '');
+      });
+      if (!inp) return null;
+      inp.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(inp, ${JSON.stringify(String(price))});
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      inp.blur();
+      inp.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+      return inp.value;
     })()
   `);
-
-  if (message) {
-    await evaluate(`
-      (function() {
-        var textarea = document.querySelector('[class*="alert"] textarea')
-          || document.querySelector('textarea[placeholder*="message"]');
-        if (textarea) {
-          var nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-          nativeSet.call(textarea, ${JSON.stringify(message)});
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-      })()
-    `);
+  if (!priceSet) {
+    return { success: false, price, condition, price_set: false, error: 'alert dialog price field not found', source: 'dialog' };
   }
+  await sleep(400);
 
-  await new Promise(r => setTimeout(r, 500));
-  const created = await evaluate(`
+  const clicked = await evaluate(`
     (function() {
-      var btns = document.querySelectorAll('button[data-name="submit"], button');
-      for (var i = 0; i < btns.length; i++) {
-        if (/^create$/i.test(btns[i].textContent.trim())) { btns[i].click(); return true; }
-      }
-      return false;
+      var b = Array.prototype.slice.call(document.querySelectorAll('button')).find(function(x) {
+        return x.offsetParent !== null && (x.textContent || '').trim() === 'Create';
+      });
+      if (!b) return false;
+      b.click();
+      return true;
     })()
   `);
+  await sleep(1200);
 
-  return { success: !!created, price, condition, message: message || '(none)', price_set: !!priceSet, source: 'dom_fallback' };
+  const after = await list();
+  const made = (after.alerts || []).find((a) => !known.has(a.alert_id));
+  return {
+    success: !!made,
+    price,
+    price_in_dialog: priceSet,
+    condition: 'crossing',
+    requested_condition: condition,
+    alert_id: made?.alert_id ?? null,
+    message: made?.message ?? null,
+    requested_message: message || null,
+    clicked_create: !!clicked,
+    source: 'dialog',
+  };
 }
 
 export async function list() {

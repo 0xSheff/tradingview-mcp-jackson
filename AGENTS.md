@@ -101,9 +101,13 @@ ChrisFX, CLS, EMA/RSI or the regular morning-brief reads.**
   `instruction` field. Allow a generous timeout for a live scan.
 - **Single symbol:** `node src/cli/index.js marco scan COMEX_MINI:MGC1! --tf 15`
 - **Morning brief:** `node src/cli/index.js marco daily --compact` — the nested
-  read (W/D direction → H4 grid → 1h inside it) with scenarios A/B/C/D and
-  contract-roll detection; writes `briefs/daily/<date>.md`. The case log and
-  the brief format live in `docs/MARCO-CASES.md`; the case procedure is the
+  read (W/D direction → H4 grid → 1h inside it) on closed bars only, rendered as
+  **journal setups in Ukrainian** (format v3, 2026-09-23): per instrument Bias · Now ·
+  Grid, then every scenario as a `plan_add_setup`-shaped setup (title with the
+  structured fields + a fenced `setup_description` in the journal grammar), reachable
+  ones first. The same objects sit in the JSON as `results[].setups` — the trader
+  picks, you add. Writes `briefs/daily/<date>.md` + `.json`. The case log and the
+  brief format live in `docs/MARCO-CASES.md`; the case procedure is the
   `marco-case-review` skill.
 - **Indicator:** `scripts/marco_liquidity_blocks.pine`, saved on TradingView
   as the user's script "Liq blocks". It mirrors the exact state machine in

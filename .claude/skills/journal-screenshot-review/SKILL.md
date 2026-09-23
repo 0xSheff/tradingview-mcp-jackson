@@ -5,10 +5,13 @@ description: Interpret a trade's final chart screenshot against the Marco weekly
 
 # Trade Screenshot → Verified Chart Context
 
-The journal's backend vision pass sees only pixels: it drafts `key_levels` and blanks its
-own notes by design. You see more — the weekly brief, the `marco` engine, and the "Liq
-blocks" indicator semantics. This skill is how that context reaches the journal's coach:
-through `trade_verify_context`, the one door whose verified `notes` the coach actually reads.
+The journal stores the screenshot as is — since ADR-0056 D1 there is no vision pass and no
+`trade_verify_context` any more (checked 2026-09-24: the tool is gone from the MCP). The chart
+is read by whoever writes the review, so the facts you establish here go straight into the
+review's own sections ([[journal-trade-review]]), and a stored screenshot is complete the
+moment it is stored. You still see more than the pixels — the weekly brief, the `marco`
+engine, the "Liq blocks" indicator semantics, the position tools — and this skill is how
+those facts are gathered.
 
 ## Preconditions
 
@@ -25,7 +28,12 @@ blocks" indicator visible. Take it **in bar replay, parked one bar after the tra
 the closed trade is always the last thing on the right, and "Liq blocks" is recomputed as of
 that moment — the zones look as they did when the trade was taken, not with hindsight.
 
-1. `chart_set_symbol` → `chart_set_timeframe("5")` (symbol resets the TF).
+1. `chart_set_symbol` → `chart_set_timeframe("5")` (symbol resets the TF). The whole
+   sequence also runs as one shell chain through the CLI — `tv symbol` · `tv timeframe 5` ·
+   `tv replay start -d 2026-09-23T13:50:00Z` (the `-d` option passes an ISO datetime through,
+   whatever its help text says) · `tv range --from … --to …` · `tv ui keyboard s --ctrl --alt` ·
+   `tv timeframe 60` · range · keyboard · `tv replay stop` — with 2–4 s sleeps between steps;
+   six trades took ~3 minutes that way on 2026-09-24, one turn instead of nine per trade.
 2. `replay_start(date = <open of the bar that contains the exit> + 2 × TF)`, ISO **with time**
    — e.g. exit 19:33Z on 5m → exit bar 19:30 → `date: "2026-09-16T19:40:00Z"`. The playhead
    lands one second before the requested moment, so the last bar on the chart is the one
@@ -59,7 +67,7 @@ previous session's H4 gate candle and the origin levels must be in the frame) an
 `draw_list` → `draw_get_properties(entity_id)` gives the entry anchor, `stopLevel` and
 `profitLevel` in ticks (MNQ 0.25, MGC 0.1, 6E 0.00005).
 
-## Step 2 — Upload, attach, wait for the vision draft
+## Step 2 — Upload and attach
 
 The bytes travel out of band (ADR-0047): mint a handle, PUT the file, hand the handle over.
 
@@ -69,11 +77,10 @@ upload_url_create(purpose="trade_screenshot", filename="<name>.png", content_typ
 trade_attach_screenshots(trade_id, upload_ids=[...], real_stop=<if known and not yet on file>)
 ```
 
-The URL is single-use and expires in minutes — mint it when you are about to send.
-Then poll `trade_review(trade_id)` until each screenshot carries `extracted_context`.
-`trade_verify_context` **refuses until the extraction has run** (extraction-pending error) —
-that is by design; wait a few seconds and retry. The draft's `key_levels` are your starting
-point, nothing more.
+The URL is single-use and expires in minutes — mint it when you are about to send (mint all
+of a batch in one go, PUT them in one shell call, attach in one go: 12 files took four turns on
+2026-09-24). A trade is `ready-for-review` once a chart is attached AND `real_stop` is on file
+(`trade_set_real_stop`, or the `real_stop` rider on the attach) — nothing else to wait for.
 
 ## Step 3 — Form your own read
 
@@ -92,22 +99,12 @@ Establish the facts (docs/MARCO.md is the methodology source):
   before entry, inside the gate window?
 - Did price behave as the story said (e.g. the false-zone reaction the brief predicted)?
 
-## Step 4 — Verify the context
+## Step 4 — Carry the facts into the review
 
-```
-trade_verify_context(trade_id, screenshot_id, extracted_context={
-  "key_levels": [<the levels that matter: LB zone edges, trigger, targets visible on chart>],
-  "panels_layout": [<short labels as drafted, corrected if wrong>],
-  "notes": "<the facts from step 3, compact>"
-})
-```
-
-The object **replaces** the draft wholesale — always send all three keys, not a delta.
-
-`notes` rules — this text goes into the coach's prompt as untrusted data:
-- **A bullet list of facts, never prose** (trader feedback 2026-09-12: the first W37 notes
-  were paragraphs and unreadable). Fixed order, one line each, `·` between fields, drop what
-  is empty:
+There is no separate context door any more: the facts below are the raw material of the
+review's `setup` / `preconditions_*` / `entry` / `exit` sections ([[journal-trade-review]]),
+written with `trade_record_review`. Gather them in this order, one line each, `·` between
+fields, drop what is empty — a bullet list of facts, never prose (trader feedback 2026-09-12):
 
   ```
   - <TF> · <dates> · axis Athens (UTC+3) · <W/D story = regime> · inval <level> intact
@@ -121,10 +118,13 @@ The object **replaces** the draft wholesale — always send all three keys, not 
   - result: <pts · $ · R>
   ```
 
-- **Facts only, stated as data.** No verdicts, no instructions — never "this deviates", "be
-  strict", "tone should be…": judging is the coach's job, and instructions inside data are
-  exactly what the journal's security model strips.
-- Every number the review will need appears here once; adjectives do not.
+- **Facts from the bars and the position tools, not from memory**: dump the 15m/5m bars
+  (`tv symbol <SYM>` → `tv timeframe 15` → `tv ohlcv -n 400 > file`) and print the window
+  around each trade in Athens time with a small script (MFE/MAE, the closes against the plan's
+  level); read `stopLevel` / `profitLevel` from `tv draw get <id>` on every `long_position` /
+  `short_position` drawing (ticks from the entry price: MNQ 0.25, MGC 0.1, 6E 0.00005) — the
+  drawing is the planned stop, the stop fill in the CSV includes slippage.
+- Every number the review will need appears once; adjectives do not.
 
 ## Never
 
@@ -135,5 +135,5 @@ The object **replaces** the draft wholesale — always send all three keys, not 
   there poisons the clustering.
 - Never skip Step 2's wait and "verify" a context the extraction hasn't drafted — the call
   refuses, and retrying with invented content defeats the draft-then-correct design.
-- Never leave a screenshot attached but unverified: unverified context never reaches the
-  coach, and the trade stays short of terminal enrichment.
+- Never leave a trade with a chart but no `real_stop`: it stays `awaiting-input` and the
+  review's Entry section cannot state the risk.

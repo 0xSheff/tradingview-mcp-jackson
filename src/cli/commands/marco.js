@@ -63,7 +63,7 @@ register("marco", {
       "daily",
       {
         description:
-          'Morning run: direction from the weekend brief, the H4 grid and scenarios A/B/C/D computed live on 240/60/15/5 with dollar risk, the per-trade cap and contract-roll detection; writes briefs/daily/<date>.md + .json',
+          "Morning run: direction from the weekend brief, the H4 grid and the day's scenarios computed live on 240/60/15/5 (closed bars only) with dollar risk, the per-trade cap and contract-roll detection, rendered as journal-shaped setups in Ukrainian (JSON: results[].setups, ready for plan_add_setup); writes briefs/daily/<date>.md + .json",
         options: {
           rules: commonOptions.rules,
           tf: commonOptions.tf,

@@ -3,7 +3,7 @@ import { jsonResult } from './_format.js';
 import * as core from '../core/alerts.js';
 
 export function registerAlertTools(server) {
-  server.tool('alert_create', 'Create a price alert via the TradingView alert dialog', {
+  server.tool('alert_create', 'Create a price alert (Price · Crossing) on the CURRENT chart symbol via the TradingView alert dialog — set the chart symbol first. Confirms against the alert list and returns alert_id; the dialog keeps its default message (<SYM> Crossing <price>).', {
     condition: z.string().describe('Alert condition (e.g., "crossing", "greater_than", "less_than")'),
     price: z.coerce.number().describe('Price level for the alert'),
     message: z.string().optional().describe('Alert message'),
