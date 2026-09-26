@@ -24,8 +24,34 @@ import {
   dailySetups,
   renderDailyMarkdown,
 } from "./marco_grid.js";
+import {
+  DIRECTION_DEFAULTS,
+  isHtfTf,
+  sessionDate,
+  closeDate,
+  splitFormingHtf,
+  directionRead,
+  barRead,
+  composeDirection,
+  directionStack,
+  directionLinesEn,
+  directionBlockUa,
+} from "./marco_direction.js";
 
 export { h4Grid, flagPocket, clipToGrid, detectRoll, shiftPrices, basisBars, splitForming, dailyScenarios, dailySetups, renderDailyMarkdown };
+export {
+  DIRECTION_DEFAULTS,
+  isHtfTf,
+  sessionDate,
+  closeDate,
+  splitFormingHtf,
+  directionRead,
+  barRead,
+  composeDirection,
+  directionStack,
+  directionLinesEn,
+  directionBlockUa,
+};
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../");
 const WEEKLY_DIR = join(PROJECT_ROOT, "briefs", "weekly");
@@ -67,6 +93,15 @@ export const MARCO_DEFAULTS = {
 
   // detection — every number is a [CALIBRATION] (docs/MARCO.md §6)
   pivot_len: 3, // swing = strictly lowest/highest of N bars each side
+  // the same for the liquidity MAP on D/W/M. The trader's 3-bar fractal (1)
+  // is what the direction read uses (`direction.pivot_len`); on the map it
+  // regressed the weekly layer (MES short/aligned four weeks while price
+  // ranged, MNQ no bias before the W39 rally — docs/MARCO-DIRECTION.md
+  // §10 step 3, scripts/research/direction/regress_pivot.mjs), so the map
+  // keeps 3 until the thresholds are recalibrated for it.
+  htf_pivot_len: 3,
+  // the direction-now read (src/core/marco_direction.js, docs/MARCO.md §3.2)
+  direction: { ...DIRECTION_DEFAULTS },
   confirm_bars: 3, // sweep must reclaim the swept level within N bars
   atr_length: 14,
   eq_tolerance_atr: 0.25, // "equal" levels merge within this ATR fraction
@@ -375,6 +410,10 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
   // eq_tolerance of a live zone's extreme is a respect of that extreme; once
   // the extreme carries min_touches taps it is a target, not a block: the
   // zone retires and its extreme joins the map as a build-up level.
+  // Returns true when the pivot was counted as a respect. The pivot may sit
+  // inside the zone or beyond its inner edge — a thin zone (6E W 1.1404–1.1408,
+  // 4 pips against a 35-pip tolerance) otherwise never collects one (U4,
+  // docs/MARCO-CASES.md Engine gaps, fixed 2026-09-26).
   const respectZone = (blks, side, price, i, j, tol) => {
     for (const blk of blks) {
       if (blk.dead || blk.side !== side || j <= blk.extBar) continue;
@@ -393,8 +432,9 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
         });
         events.push({ bar: i, type: `${side}_lb_retired`, zone: [blk.bot, blk.top], reason: "buildup", level: ext, touches: 1 + blk.respects });
       }
-      return;
+      return true;
     }
+    return false;
   };
 
   for (let i = 0; i < bars.length; i++) {
@@ -683,22 +723,25 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
     // skip pivots born during an unresolved sweep or inside a live zone.
     // A pending sweep only hides pivots inside its own excursion (beyond the
     // swept level); liquidity forming elsewhere while it resolves still counts.
+    // A pivot inside a live zone is a respect or nothing; one beyond the zone
+    // but within eq_tolerance of its extreme is a respect too (§2.3); any
+    // other pivot is a level.
     const j = i - p;
     if (j >= p) {
       const lo = bars[j].low;
       const hi = bars[j].high;
       if (!(pendBull && lo <= pendBull.lvl) && isPivot(j, "low")) {
-        if (!insideZone(blocks, "bull", lo)) {
-          registerLevel(lowLvls, "low", j, lo, atr[i], cfg, events, i, buildups);
-        } else {
+        if (insideZone(blocks, "bull", lo)) {
           respectZone(blocks, "bull", lo, i, j, tolAt(i));
+        } else if (!respectZone(blocks, "bull", lo, i, j, tolAt(i))) {
+          registerLevel(lowLvls, "low", j, lo, atr[i], cfg, events, i, buildups);
         }
       }
       if (!(pendBear && hi >= pendBear.lvl) && isPivot(j, "high")) {
-        if (!insideZone(blocks, "bear", hi)) {
-          registerLevel(highLvls, "high", j, hi, atr[i], cfg, events, i, buildups);
-        } else {
+        if (insideZone(blocks, "bear", hi)) {
           respectZone(blocks, "bear", hi, i, j, tolAt(i));
+        } else if (!respectZone(blocks, "bear", hi, i, j, tolAt(i))) {
+          registerLevel(highLvls, "high", j, hi, atr[i], cfg, events, i, buildups);
         }
       }
     }
@@ -830,8 +873,11 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
   // E1: an LB whose run left the structure's liquidity intact never sets the
   // story (price "could easily still hunt from this liquidity"); a zone
   // superseded by a deepened run is the same trap, told by the LB that
-  // replaced it (or by the breakdown that followed)
-  const superseded = (e) => blockOf(e)?.death === "deepened";
+  // replaced it (or by the breakdown that followed). A zone retired into a
+  // build-up tells no story either: its extreme is a target now, not a block
+  // (§2.3) — the U4 W anchor 1.1404–1.1408 kept a buy story alive for
+  // 13 weeks after the respect that retired it (2026-09-26).
+  const superseded = (e) => blockOf(e)?.death === "deepened" || blockOf(e)?.death === "buildup";
   // V8: an unrefined LB (the origin / a single-touch swing intact beyond it)
   // is the trap all the same — "you do not need to wait for this low"; only
   // an invalid one (a build-up left behind, or unqualified) never sets the
@@ -1772,6 +1818,7 @@ export function renderWeeklyMarkdown(result) {
     lines.push(`- Verdict: ${b.note}`);
     lines.push(`- Global targets (beyond this week — re-evaluate next weekend): ${b.targets.length ? b.targets.map(fmtLevel).join(", ") : "—"}${b.primary_target !== null ? ` — primary ${b.primary_target}` : ""}`);
     lines.push(`- Invalidation: ${b.invalidation ? `${b.invalidation.rule} ${b.invalidation.level}` : "—"}`);
+    lines.push(...directionLinesEn(r.direction, b.bias ?? 0));
     const iw = r.intraweek;
     if (iw) {
       lines.push(`- Intraweek phase: ${iw.phase} — ${iw.local_read}`);
@@ -1829,14 +1876,19 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
       for (const tf of ["W", "D", execTf, "60"]) {
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
-        const { bars } = await data.getOhlcv({ count: 500 });
+        // closed bars only — a weekday run must not read the forming W/D bar
+        const { closed: bars } = closedBars((await data.getOhlcv({ count: 500 })).bars, tf, cfg);
         // HTF feed: the daily inherits the weekly's intact levels, the
         // 4h/1h inherit the daily's (docs/MARCO.md §2.1)
         const src = tf === "D" ? reads.W : tf === "W" ? null : reads.D;
         const seed = src ? seedFromMap(src.map, src.bars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg }) : null;
-        const map = buildLiquidityMap(bars, cfg, { seed });
-        reads[tf] = { bars, map, story: storyRead(map, bars, cfg) };
+        const tcfg = cfgForTf(cfg, tf);
+        const map = buildLiquidityMap(bars, tcfg, { seed });
+        reads[tf] = { bars, map, story: storyRead(map, bars, tcfg) };
       }
+      // the direction-now read (docs/MARCO.md §3.2): targets come from the
+      // story above, the heading from acceptance at the W/D 3-bar fractals
+      const direction = cfg.direction?.enabled === false ? null : directionStack({ W: reads.W.bars, D: reads.D.bars }, cfg);
       // two layers [user, 2026-09-02]: the GLOBAL bias is the author's
       // weekly→daily read (§3.1) with the big targets that will not be hit
       // this week — recorded and re-evaluated every weekend. The INTRAWEEK
@@ -1871,6 +1923,7 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
         symbol,
         price,
         bias,
+        direction,
         intraweek,
         triggers,
         false_reactions,
@@ -1918,6 +1971,7 @@ export function compactMarcoWeekly(result) {
         : {
             symbol: r.symbol,
             bias: `${r.bias.bias_word} (${r.bias.regime})`,
+            direction: compactDirection(r.direction),
             primary_target: r.bias.primary_target,
             intraweek: r.intraweek
               ? {
@@ -1935,6 +1989,18 @@ export function compactMarcoWeekly(result) {
   };
 }
 
+/** One line per timeframe for the compact payloads: "↓ since 2026-08-28 (failed_breakout 1.1705)". */
+function directionLine(x) {
+  if (!x) return null;
+  if (x.error) return x.error;
+  return `${x.heading > 0 ? "↑" : x.heading < 0 ? "↓" : "—"}${x.since ? ` since ${x.since.decide_date} (${x.since.decision} ${x.since.level})` : ""}${x.last && x.last.decide_date !== x.since?.decide_date ? `; last ${x.last.decision} ${x.last.level} ${x.last.decide_date}` : ""}${x.pending?.length ? `; pending ${x.pending.map((e) => `${e.side} ${e.level}`).join(", ")}` : ""}`;
+}
+
+function compactDirection(dir) {
+  if (!dir) return null;
+  return { state: dir.state, W: directionLine(dir.W), D: directionLine(dir.D), day: dir.day?.role ?? null };
+}
+
 function alignmentOf(storyDirection, bias) {
   if (!bias || !storyDirection) return "none";
   return storyDirection === bias ? "aligned" : "against";
@@ -1949,7 +2015,18 @@ function mergeConfig(rules) {
   const out = { ...MARCO_DEFAULTS, ...c };
   out.h4 = { ...MARCO_DEFAULTS.h4, ...(c.h4 || {}) };
   out.htf = c.htf === null ? null : { ...MARCO_DEFAULTS.htf, ...(c.htf || {}) };
+  out.direction = { ...MARCO_DEFAULTS.direction, ...(c.direction || {}) };
   return out;
+}
+
+/** The map's config for one timeframe: D/W/M use `htf_pivot_len` (docs/MARCO.md §6). */
+export function cfgForTf(cfg, tf) {
+  return isHtfTf(tf) && cfg.htf_pivot_len != null && cfg.htf_pivot_len !== cfg.pivot_len ? { ...cfg, pivot_len: cfg.htf_pivot_len } : cfg;
+}
+
+/** Closed bars only, whatever the timeframe: minutes by time + tf, D/W/M by the session close. */
+function closedBars(bars, tf, cfg) {
+  return isHtfTf(tf) ? splitFormingHtf(bars, tf, Date.now() / 1000, { sessionHours: cfg.direction?.session_hours }) : splitForming(bars, tf);
 }
 
 export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = {}) {
@@ -2015,12 +2092,17 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = 
         await chart.setTimeframe({ timeframe: tf });
         await sleep(900);
         // closed bars only — the forming bar is reported, never read as an event
-        const { closed: bars, forming } = splitForming((await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars, tf);
-        const read = analyzeMarco(bars, cfg, {
+        // (D/W/M by the session close: the Fri 25.09 scan read the open W39 as "0 bars ago")
+        const { closed: bars, forming } = closedBars((await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars, tf, cfg);
+        const read = analyzeMarco(bars, cfgForTf(cfg, tf), {
           bias: manualBias !== null ? manualBias : useWeekly ? wk?.bias?.bias || null : null,
           seed: htfMap ? seedFromMap(htfMap, htfBars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg }) : null,
         });
         if (!read.error) read.forming_bar = forming;
+        // the direction-now read on the HTF timeframes (docs/MARCO.md §3.2)
+        if (!read.error && isHtfTf(tf) && cfg.direction?.enabled !== false) {
+          read.direction = directionRead(bars, { timeframe: tf, pivot_len: cfg.direction.pivot_len, decision_bars: cfg.direction.decision_bars });
+        }
         if (!read.error && htfBars) read.htf = htfContext(htfBars, read.last_price, cfg);
         if (!read.error && wk) {
           read.alignment = alignmentOf(read.story.direction, wk.bias.bias);
@@ -2259,6 +2341,22 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
         results.push({ symbol, error: short });
         continue;
       }
+      // 1b. the direction-now read (docs/MARCO.md §3.2): W and D, closed bars
+      // only — the answer to "is the market heading to the targets now?"
+      let direction = null;
+      if (cfg.direction?.enabled !== false) {
+        try {
+          const htf = {};
+          for (const tf of ["W", "D"]) {
+            await chart.setTimeframe({ timeframe: tf });
+            await sleep(900);
+            htf[tf] = closedBars((await data.getOhlcv({ count: 500 })).bars, tf, cfg).closed;
+          }
+          direction = directionStack(htf, cfg);
+        } catch (err) {
+          direction = { error: `direction read failed: ${err.message}` };
+        }
+      }
       const execBars = Array.isArray(barsBy[execTf]) ? barsBy[execTf] : null;
 
       // 2. contract roll: the same bars, read against the last stored basis
@@ -2349,6 +2447,7 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
           primary_target: wk.bias.primary_target,
           primary_atr_weeks: primary?.atr_weeks ?? null,
         },
+        direction,
         grid,
         scenarios,
         timeframes: perTf,
@@ -2425,6 +2524,7 @@ export function compactMarcoBrief(brief) {
                   ? { error: t.error }
                   : {
                       story: `${t.story.mode}: ${t.story.read}`,
+                      direction: t.direction ? directionLine(t.direction) : null,
                       forming_bar: t.forming_bar ?? null,
                       draw: t.story.draw?.read ?? null,
                       alignment: t.alignment ?? null,

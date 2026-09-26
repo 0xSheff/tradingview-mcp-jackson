@@ -18,6 +18,7 @@
  * docs/MARCO.md §6.
  */
 import { atrSeries } from "./marco.js";
+import { directionBlockUa } from "./marco_direction.js";
 
 // significant digits, like marco.js — 6J trades at 0.0063x, MNQ at 30000+
 function round(n) {
@@ -1009,6 +1010,16 @@ export function dailySetups(r, daily = {}) {
   const nextLvl = edgeLvl(nextEdgeItem);
   const header = row(`${w.mode ?? side}/${w.regime ?? "—"}`, w.invalidation ? `inval ${fmt(w.invalidation.level)} ${invalTag(w.invalidation.rule)}` : null);
   const globalLine = w.primary_target != null ? `global: ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""} лише фінальна ціль` : null;
+  // the direction-now label (docs/MARCO.md §3.2): every setup says whether it
+  // trades with the HTF heading, against it, or with none — the journal keeps it
+  const dirNow = r.direction && !r.direction.error ? r.direction : null;
+  const arrowOf = (x) => (x > 0 ? "↑" : x < 0 ? "↓" : "—");
+  const sideSign = long ? 1 : -1;
+  const dirLineFor = (sign) =>
+    dirNow
+      ? `напрямок: W${arrowOf(dirNow.weekly)} D${arrowOf(dirNow.daily)} — ${dirNow.heading === sign ? "за напрямком" : dirNow.heading === -sign ? "ПРОТИ напрямку" : "напрямку немає"}`
+      : null;
+  const dirLine = dirLineFor(sideSign);
   const invalLine = w.invalidation ? `breakdown: ${invalUa(w.invalidation.rule)} ${fmt(w.invalidation.level)} = інвалідація W-біасу, ${long ? "лонгів" : "шортів"} нема` : null;
 
   // the target ladder beyond an entry: the rung's own T1 first, then the
@@ -1067,6 +1078,7 @@ export function dailySetups(r, daily = {}) {
           `deeper run: новий ${lowWord} ${under} ${fmt(pend.ext)} — екстремум і стоп їдуть за ним, $ перерахувати проти ліміту · те саме entry when`,
           `breakdown: нема закриття назад ${over} ${fmt(A.trigger)} ${byTxt(pend.bars_left)}, або 4h-трейд ${under} ${fmt(kill)} → ${redrawTo} · entry when: run того краю закривається назад`,
           globalLine,
+          dirLine,
         ].filter(Boolean),
         short: row(`sweep+reclaim ${fmt(A.trigger)} ${byTxt(pend.bars_left)} → тап ${zoneTxt(A.stop_anchor)}`, `stop ${fmt(stop)}`, usdTxt(risk), `T1 ${fmt(targets[0])}`),
       }),
@@ -1141,6 +1153,7 @@ export function dailySetups(r, daily = {}) {
             breakdownLine,
             unrefinedLine,
             globalLine,
+            dirLine,
           ].filter(Boolean),
           short: row(`tap ${fmt(useA.trigger)} (${dist(useA.trigger)}) / run ${fmt(B.trigger)} → ${side}`, `stop ${fmt(aStop)}`, usdTxt(aRisk), `T1 ${fmt(targets[0])}`),
         }),
@@ -1171,6 +1184,7 @@ export function dailySetups(r, daily = {}) {
               breakdownLine,
               tapSkip,
               globalLine,
+              dirLine,
             ].filter(Boolean),
             short: row(`sweep+reclaim ${fmt(B.trigger)} (${dist(B.trigger)}) → ${side}`, bStop != null ? `stop ${fmt(bStop)}` : "stop з 1h/15m LB", usdTxt(bRisk), `T1 ${fmt(targets[0])}`),
           }),
@@ -1203,6 +1217,7 @@ export function dailySetups(r, daily = {}) {
               unrefinedLine,
               hasB ? null : breakdownLine,
               globalLine,
+              dirLine,
             ].filter(Boolean),
             short: row(`tap ${fmt(useA.trigger)} (${dist(useA.trigger)}) → ${side}`, `stop ${fmt(aStop)}`, usdTxt(aRisk), `T1 ${fmt(targets[0])}`),
           }),
@@ -1243,6 +1258,7 @@ export function dailySetups(r, daily = {}) {
           beLine(targets[0]),
           invalLine,
           globalLine,
+          dirLine,
         ].filter(Boolean),
         short: row(`sweep+reclaim ${fmt(nextLvl)} (${dist(nextLvl)}) → ${side}`, stop != null ? `stop ${fmt(stop)}` : "stop з 1h/15m LB", usdTxt(risk), `T1 ${fmt(targets[0])}`),
       }),
@@ -1289,6 +1305,7 @@ export function dailySetups(r, daily = {}) {
           row(`K1 sweep+reclaim ${fmt(counterEdge.edge)}`, `stop ${long ? "над хаєм" : "під лоу"} run${capPts != null ? `, макс ${pts(capPts)} = $${cap}` : ""}`, "RR —", "pullback origin: лише до найближчої цілі, не тримати проти W-біасу, займає слот"),
           t1 != null ? `BE: ${fmt(t1)} · це і єдина ціль` : null,
           `breakdown: 1h-закриття ${long ? "над" : "під"} ${fmt(counterEdge.edge)} = continuation до ${beyond} — ${cSide} скасовано`,
+          dirLineFor(-sideSign),
         ].filter(Boolean),
         short: `CT ${cSide}: run ${fmt(counterEdge.edge)} + 1h-закриття назад · T1 ${fmt(t1)}`,
       });
@@ -1365,6 +1382,11 @@ export function renderDailyMarkdown(daily) {
     out.push(
       `**Bias.** W ${w.mode ? (MODE_UA[w.mode] ?? w.mode) : (w.bias ?? "—")}/${w.regime ?? "—"}${w.daily_mode ? ` · D ${MODE_UA[w.daily_mode] ?? w.daily_mode}` : ""}${w.stale ? " (stale)" : ""} · глобальна ціль ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""}.`,
     );
+
+    // ---- Direction now (docs/MARCO.md §3.2): the heading from HTF acceptance;
+    // the targets stay on the map — targets are not the direction
+    if (r.direction && !r.direction.error) out.push(...directionBlockUa(r.direction, w.bias === "long" ? 1 : w.bias === "short" ? -1 : 0));
+    else if (r.direction?.error) out.push(`**Напрямок.** ${r.direction.error}.`);
 
     // ---- Now: one state word, the event behind it (bar time), what changes it
     if (sc && g) {
@@ -1456,7 +1478,9 @@ export function renderDailyMarkdown(daily) {
     }
     out.push("");
     blocks.push(...out);
-    summary.push(`| ${name} | ${(w.bias ?? "none").toUpperCase()} | ${S.state} | ${mainShort ?? "—"} |`);
+    const hd = (x) => (x > 0 ? "↑" : x < 0 ? "↓" : "—");
+    const dirCell = r.direction && !r.direction.error ? `W${hd(r.direction.weekly)} D${hd(r.direction.daily)}` : "—";
+    summary.push(`| ${name} | ${(w.bias ?? "none").toUpperCase()} | ${dirCell} | ${S.state} | ${mainShort ?? "—"} |`);
   }
 
   const sessions = tz ? `London ${at(8, "Europe/London")}–${at(16, "Europe/London", 30)} · NY ${at(9, exch, 30)}–${at(16, exch)} ${tz}` : WINDOWS_FALLBACK;
@@ -1469,8 +1493,8 @@ export function renderDailyMarkdown(daily) {
     "",
     `${stamp}. Напрям із ${daily.direction_from}; структура на ${daily.timeframes?.map(tfLabel).join("/") ?? "4h/1h/15m/5m"}, лише закриті бари; ризик за size 1, ліміт $${cap ?? "—"}. Формат v3: кожен сценарій = сетап у граматиці журналу (header · entry when · K-рядки · BE · deeper run · breakdown · global), готовий до plan_add_setup; усе, що не назване, = чекаємо (docs/MARCO-CASES.md → Approved changes; пороги [CALIBRATION], docs/MARCO.md §6).`,
     "",
-    "| | Bias | Now | Головний сетап |",
-    "|---|---|---|---|",
+    "| | Bias | Напрямок | Now | Головний сетап |",
+    "|---|---|---|---|---|",
     ...summary,
     "",
     `**Сьогодні.** Вікна ${sessions} — рівень, узятий поза ними, = алерт, який читаємо з сіткою, не вхід сам по собі. Гейт: 4h-свічка ${gl}; з ${gw[0]} до ${gw[1]} входи з біасом після трейду за її екстремум (V5).${clock0 ? ` Наступні 4h-закриття: ${clock0.closes(3).join(" · ")}${tz ? "" : " ET"}.` : ""} Контр-тренд: ${ctOpen ? "відкритий — лише до найближчої цілі, ніколи не тримати проти глобального біасу" : "закритий (лише пн–вт)"}.`,

@@ -54,6 +54,10 @@
 //     is inducement. "· trap" marks an LB whose run took an intact origin.
 //     Trap pointers: a dashed line + label at the intact origin per side
 //     ("trap ↓ L · buyers induced @H"), not drawn at an alive LB extreme.
+//   * Thin-zone respects (v12, U4 — docs/MARCO-CASES.md, 2026-09-26): a pivot
+//     beyond the zone's inner edge but within eqTol of its extreme is a
+//     respect too (a 4-pip zone never collected one); a zone retired into a
+//     build-up releases the Auto bias it set — it tells no story any more.
 //@version=6
 indicator("Marco LB — Liquidity Blocks", "Marco LB", overlay = true,
      max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -187,6 +191,7 @@ var Pending pendBull = Pending.new()
 var Pending pendBear = Pending.new()
 var int biasDir   = 0 // +1 long, -1 short, 0 none
 var int lastLbDir = 0 // side of the most recent clean LB created (Auto bias)
+var int lastLbBorn = na // v12: bar of that LB — a zone retired into a build-up tells no story
 var int lastBullLbBorn = na // v10: bar of the previous CLEAN bull LB — the structure bound
 var int lastBearLbBorn = na
 var Swing sw = Swing.new()  // v11
@@ -805,6 +810,7 @@ if not na(pendBull.lvl)
         // deeper x1 is the refined entry; invalid or inducement never flips
         if qual and gradeB != "invalid" and not indB
             lastLbDir := 1
+            lastLbBorn := bar_index
             if biasMode == "Auto" and biasDir != 1
                 biasDir := 1
                 applyBias(biasDir)
@@ -831,6 +837,7 @@ if not na(pendBear.lvl)
              pendBear.oP, pendBear.oBar, pendBear.oAt, na(pendBear.runBar) ? pendBear.extBar : pendBear.runBar)
         if qual and gradeS != "invalid" and not indS
             lastLbDir := -1
+            lastLbBorn := bar_index
             if biasMode == "Auto" and biasDir != -1
                 biasDir := -1
                 applyBias(biasDir)
@@ -873,8 +880,13 @@ pivotHighTie(int len) =>
 
 // v9 LB vs build-up: a later pivot holding within eqTol of a live zone's
 // extreme is a respect of it; at the build-up touch count the zone retires
-// and its extreme becomes a level — a target, not a block
-respectZone(bool isBull, float p, int pBar) =>
+// and its extreme becomes a level — a target, not a block.
+// v12 (U4, 2026-09-26): the pivot may sit beyond the zone's inner edge — a
+// thin zone (6E W 1.1404–1.1408 against a 35-pip tolerance) otherwise never
+// collects a respect. Returns 0 no respect · 1 a respect · 2 the zone retired
+// · 3 the retired zone was the one that set the Auto bias (anchorBorn).
+respectZone(bool isBull, float p, int pBar, int anchorBorn) =>
+    int res = 0
     if array.size(blocks) > 0
         for i = array.size(blocks) - 1 to 0
             Block blk = array.get(blocks, i)
@@ -883,7 +895,9 @@ respectZone(bool isBull, float p, int pBar) =>
                 float gap = isBull ? p - ext : ext - p
                 if gap >= 0 and gap <= eqTol * atrVal
                     blk.respects += 1
+                    res := 1
                     if 1 + blk.respects >= minTouches
+                        res := not na(anchorBorn) and blk.born == anchorBorn ? 3 : 2
                         blk.dead := true
                         if isBull
                             registerLevel(lowLvls, true, blk.left, ext, 1 + blk.respects)
@@ -891,7 +905,7 @@ respectZone(bool isBull, float p, int pBar) =>
                             registerLevel(highLvls, false, blk.left, ext, 1 + blk.respects)
                         killBlock(i, blk)
                     break
-    true
+    res
 
 float pl = pivotLowTie(pivotLen)
 float ph = pivotHighTie(pivotLen)
@@ -899,19 +913,30 @@ float ph = pivotHighTie(pivotLen)
 if not na(pl)
     // the sweep extreme itself holds no liquidity (docs/MARCO.md §2.3) —
     // skip lows born inside an unresolved sweep's own excursion (beyond the
-    // swept level); a low inside a live bullish zone is a respect of it (v9)
+    // swept level); a low inside a live bullish zone is a respect of it (v9),
+    // one beyond it within eqTol of the extreme too (v12); else a level
     if na(pendBull.lvl) or pl > pendBull.lvl
-        if insideAliveZone(true, pl)
-            respectZone(true, pl, bar_index - pivotLen)
-        else
+        int rzB = respectZone(true, pl, bar_index - pivotLen, lastLbBorn)
+        if rzB == 0 and not insideAliveZone(true, pl)
             registerLevel(lowLvls, true, bar_index - pivotLen, pl)
+        // v12: a zone retired into a build-up tells no story — the Auto bias
+        // it set is released (the engine's storyRead treats it as superseded)
+        if rzB == 3 and lastLbDir == 1
+            lastLbDir := 0
+            if biasMode == "Auto" and biasDir != 0
+                biasDir := 0
+                applyBias(biasDir)
 
 if not na(ph)
     if na(pendBear.lvl) or ph < pendBear.lvl
-        if insideAliveZone(false, ph)
-            respectZone(false, ph, bar_index - pivotLen)
-        else
+        int rzS = respectZone(false, ph, bar_index - pivotLen, lastLbBorn)
+        if rzS == 0 and not insideAliveZone(false, ph)
             registerLevel(highLvls, false, bar_index - pivotLen, ph)
+        if rzS == 3 and lastLbDir == -1
+            lastLbDir := 0
+            if biasMode == "Auto" and biasDir != 0
+                biasDir := 0
+                applyBias(biasDir)
 
 // ------------------------------------------ 6. trap pointers (v11, V8) -----
 // "grab this low, drag it over": the intact origin of the last inducing move

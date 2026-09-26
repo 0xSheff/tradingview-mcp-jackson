@@ -15,3 +15,5 @@ tmp/
 .idea/
 .codex/
 briefs/
+# one-off research scripts and bar snapshots (numbers live in docs/MARCO-DIRECTION.md, docs/ICT-NOTES.md)
+scripts/research/

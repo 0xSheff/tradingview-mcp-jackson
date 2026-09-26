@@ -9,7 +9,9 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
 - **Case ids.** `D#` = Inter Equity Discord post, `IG#` = Instagram post, `U#` = the
   user's own markup reviewed in a session, `E#` = a YouTube video by Elijah (Ghost
   Capitals, @Ghostcapitals — an IE coach with his own branch in the Inter Equity
-  Discord; user, 2026-09-14). Author is named when it is not Marco
+  Discord; user, 2026-09-14), `N#` = the trader's Notion course notes of the ICT / SMC
+  school (N1–N4, distilled in `docs/ICT-NOTES.md`; a neighbouring method, tagged `[ICT, N#]`,
+  never `[SOURCE]`). Author is named when it is not Marco
   (e.g. Elijah, IE moderator) — a moderator's chart is evidence about the method, not
   the author's word; it stays `[SOURCE, D#]` only if Marco's own rule is quoted.
 - **Per case:** date/time (ET and Athens), instrument, what the pictures show, what
@@ -82,6 +84,148 @@ All four below were **built on 2026-09-11** (`src/core/marco_grid.js`, wired int
 `docs/MARCO.md` §3.1 and §6). Two things were learned in the build and are
 recorded under *Rule candidates* → pocket flag.
 
+- **HTF direction read — targets from the map, heading from acceptance** (trader, 2026-09-26,
+  after U4; **not built**). The trader's decisions, in his words where they are rules:
+  1. **Significant levels for the direction read live on HTF only — D, W, M**: "any 3-bar
+     fractal there is a significant level" (one bar each side, the U4 candidate *HTF extremes*);
+     MTF and below keep `pivot_len` 3.
+  2. **Acceptance ("закріплення") = the close of the D / W bar beyond the level.** A close
+     beyond it toward the target says the market is moving toward the target; failing to
+     close beyond it toward the target says a correction, or a move to the nearest opposite
+     targets, is possible. "Weekly bias up, but the daily bar could not close above an
+     intermediate level — we expect a correction."
+  3. **Targets ≠ direction** (U4 correction): merges, build-ups and pockets stay on the map
+     and never oblige the direction read.
+  4. **ICT add-ons, optional and switchable** (N1–N4): CRT on D and W (M is too large for the
+     planning horizon), order flow on HTF and on the H4 toward *our* targets, the FVG edge
+     nearest to price (third candle's low after an up-move, high after a down-move) as a level.
+     "Not rigid dogmas and no false confidence — improve what exists, do not overcomplicate."
+  **Data check before the build (analyst, 2026-09-26; `docs/ICT-NOTES.md` → Data check):**
+  on W/D of 6E / MNQ / MES / MGC, acceptance at a 3-bar fractal reached the next fractal before
+  a close back 49% vs 36% (W, n=68) and 46% vs 35% (D, n=80) against a position-matched
+  baseline; a run without a close beyond gave nothing about the opposite side (27–29% vs
+  28–31%); a lost acceptance leaned that way weakly (37–40% vs 30–35%, n=35–42). CRT and the
+  previous-candle reversal / continuation models matched their baselines (CRT candle 3: 36%
+  vs 35% W, 32% vs 32% D). U4 replay of the rule on 6E: W accepted over 1.1705 in W34, lost it
+  at the W35 close (28 Aug) — no W heading since; D: Wed 16 Sep closed under 1.15645
+  (accepted down), again Tue 22 Sep under 1.1495; Wed 23 / Thu 24 Sep ran 1.14175 / 1.1404
+  without a close under (stalled at the target). The W39 weekend therefore read "W heading off
+  since 28 Aug, D heading down since 16 Sep → 1.14175 → 1.1404", the trader's read; the three
+  22 Sep longs sat against the D heading.
+  **Proposed integration (analyst, pending the trader's OK):**
+  - *Map* (existing) keeps every target on both sides; adds HTF 3-bar fractals (D/W/M), the
+    previous D/W candle extremes (V7's HTF candle highs) and, switchable, FVG edges — as
+    targets / rungs only, never stop anchors (no LB, no stop).
+  - *Direction* (new core, the trader's rule, always on): per W and D a state word with its
+    evidence (bar, level, closes). **Superseded the same day by the two-bar decision** (below):
+    the run bar is provisional, the next close decides — continuation (beyond·beyond,
+    back·beyond), failed breakout = heading to the other side (beyond·back), held sweep =
+    pause (back·back); the v0.1 states `stalled` / `lost` are replaced. A turn needs an
+    acceptance on the other side, a failed breakout, or a qualified Marco trap (§3) — never a
+    held sweep alone (no edge in the data).
+  - *Leg / order flow* = the U2 MTF leg layer built with the same acceptance machine on D and
+    H4 (H4 swings `pivot_len` 3): consecutive acceptances toward the target = the flow (HRLR),
+    an acceptance against it beyond the leg's last swing = the MSS / turn.
+  - *Entries* unchanged (LB, trap, the U3 LTF build-up), ranked by the heading.
+  - *Guards*: states print their evidence, no scores; W and D disagreeing print "mixed" and the
+    close that would resolve it; v1 only labels and orders scenarios (with / against the
+    heading), blocks nothing; the journal stores the state per plan, gating is decided on the
+    journal's numbers later.
+  - *Not taken from N1–N4*: CRT and the previous-candle models as direction signals (no edge
+    in the data; their levels stay on the map), PO3 / AMD and the opens (the 10 a.m. H4 model
+    covers timing), OB / STB / BTS (the LB, V8 origin and 4-candle model cover them).
+  - *Could retire*: the divergence rule (§3.1), a stand-in for "is the market heading to the
+    target now" — the trader's call. **The Mon–Tue window stays** (trader, 2026-09-26: "we do
+    not drop it, we validate it — probability"); first measurement in `docs/ICT-NOTES.md`.
+  **Trader's clarification (2026-09-26):** CRT was an example of HTF price reacting at the
+  previous bar's high / low — a bar-by-bar read, finer than the 3-bar fractal. Simplified to
+  "today's / this week's close against the previous bar's high / low" and read as order flow,
+  it is **one factor, never standalone**, of the answer "are we heading to the bias targets
+  now, or correcting?" ("today ran yesterday's high and closed under it — tomorrow likely
+  down — together with the rest of the system, not in a vacuum"). The main weak spot is named:
+  targets and bias exist; the middle part — is the market moving with the bias right now — is
+  what the system lacks. In-context numbers: `docs/ICT-NOTES.md` → *Second pass*.
+  **Two-bar decision on HTF (trader, 2026-09-26, before the build):** "the run of 1.17050 took
+  two weekly bars — one up, one down — and that also counts as acceptance, here under 1.17050.
+  We should not limit acceptance to one bar, but three bars is already a lot for HTF. If the
+  first bar broke the level and the second did not close back, the level is simply
+  invalidated — we give up to two bars for acceptance beyond the level." Formalized (analyst,
+  `docs/MARCO-DIRECTION.md` §9.2): the run bar gives a provisional read; **the next bar's close
+  decides** — beyond·beyond = level invalidated (continuation), back·beyond = late acceptance
+  (continuation), beyond·back = failed breakout = acceptance on the original side (the trap;
+  its LB = run extreme ↔ L), back·back = the sweep held (pause). After the decision the level
+  is off the direction map; a later close back through an invalidated level is no event (the
+  v0.1 "lost" state is dropped). Data (`scripts/research/direction/heading4.mjs`, same events
+  both ways, position-matched): beyond·beyond 66% vs 44% (W, n=62) / 54% vs 44% (D, n=69);
+  back·beyond 63% vs 38% (51) / 50% vs 38% (42); beyond·back → the opposite fractal before a
+  new close beyond L 46% vs 37% (50) / 54% vs 36% (39) — with a touch of the run extreme as the
+  stop instead, 51% vs 50% / 54% vs 43%; back·back 45% vs 45% / 46% vs 47% (nothing). One-bar
+  reading on the same events: acceptance 52% vs 36% / 46% vs 35%, close back 30% vs 28% /
+  33% vs 31%. U4 under the two-bar rule (`u4walk2.mjs`): W ↓ from the W35 close (failed
+  breakout of 1.1705); D ↓ from Fri 4 Sep (failed breakout of 1.1671: Thu close 1.16785, Fri
+  1.16545), Wed 9 Sep 1.1685 a held sweep (pause), Mon 14 Sep late acceptance under 1.16125,
+  1.15645 / 1.1495 invalidated down 17 / 23 Sep, 1.14175 late acceptance 24 Sep, 1.1404 a held
+  sweep 25 Sep. The W39 weekend therefore reads "W ↓ since 28 Aug, D ↓ since 4 Sep → 1.14175 →
+  1.1404" — W and D agree, the trader's read.
+  **Robustness correction (analyst, 2026-09-26):** re-run with the two-bar W heading (always
+  defined, 1152 days) and split by heading age, the directional rows of the in-context table
+  fell to base (correction day → next day toward the target 53% vs 52%, +3 days 55% vs 53%);
+  the first-pass 62% / 63% depended on the heading definition and is withdrawn. What held: after
+  a correction day its extreme is run the next day in 62–64%, then closes back toward the
+  target in 23% (vs 13–14%) or beyond it in 30–31% (vs 22–24%) — the bar-by-bar read locates
+  tomorrow's battleground, not its outcome. Mon–Tue on the two-bar proxy (n = 237): the
+  counter-heading extreme on Mon/Tue 41%, the with-heading one 41%.
+  **Built 2026-09-26** (the trader: "так, згоден … починаємо"; rules in `docs/MARCO.md` §3.2):
+  `src/core/marco_direction.js` — `directionRead` (two-close decisions on D/W 3-bar fractals),
+  a **lost** state added in the build (two closes back through the heading's own level switch
+  it off — MNQ W ↓ 24.07 under 28 817.25 would otherwise have held through the +2000-point
+  August rally with no W fractal to decide on), `composeDirection` (with / correction / mixed /
+  weekly only / daily only / none; W dated at the Friday close), `barRead` (the last D bar vs
+  the previous, the correction-day battleground), `splitFormingHtf` (D/W closed by the session
+  close). Wired: `marco weekly` (Direction-now lines, a line when the heading is against the
+  story), `marco daily` (fetches W/D, **Напрямок** block, W/D column, a `напрямок:` label on
+  every journal setup incl. the Mon–Tue counter-trend one), `marco scan` (`direction` on D/W,
+  forming D/W bars cut). Tests `tests/marco_direction.test.js` (12, real 6E/MNQ bars).
+  Live check 2026-09-26 on the chart: 6E "W↓ D↓, against the story's long", MGC "W↓ only,
+  against the story's long", MNQ "D↓ only", MES "none". **Not built:** the correction-day
+  battleground as its own scenario in `dailyScenarios` (printed in the block only), the H4
+  leg (U2) on the same machine (needs an H4 measurement first), the ICT add-ons (previous-bar
+  levels, FVG edges), a Pine counterpart. **Calibration question for the trader:** closes are
+  literal (no tolerance) — 6E D lost its heading on 8–9 Sep by closes 0.5 / 1 pip over 1.1671.
+  **Trader's answers (2026-09-26, after the build):** (1) closes stay literal — "не треба
+  окремий допуск"; (2) the lost state as built — yes; (3) Pine into the current script, no
+  backup ("TradingView зберігає історію версій") — pushed: "Liq blocks" 12.0 → 14.0 (two saves
+  of one source), the TV source verified identical to `scripts/marco_liquidity_blocks.pine`
+  before (= repo HEAD) and after (= v12); on 6E W the 1.1404 level now draws as a build-up box;
+  (4) the `напрямок:` line in the journal setups — yes.
+
+- **Intraday brief format v3.1 — meaning first, levels after** (trader, 2026-09-24 ~09:30,
+  on the first v3 brief with the hand MTF lines: "перерахування — списком з булітами, не
+  текстом"; "дуже важко читати, коли текст перемішаний з цифрами — спочатку суть, далі окремо
+  рівні, компактно і якомога менше, тільки ті, що реально потрібні; для LB достатньо однієї
+  ціни — рівня екстремуму, блок показує індикатор"; "історія подій видна на графіку —
+  описувати поточний стан і чого чекаємо, без зайвого". **The wording below is the working
+  draft; the engine build (`renderDailyMarkdown` in `src/core/marco_grid.js`) follows the
+  trader's OK on the worked example — the MTF lines in `briefs/daily/2026-09-24.md` and the
+  MNQ block shown in chat the same morning.**) Rules, on top of v3:
+  1. every prose block (Bias, MTF, Now, the closing lines) = one or two sentences of meaning
+     with no prices in them, then a `Рівні:` line;
+  2. ≤ 7 levels per instrument outside the setups — the two grid edges, the run extreme
+     (= stop anchor), ≤ 3 targets, the HTF zone / next edge, the invalidation; every other
+     level lives only in the `Alerts:` line;
+  3. one price per LB — its extreme (the stop side); the trigger is already named as the
+     grid edge and the "Liq blocks" indicator draws the box;
+  4. no event history: the `З останньої перевірки` line goes; `Now` = the state word +
+     what we wait for, as `Чекаємо:` bullets (the exact event: TF, level, close time); the
+     forming-bar note stays as "бар … відкритий — не рахується" without H / L / now;
+  5. any enumeration of 2+ items (instruments, scenarios, conditions, levels) is a bulleted
+     list, never a sentence joined with "·";
+  6. the setups keep the journal grammar (structured rows), with LB zones shortened to one
+     price; the JSON setup objects are unchanged.
+  7. bar times name the bar's **open** only — "у барі 17:00", the time TradingView's date
+     axis shows — never the range "17:00–21:00"; close times stay only for events that happen
+     at a close ("4h-закриття о 21:00", "до 21:00") (trader, 2026-09-24 ~10:00; `briefClock`
+     in `src/core/marco_grid.js` is where the label is built).
 - **Intraday brief format v3 — journal setups, in Ukrainian** (trader, 2026-09-23 evening:
   "the result in the format of setups, exactly as we add them to the journal, but in
   Ukrainian — much clearer, and I can go through the setups and pick which ones to add";
@@ -254,6 +398,29 @@ recorded under *Rule candidates* → pocket flag.
 
 ## Rule candidates
 
+- **LTF build-up after the run = the entry; the close back = the grid state only**
+  `[CALIBRATION, user-raised, 2026-09-24 — case U3; SOURCE support V2 §4.2, V6 §4.4, V8 §2.2;
+  not built]`. The trader: "closing a bar back over the level after the run gives little
+  and often misleads; the best thing Marco gave is the build-up on the small TF after
+  the run — respecting lows, a high broken, buyers induced — the order goes under that
+  structure, the stop under the LB the run left." He favours two entry variants and will
+  find the video where Marco explains the second:
+  1. **V6 sweep-trigger (§4.4)** — a resting order under the bias-side level itself when a
+     pre-existing bias-side LB supplies the stop; no reclaim wait.
+  2. **LTF build-up (§4.2 sniper / 4-candle model + §2.2 V8)** — after the run of the edge,
+     wait on 5m/15m for a bias-side structure: a higher low / lows respecting, then a high
+     broken (buyers induced); the *origin* of that inducing move is the trap pointer; the
+     order rests under that build-up, the stop under the extreme of the LB the original
+     run left. Candle 2 of §4.2 *is* that LB, candle 3's low the build-up, candle 4 the
+     entry.
+  The bar-close reclaim (`confirm_bars`) keeps one job: the H4 grid's state word (PENDING →
+  VALID → the LB becomes the edge). It stops being the `entry when` condition in the brief
+  and the journal. Pocket rule on the stop: an intact deeper level within the pocket
+  tolerance under the LB extreme (U3: 1.14035 x4, 3 pips under 1.14065) means the stop goes
+  under *that* level or the entry is its run. Engine side (U3 gap below): the 5m/15m LB must
+  be born by a trade back over the swept level inside `story_lookback`, not by a close within
+  `confirm_bars`; trap pointers and the intact-below list already give the build-up and its
+  origin. Engine + Pine together when built.
 - **MTF leg layer (D + 4h)** `[CALIBRATION, user-raised, 2026-09-23 — case U2; not built]`.
   The stack reads the global W story and the *latest event* per timeframe; the
   divergence rule (MARCO.md §3.1) turns "D continuation against a live W trap" into
@@ -288,6 +455,97 @@ recorded under *Rule candidates* → pocket flag.
      HTF-side event, the last counter extreme, the HTF zone ahead) → an `MTF:` line in
      the brief's Bias block and the scenario ranking keyed on it. Piloted by hand in
      `briefs/daily/2026-09-23.manual.md`.
+
+- **HTF sell-side read of a range: the draw first, the failed breakout as the trap**
+  `[CALIBRATION, user-raised, 2026-09-25 — case U4; SOURCE support §3 step 2 (V3, V4),
+  §2.1 extremes (V3), §2.3 LB (V1); not built]`. The trader read W38–W39 6E as short to
+  1.1404 x3 after two upside manipulations; the stack read long with its invalidation on
+  that same pool. Four parts, each replayed on the U4 bars (scratch copy of the engine,
+  flags, `tests/marco*.test.js` 71/71 green with 1–3 on):
+  1. **Zone respects outside a thin zone** — a bug against §2.3 as written, see *Engine
+     gaps*. Alone it retires the W anchor 1.1404–1.1408 into a W build-up x2 at the W34
+     close and removes the 1.1404 invalidation.
+  2. **A retired anchor tells no story** — `storyRead` still picks the anchor's
+     `bull_lb_created` event after the zone died as a build-up (death `buildup`); treat it
+     like `deepened` (superseded). With 1: W stops reading `buy_story`.
+  3. **Reachable draw** — fuel counts only build-ups born within 2× `story_lookback`
+     (reused). U4: the W "draw up x4" was 1.29435 x2 + 1.3319 x2 from 2021, 12–19 weekly
+     ATRs away; reachable fuel is above x0 vs below x2 (1.1404) → draw down. Open: whether
+     the weekly brief's `resolveBias` should read the draw at all when the W story is
+     no-man's land (today only the story is read).
+  4. **Failed breakout = a late trap** — a run whose close back through the level comes
+     after `confirm_bars` but before the run extreme is exceeded still prints the LB (§2.3
+     has no time limit; `confirm_bars` is ours), flagged `late`. U4 D: 1.1705 run Wed 19
+     Aug, five closes above, first close back Wed 26 Aug → bear LB 1.1705–1.17625 and
+     `sell_story`, targets 1.1566 → 1.1404 (replayed as `confirm_bars` 6, which is a probe,
+     not the proposal — the PENDING state keeps `confirm_bars`). Same gap as U3 on 5m;
+     build together. Qualification: 1.1705 was x1 and 46 D bars old (< `min_level_age`
+     50) — it qualifies as the **range extreme**: the origin of the move into the
+     anchor, the other side of the range by role (§2.1 "extreme highs framing the
+     range", §3 step 2 "highs get run → shorts back through the range").
+  With 1–4: `short (aligned)` from the W36 close (Fri 4 Sep), target 1.1404, invalidation
+  weekly close above 1.17625 — the trader's read. With 1–3 only: `short (daily_only)`,
+  but only because the 300-bar D window reads the stale Jan-top bear LB; the live 500-bar
+  window read the June LB instead, so 4 is what makes it robust.
+  **Status 2026-09-26:** parts 1 and 2 **built** (engine + Pine v12, see *Engine gaps*); part 3
+  (reachable draw) and part 4 (late reclaim, together with U3) **not built** — the direction
+  read (*Approved changes* → "HTF direction read") now answers "where is the market heading"
+  without them, so they wait for the map's own recalibration.
+
+- **HTF extremes: one bar each side on D / W / M, the fractal stays below**
+  `[CALIBRATION, user-raised, 2026-09-25 — case U4; SOURCE support V7 "this 4-hour high
+  is just another high … I just grab that high", V2 candle 1 = a one-candle level; not
+  built]`. The trader: "Marco and his team take extremes quite aggressively, but they
+  split them by role and pick only the significant ones." Proposal: `pivot_len` 1 on
+  D/W/M, 3 on 4h and below; extremes by role (range extreme, move origin) on top.
+  Replayed on U4 (current engine otherwise, W 300 / D 300 bars):
+  - **D sees both manipulations.** Wed 19 – Fri 21 Aug: the run of 1.1705 / 1.1733 →
+    bear LB 1.1733–1.17625, qualified, clean (no late reclaim needed); Wed 9 Sep: the run
+    of 1.1685 → bear LB 1.1685–1.1697 (invalid by E1: 1.17125 x1 intact, zone unqualified).
+    D `sell_story`, bias `short (daily_only)` from the W36 close, targets 1.1438 / 1.1404 at
+    the W39 weekend, invalidation daily close above 1.17625.
+  - **W still misses the range top, for a different reason.** 1.1705 is now a W level, but
+    the W34 high 1.17625 stopped 14 pips under the May high 1.17765 (W eq_tol ≈ 33 pips) →
+    `high_poke`: "inducement into the pocket", 1.17765 x2 stays the target above. With
+    `pivot_len` 3 the same high was swallowed earlier, as a respect of 1.17765 (71 pips,
+    W respect_tol ≈ 113). On HTF the ATR-scaled merges (eq 0.25, respect 0.75) decide what
+    an extreme is as much as the pivot window does. ~~Candidate for the role layer: a level
+    born before the current structure cannot absorb the structure's own extreme — no merge,
+    no pocket across the range's origin.~~ **Retracted on the trader's correction
+    (2026-09-25):** "the merge is right and must stay — 1.17765 really was respected by the
+    W bar of 26 Aug; but a respected level does not tell us the market is going to take it
+    now. It can respect a level several times and we never know when it decides to take the
+    whole build-up. We need a split: there are targets, and there must be a read of whether
+    the market is heading to them right now or the other way. The run of 1.17050 and
+    acceptance under it already said the market does not want to go up; it confirmed that
+    when it ran the previous week high (W36 → W37, 1.1685 → 1.1697) and closed back under.
+    The merge must not oblige the analysis." → **targets ≠ direction**: the map (levels,
+    merges, build-ups, pockets) says where liquidity rests; the direction read says which
+    side the market is heading to *now*, from what it does at the significant levels
+    (run and acceptance beyond = continuation, run and acceptance back = rejection of that
+    side).
+    Today the engine lets map facts vote on direction: the pocket poke prints "inducement
+    into the pocket, not a trap", the trap pointer "their stops over 1.17625 — its run is
+    the trap", the draw sums fuel with no regard to heading, the anchor holds until killed.
+    Bar closes against the previous bar (the W36 → W37 run) — to be discussed separately.
+  - **Noise.** W: LBs 35 → 55 (qualified 5 → 15), build-ups 5 → 18. D: LBs 31 → 59
+    (qualified 5 → 13), build-ups 8 → 16; D draw "up x10 vs below x5". `min_touches` /
+    `min_level_age` were tuned on pivot 3: more x2 means more qualified anchors, so more
+    story flips. Needs a W/D regression on MNQ / MGC / 6E (W36–W39 briefs) and the V6 NQ
+    walkthrough (§7.2) before adoption.
+  - **Lag.** 3 bars → 1 (W: the W31 low 1.14175 known at the W32 close instead of W34).
+  - Monthly is not in the stack today (`marco weekly` reads W, D, 240, 60); adding M is a
+    separate step. Pine: the default becomes `timeframe.isdwm ? 1 : 3` — engine and Pine
+    together (§7).
+  **Status 2026-09-26 — split in the build.** The 3-bar fractal is **built where the trader
+  defined it, for the direction read** (`direction.pivot_len` 1, *Approved changes*). On the
+  liquidity **map** the regression (`scripts/research/direction/regress_pivot.mjs`, weekly
+  layer at the W36–W39 weekends, map fixes 1–2 on) came out worse: MES "short/aligned, target
+  7362.75" for four weeks while price ranged 7650–7870 and closed W39 at 7803 (pivot 3: no
+  bias); MNQ "no bias" at W36–W37 before the W39 rally (pivot 3: long/pullback); MGC "no bias"
+  at W39 (pivot 3: long); V6 (NQ W, 2025): Jun 3 buy_story → up_continuation. So the map keeps
+  3 — a knob `htf_pivot_len` (engine, default 3; `cfgForTf`) is there for a recalibration of
+  `min_touches` / `min_level_age` under pivot 1, and Pine's `pivotLen` is unchanged.
 
 - **Ladder split** (from U1; **built 2026-09-11** — `storyRead` marks counter-side
   zones `pullback_origin` / `extreme`, the reads print "(LB, pullback origin)" vs
@@ -392,6 +650,44 @@ E1 build): the pending reopens against the original level with its qualification
 `bull_lb_deepened` marks it; the MNQ real-bars test pins the Sep-2 read.
 
 ---
+
+**5m LB not born when the close back comes after `confirm_bars` (2026-09-24 09:41, `marco scan
+CME:6E1! --tf 5`, case U3).** 1.1417 (the 4h bias edge) was traded through 03:15 Athens, extreme
+1.14085 03:50, first 5m close back over it 04:10 (4 bars after the extreme, 11 after the first trade
+through); the run repeated 04:55 → extreme 1.14065 05:10, the 05:30 bar closed exactly 1.1417 and
+the first close strictly above came 05:40 — 6 bars. On 5m the map dropped the level without printing
+a block (`blocks` has no bull zone; 1.14065 is listed as a plain intact low x1; all three long
+triggers say "no LB beyond the trigger — no stop anchor"), while the trader's rectangle 1.14065–
+1.1409 is the LB by §2.4 (sweep extreme ↔ swept level) and the same scan's 5m trap pointer already
+reads the structure built on top of it: "buyers induced 6 bars ago (the high 1.14225 run) — their
+stops rest under the origin 1.1413: its run is the trap". The 15m closed back on its 3rd bar
+(05:30–05:45, 1.14205) and the 1h in the run bar itself (05:00 bar: low 1.14065, close 1.14215), yet
+the 09:04 daily printed "1h: NOISE — continuation down" (to check: 1.1417 unqualified on the 1h
+map — one touch, one day old). Fix direction: rule candidate *LTF build-up after the run*.
+
+**Zone respects are counted only inside the zone (2026-09-25, case U4).** §2.3 says a later
+swing holding within `eq_tolerance` of a live zone's *extreme* is a respect; both
+implementations reach `respectZone` only when the pivot is *inside* the zone
+(`insideZone` in `buildLiquidityMap`, `insideAliveZone` in the Pine). A thin zone therefore
+never collects respects: the 6E W bull LB 1.1404–1.1408 (4 pips, W eq_tol ≈ 35 pips) got
+the W31 low 1.14175 — 13.5 pips above the extreme, 9.5 above the zone top — as a separate
+x1 level, kept `respects = 0` and stayed the W anchor and the brief's invalidation for 13
+weeks, while the D map had 1.1404 as an x3 build-up. Fix: try `respectZone` for any pivot
+within `eq_tolerance` beyond the extreme, register a level only when it did not count.
+Replayed on U4 with the full marco suite green (71/71). Engine + Pine together.
+**Fixed 2026-09-26** — engine (`buildLiquidityMap`, `respectZone` returns whether it counted)
+and Pine v12 (`respectZone` returns a code; a retired zone that set the Auto bias releases it);
+a zone retired into a build-up tells no story (`storyRead` → superseded). Test: the U4 W anchor
+retires at the W34 close into 1.1404 x2 (`tests/marco_direction.test.js`). The Pine compiles on
+TradingView's server check (0 errors); pushed to "Liq blocks" the same day (TV version 14.0).
+
+**HTF range extremes that are not strict pivots (case U4).** W `pivot_len` 3 is a 7-week
+window: the W25 high 1.1705 (the origin of the June drop, the range top) is not a W swing
+because W23 1.1755 is two bars to its left, so the W map had no range top and both upside
+runs of Aug–Sep produced no W event. On D, the Thu 3 Sep high 1.1685 was run on the third
+bar to its right (Wed 9 Sep, 1.1697, close 1.1672), so it never became a swing and the
+run + reclaim printed nothing on D; only the 4h/1h had bear LB 1.1692–1.16965, listed as a
+false reaction. Same family as the shelf table above; no fix proposed yet.
 
 ## Cases
 
@@ -843,3 +1139,115 @@ traps; (2) the counter-trend trigger took the structural high instead of the bui
 that was actually run. Rule candidate *MTF leg layer* above; (2) is already the V8 rule —
 the counter-trend rows must apply the origin / build-up test the same way the with-bias
 rows do.
+
+### U3 — user's 6E 5m markup, 2026-09-24 09:38 Athens (price 1.1424, weekly LONG, inval 1.1404, 4h edge 1.1417 PENDING)
+
+**What the user drew.** A rectangle at the low of the 1.1417 run (≈1.14065–1.1409, the
+05:05–05:15 wicks) — "the LB that formed when price came back, which for some reason the
+indicator does not show on 5m" — and two arrows at the 08:55 / 09:00 lows 1.1413: "the
+build-up, buyers induced; now we can enter on the run of this build-up, where the alert
+stands". His rule: after the run of a key level we look long → wait for a 5m build-up
+(respecting lows, break of highs, induce buyers) → the order under the run of that
+structure, the stop under the LB formed at the run. His view of our reclaim test: "a bar
+close after the run gives little and often misleads".
+
+**Bars (5m, Athens).**
+- 03:15 first trade under 1.1417 (low 1.1416) · 03:50 extreme 1.14085, vol 1 621 · 04:10
+  first close back over 1.1417 (1.1419).
+- 04:55 back under (1.14125) · 05:10 extreme **1.14065**, close 1.1407 · 05:30 close 1.1417
+  exactly · 05:40 close 1.14205 = first close strictly above, 6 bars after the extreme.
+- 05:40–06:35 up to 1.1423 · 07:00 back to 1.1414–1.14145 (07:15 low 1.14125) · 08:55 low
+  1.1413 · 09:00 low 1.1413 (**x2, the build-up**) · 09:05–09:10 highs 1.1423 / 1.14265 =
+  the 06:35 high 1.14225 run (**buyers induced**) · 09:30 high 1.1428 · 09:40 close 1.1422.
+- Below: 1.14065 x1 (the LB extreme) · **1.14035 x4** (the W-anchor build-up, inval W
+  1.1404) · 1.1408 = the W39 anchor LB 1.1404–1.1408.
+
+**Engine on the same bars (`marco scan --tf 5`, 09:41).** Story `sell_story` — "highs run
+and reclaimed 0 bars ago at the bear LB 1.14265–1.1428 [AGAINST the week's long bias — a
+false move, use it to enter with the bias]"; trap pointer bull **1.1413**, "buyers induced
+6 bars ago (the high 1.14225 run) — their stops rest under the origin 1.1413 that move came
+from: its run is the trap, a reclaim there the long"; long triggers 1.14125 x2 / 1.14065 x1 /
+1.14035 x2, all "no LB beyond the trigger — no stop anchor". No bull block on 5m (gap above).
+
+**Compare.** The user's structure read and the engine's 5m trap pointer coincide to the
+tick: build-up 1.1413, induced at 1.14225, the run of 1.1413 = the trap → long. They
+diverge on the LB: the user marks it by §2.4 (extreme ↔ swept level), the 5m map never
+printed it because the close back took 6 bars > `confirm_bars` 3 — the calibration, not the
+source, produced the miss. The 4h daily's `entry when` ("1h/15m close back over 1.1417 → tap
+of the LB") was in fact satisfied at 06:00 (1h) / 05:45 (15m) and still read "1h: NOISE" at
+09:04 — a second sign that the close-back proxy and the structure disagree.
+
+**Stop.** The user's stop "under the LB" = under 1.14065 (≈1.1406, $81 from 1.14125). The
+W-anchor build-up 1.14035 x4 sits 3 pips under that extreme — inside the pocket (§3.1,
+respect tier): the run of 1.1413 can extend to it (V8: "the first reaction at the origin is
+not the trap … induce buyers once more"). Stop under 1.14035 → ≈1.1401, 11.5 pips = $144,
+RR 5.0 to 1.14705 / 7.1 to 1.14945 / 9.1 to 1.1518. A fill before 10:00 is outside the
+London window by the plan's letter (a [CALIBRATION] window, the trader's call).
+
+**Outcome.** _pending — fill in after the session._
+
+**Verdict.** The read is V8 by the book and §4.2's 4-candle model one level up (candle 2 =
+the 1.14065 wick, candle 3 = the 1.1413 lows, candle 4 = the entry). Our close-back reclaim
+was a proxy for "the run left an LB / a reaction structure"; on 5m the proxy fails where
+the structure is plain. Rule candidate *LTF build-up after the run = the entry; the close
+back = the grid state only* (above) — two entry variants, both with SOURCE; the trader
+will bring the video for the second.
+
+### U4 — user's 6E W/D markup, 2026-09-25 12:03 Athens (price 1.1430, weekly LONG, inval 1.1404)
+
+**What the user drew.** Three orange lines on W and D: the range top 1.1705 (the W25 /
+Mon 15 Jun high, extended to the August run), a second top ≈1.1685–1.1690 (Thu 3 Sep high,
+extended to the Wed 9 Sep run) and the range bottom 1.1404 (Tue 23 Jun, extended to now).
+His read: "the whole week the bias was down with the target 1.1404 — x2 at least there,
+plus two manipulations above: a break up with acceptance back below. We called it long.
+What is the system missing?"
+
+**Bars (CME 6E1!, sessions).**
+- Range bottom: Tue 23 Jun L 1.14040 (ran the May-2025 W low 1.1408) · Thu 23 Jul L 1.14285
+  · Tue 28 Jul L **1.14175** → 1.1404 x3 on D, x2 by §2.3 on W.
+- Manipulation 1 (range top): Mon 15 Jun H 1.17050 → Wed 19 Aug close 1.1726 (first close
+  above) → Fri 21 Aug H **1.17625** (W34 close 1.17335) → closes 1.1715 / 1.17245 → Wed 26
+  Aug close 1.1701 (first back below) → Fri 28 Aug 1.1628 (W35 close); never above since.
+- Manipulation 2 (lower high): Thu 3 Sep H 1.16850 (W36 high) → Wed 9 Sep H **1.16970**,
+  close 1.16720 (run + close back the same day; W37 close 1.1638).
+- Leg: W38 close 1.1523 (−115 pips) → W39 low **1.13970** Thu 24 Sep (1.1404 x3 run by 7
+  pips, D close 1.14115 back above) → 1.1437 Fri (forming).
+
+**Our read at the time (W39 brief, 20 Sep).** `LONG (aligned)`: W `buy_story` "lows run
+and reclaimed 12 bars ago" at the bull LB 1.1404–1.1408 (fresh by `story_fresh_bars` 16),
+invalidation weekly close < 1.1404, targets 1.17625 / 1.1964 / 1.2166; D the same LB 60
+bars old (stale), "the high 1.1705 consumed 18 bars ago was an internal point: inducement
+while the LB holds", trap pointer "sellers' stops over 1.17625 — its run is the trap". The
+1h trigger list itself had "long sweep below 1.1404 (confirmed x2)", i.e. the pool the
+invalidation sat on. W `draw`: "up x4 vs below x0" — 1.29435 x2 and 1.3319 x2 from 2021.
+
+**Engine replay (offline, the chart's W 300 / D 300 bars, cut at the W36 and W38 closes).**
+Why each step read long:
+
+| Step | What the engine did | Rule / parameter |
+| --- | --- | --- |
+| W anchor | 1.1404–1.1408 alive 13 weeks, `respects = 0` | respect counted only inside the zone (*Engine gaps*) |
+| W range top | 1.1705 and 1.1685 never W levels → no W event in Aug–Sep | `pivot_len` 3 on W (*Engine gaps*) |
+| D run of 1.1705 | no close back within 3 bars → `high_breakdown`, unqualified (x1, 46 < 50 bars) | `confirm_bars`, `min_level_age` |
+| D run of 1.1685 | 1.1685 not a D swing (run on its 3rd right bar) | `pivot_len` |
+| Bias | a D sell read (300-bar window: stale Jan-top LB, targets 1.1404) loses to the fresh W `buy_story` | divergence rule (§3.1) |
+| Draw | "up x4" from 2021 build-ups 12–19 W ATRs away | fuel has no reach limit |
+
+With the candidate *HTF sell-side read of a range* parts 1–4 on: `short (aligned)` at both
+cut-offs, D `sell_story` "highs run and reclaimed" at bear LB 1.1705–1.17625 (born Wed 26
+Aug), targets 1.1566 → 1.1404, invalidation weekly close above 1.17625, W draw down
+(above x0 vs below x2).
+
+**Outcome.** Played out: 1.1404 x3 ran Thu 24 Sep (1.1397), the D closed back above the
+same day. Today's live scan now reads it itself: "the x3 build-up at 1.1404 was the local
+target, now taken … the run took the origin of the move that induced the crowd — the trap,
+V8". The long setups of 22–23 Sep sat on the path to that target (see U2).
+
+**Verdict.** The user's read is §3 step 2 by the book (V3, V4): a range with both sides
+marked (1.1404 x3 ↔ 1.1705), the top run and price back inside → shorts back through the
+range to the build-up; the second, lower run (1.1697) is the same trap repeated. Our
+miss is not one rule but a chain: a bug that kept a 4-pip LB as the W anchor and put the
+invalidation on the draw, a W map blind to the range top, a D that could not see a
+failed breakout because the close back came late, and a draw that counted 2021 fuel. U2's
+MTF leg layer is the intraday face of the same week; this case is the HTF face. Candidates
+logged above; nothing built.

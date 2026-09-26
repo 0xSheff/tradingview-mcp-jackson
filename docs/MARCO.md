@@ -145,6 +145,13 @@ Created **when a level of liquidity gets swept and price moves away**:
   `eq_tolerance` of a live zone's extreme is a *respect* of that extreme;
   at `min_touches` taps (extreme + respects) the extreme is a target, not a
   block: the zone retires and its extreme joins the map as a build-up level.
+  The swing may sit inside the zone or beyond its inner edge — both
+  implementations used to count only the former, so a thin zone never
+  collected a respect (fixed 2026-09-26, U4: the 6E W bull LB 1.1404–1.1408,
+  4 pips against a 35-pip tolerance, stayed the story anchor and the
+  invalidation for 13 weeks while 1.1404 was an x3 build-up on the D). A
+  retired zone tells no story: `storyRead` treats it like a deepened one
+  (superseded), and the indicator releases the Auto bias it set.
 - **Pocket floor.** A run that stops within `eq_tolerance` short of a deeper
   intact level took an inner level only — the trap completes beyond the
   pocket's *furthest* extreme (6E 1.15765, W36), so the stab is inducement
@@ -623,6 +630,62 @@ stamped; a varying difference is a data problem, not a roll, and is said
 so. `--shift SYMBOL=offset` applies a manual shift while no stored basis
 exists yet.
 
+### 3.2 Direction now — HTF acceptance (targets ≠ direction)
+
+**[CALIBRATION, user, 2026-09-25/26 — case U4; design record
+docs/MARCO-DIRECTION.md; not Marco's words.]** The story above sets the
+*targets* — where the liquidity rests, both sides, with tap counts. It does
+not say whether the market is heading to them *now*: "a respected level does
+not tell us the market is going to take it now … there are targets, and
+there must be a read of whether the market is heading to them right now or
+the other way" (the trader, U4). In W38–W39 6E the story read long with its
+invalidation on 1.1404 x3 while the week ran down to that pool after two
+failed upside breaks — the case this layer exists for.
+
+- **Significant levels** are the D / W 3-bar fractals — one bar each side,
+  the map's tie rule (strictly beyond the bar on the left, beyond-or-equal on
+  the right). "Any 3-bar fractal there is a significant level." Only D/W are
+  read (M is too large for the planning horizon); the map itself keeps
+  `htf_pivot_len` 3 (below).
+- **Acceptance** is the close. The bar that runs a level gives a provisional
+  read; the close of the NEXT bar decides — "we give up to two bars for
+  acceptance beyond the level; three is already a lot for HTF":
+  - beyond · beyond → the level is invalidated — heading = the run side;
+  - back · beyond → late acceptance — heading = the run side;
+  - beyond · back → failed breakout = acceptance on the original side (the
+    trap, U4's W34 → W35 at 1.1705) — heading = the other side;
+  - back · back → the sweep held — a pause, the heading unchanged.
+  A bar that runs levels on both sides decides nothing; of several levels on
+  one side the furthest is the one decided. A decided level is off this read.
+- **Lost.** Two closes in a row back through the level that set the heading
+  switch it off (not over): a V-move leaves no fractal to decide on (MNQ W ↓
+  24.07 under 28 817 would otherwise have held through the +2000-point
+  August rally).
+- **W + D.** W is the week's heading, D the day's. Both the same → *with*; a
+  D decision against W that came after W's → *correction*; W turned after
+  the D heading → *mixed*; one of them without a heading → *weekly only* /
+  *daily only*. A W decision is dated at the Friday close.
+- **The last D bar** against the previous one (close beyond / run and close
+  back / inside / outside), read against the heading: a *correction day*
+  (closed beyond the previous extreme against the heading) names tomorrow's
+  battleground — its extreme is run the next day ≈63% of the time, the close
+  then deciding trap vs continued correction; a *failed push* is a pause; a
+  one-day sweep against the heading is not the trap yet (V8, "the first
+  reaction at the origin is not the trap"). Never printed as a forecast.
+- **Evidence** (docs/MARCO-DIRECTION.md §8, W+D of 6E/MNQ/MES/MGC against
+  position-matched baselines): continuation after a two-close decision
+  54–66% vs 38–44%, failed breakout 46–54% vs 36–37%, a held sweep nothing;
+  the bare candle models (CRT, previous-candle reversal / continuation) no
+  edge beyond where the bar closed. Modest tilts: the brief prints the
+  evidence (bar, level, closes), never a score.
+- **In the briefs.** Weekly: "Direction now" lines per symbol, with a line
+  when the heading is against the story's side. Daily: a **Напрямок** block
+  after Bias, a W/D column in the summary, and a `напрямок:` label on every
+  journal setup — *за напрямком* / *ПРОТИ напрямку* / *напрямку немає*. v1
+  labels only; nothing is blocked. `marco scan` adds `direction` to D/W
+  reads. Closed bars only: D/W bars end at the session close
+  (`splitFormingHtf`), not at time + tf.
+
 ## 4. Entry models
 
 ### 4.1 Zone tap (the base model)
@@ -730,12 +793,17 @@ Everything below is ours to tune — the videos show it by eye only.
 | Question the videos leave open | Input | Default |
 | --- | --- | --- |
 | What counts as a swing point | `pivotLen` | 3 |
+| …on the D/W/M map (`htf_pivot_len`, engine; the trader's 1 regressed the weekly layer — docs/MARCO-DIRECTION.md §10 step 3) | `pivotLen` (Pine: the chart's input) | 3 |
+| Direction now (§3.2): significant level on D/W | `direction.pivot_len` (engine) | 1 — a 3-bar fractal |
+| Direction now: closes that decide a run (the run bar + the next) | `direction.decision_bars` | 2 |
+| Direction now: closes back through the heading's level that switch it off | `direction.decision_bars` (reused) | 2 |
+| When a D/W bar is closed (the session length) | `direction.session_hours` | 23 (CME Globex) |
 | Must the sweep close back above the swept level, and how fast | `confirmBars` | 3 |
 | LB zone top edge | `zoneTopMode` | swept level |
 | How long a zone stays alive untapped | `maxAgeBars` | 300 |
 | What kills a zone | trade beyond the LB extreme (wick, no buffer) — since 2026-09-06; close-based before | on |
 | How long an intact level is remembered | `levelMaxAge` (Pine) / HTF feed `seed_levels` (engine) | 2000 bars / 10 per side |
-| Respects that turn a zone's extreme into a target (§2.3) | `minTouches` (reused: extreme + respects) | 2 |
+| Respects that turn a zone's extreme into a target (§2.3) — a pivot inside the zone or beyond its inner edge within `eqTolerance` of the extreme (the latter since 2026-09-26, U4) | `minTouches` (reused: extreme + respects) | 2 |
 | A run stopping this close above a deeper level is a poke, not a trap (§2.3) | `eqTolerance` (reused) | 0.25 ATR |
 | Equal extremes: which bar of a tie run is the swing | first bar (strict left, ≥ right) | — |
 | "Equal" level tolerance for build-up | `eqTolerance` (ATR mult) | 0.25 |
@@ -786,6 +854,12 @@ tuning any default:
 
 - **`scripts/marco_liquidity_blocks.pine`** — the visual indicator. Saved on
   TradingView as the user's script "Liq blocks".
+- **`src/core/marco_direction.js`** — the direction-now read (§3.2):
+  `directionRead` (one TF), `directionStack` (W + D + the last D bar),
+  `composeDirection`, `barRead`, `splitFormingHtf`, the EN / UA renderers.
+  No map, no Pine counterpart yet; tests `tests/marco_direction.test.js`
+  (fixtures `6e_2026-09-26.json`, `mnq_W_2026-09-26.json`). Research
+  scripts behind its numbers: `scripts/research/direction/` (local, gitignored).
 - **`src/core/marco.js`** — the analysis engine: the same levels/sweep/LB
   replay plus the narrative layer (`storyRead`, §3 — anchored on the last
   live qualified LB; inducement zones are flagged, never a flip; the build-up

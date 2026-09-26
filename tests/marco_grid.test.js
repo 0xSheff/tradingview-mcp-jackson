@@ -300,7 +300,7 @@ test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when p
   const md = renderDailyMarkdown(daily);
   for (const needle of [
     "Знято 13:37 Europe/Athens.",
-    "| X | LONG | VALID | 1. sweep+reclaim 98.2 (−1.8 пт) → long · stop з 1h/15m LB · T1 101 |",
+    "| X | LONG | — | VALID | 1. sweep+reclaim 98.2 (−1.8 пт) → long · stop з 1h/15m LB · T1 101 |",
     "**Сьогодні.** Вікна London 10:00–18:30 · NY 16:30–23:00 Europe/Athens",
     "Гейт: 4h-свічка 13:00–17:00; з 17:00 до 21:00 входи з біасом після трейду за її екстремум (V5). Наступні 4h-закриття: 17:00 · 21:00 · 01:00. Контр-тренд: закритий (лише пн–вт).",
     "## X · LONG · 100 · inval W close < 90 · CONTRACT ROLLED",
@@ -336,6 +336,25 @@ test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when p
     assert.ok(md.includes(needle), `brief is missing: ${needle}\n---\n${md}`);
   }
   assert.ok(!/no-entry|Not done:|NY session only|Scenarios|entry when: a /.test(md), md);
+
+  // the direction-now read (docs/MARCO.md §3.2): a label on every setup, a
+  // block after Bias, a column in the summary — labels only, nothing blocked
+  const tfDir = (level, date) => ({
+    heading: 1,
+    since: { decision: "invalidated", side: "high", level, decide_date: date, closes: [] },
+    last: { decision: "invalidated", side: "high", level, decide_date: date, closes: [] },
+    pending: [],
+    next: { above: { price: 104 }, below: { price: 95 } },
+  });
+  const withDir = { ...r1, direction: { state: "with", weekly: 1, daily: 1, heading: 1, W: tfDir(97, "2026-09-04"), D: tfDir(99, "2026-09-10"), day: null } };
+  const SD = dailySetups(withDir, daily);
+  assert.ok(SD.setups.every((s) => s.setup_description.includes("\n- напрямок: W↑ D↑ — за напрямком")), SD.setups[0].setup_description);
+  const ctD = dailySetups(withDir, { ...daily, weekday: "Mon", counter_trend_open: true }).setups.find((s) => s.setup_type === "early-week-counter-trend");
+  assert.match(ctD.setup_description, /- напрямок: W↑ D↑ — ПРОТИ напрямку/);
+  const mdD = renderDailyMarkdown({ ...daily, results: [withDir] });
+  for (const needle of ["| X | LONG | W↑ D↑ | VALID |", "**Напрямок.** W і D в один бік — ринок зараз іде вгору.", "- W ↑ з 04.09 — рівень інвалідовано.", "Рівні: W 97 · D 99 · наступні рішення D 104 / 95 · W 104 / 95"]) {
+    assert.ok(mdD.includes(needle), `brief is missing: ${needle}\n---\n${mdD}`);
+  }
 });
 
 test("splitForming: the bar still open is cut from the series and returned as forming; a closed last bar and D/W timeframes pass through untouched", () => {
@@ -435,7 +454,7 @@ test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run le
     "● 100 ціна — run не вирішений (PENDING)",
     "**Now: PENDING (4h).** лоу 99.6 x2 run 2 бар(ів) тому до 99.1 — вирішує повернення.",
     "Стан змінить: 4h-закриття назад над 99.6 протягом 2 4h-бар(ів) → VALID (bull LB 99.1–99.6) · пропуск або 4h-трейд під 99.1 → BREAKDOWN.",
-    "| T | LONG | PENDING | 1. sweep+reclaim 99.6 протягом 2 4h-бар(ів) → тап 99.1–99.6 · stop 98.9 · $70 · T1 101 |",
+    "| T | LONG | — | PENDING | 1. sweep+reclaim 99.6 протягом 2 4h-бар(ів) → тап 99.1–99.6 · stop 98.9 · $70 · T1 101 |",
     "### 1. T · long · sweep-trigger · K 99.6 · T 101 / 102.4 / 104 · R 2 · size 1 — головний",
     "- entry when: 1h/15m-закриття назад над 99.6 протягом 2 4h-бар(ів) → тап bull LB 99.1–99.6, яку лишить закриття (не на самому run, V6) · London 08:00–16:30 UK · NY 09:30–16:00 ET · після 10:00 ET через гейт",
     "- K1 sweep+reclaim 99.6 · stop 98.9 · $70 · RR 2 · run краю 99.6 x2, повернення = trap",
@@ -478,7 +497,7 @@ test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run le
       },
     ],
   });
-  assert.ok(md2.includes("| T | LONG | PENDING |"), md2);
+  assert.ok(md2.includes("| T | LONG | — | PENDING |"), md2);
   assert.ok(md2.includes("**Now: PENDING (4h).** лоу 99.6 x2 run у барі 18:00–22:00 до 99.1 — вирішує повернення."), md2);
   assert.ok(md2.includes("Бар 06:00–10:00 ще відкритий: H 100.3 / L 99 / зараз 99.8 — до закриття не рахується · новий лоу за 99.1 · ціна над 99.6, повернення лише на закритті 10:00."), md2);
   assert.ok(md2.includes("- entry when: 1h/15m-закриття назад над 99.6 до 14:00 → тап bull LB 99.1–99.6"), md2);
