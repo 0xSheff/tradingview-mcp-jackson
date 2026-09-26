@@ -16,6 +16,7 @@
   ],
   "marco": [
     "CME_MINI:MNQ1!",
+    "CME_MINI:MES1!",
     "COMEX_MINI:MGC1!",
     "CME:6E1!"
   ]
