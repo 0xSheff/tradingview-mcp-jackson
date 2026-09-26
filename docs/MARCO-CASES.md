@@ -198,6 +198,20 @@ recorded under *Rule candidates* → pocket flag.
   of one source), the TV source verified identical to `scripts/marco_liquidity_blocks.pine`
   before (= repo HEAD) and after (= v12); on 6E W the 1.1404 level now draws as a build-up box;
   (4) the `напрямок:` line in the journal setups — yes.
+  **Second build, 2026-09-26 ("реалізуємо що лишилось"):** (a) the **battleground setup** —
+  a correction day with the heading on the bias side makes its extreme a sweep-trigger setup
+  of its own (`kind: "battleground"`) or a `поле бою:` note on the setup already at that level;
+  (b) the **H4 leg** — `directionRead` on H4 swings (pivot 3, two closes), one descriptive
+  line with its relation to the heading; measured first (`scripts/research/direction/
+  h4measure.mjs`, 3300 H4 bars × 4 contracts, Aug 2024 – Sep 2026): one-close acceptance on
+  H4 continues 44% vs 35%, two closes 44% vs 41%; an H4 heading with the D heading ran on
+  52–56% of the time over the next 6–12 H4 bars, against it 46–55% (noise), the same for one
+  or two closes — two chosen because one close left the 6E leg of 16–23 Sep without any
+  heading; (c) **reference levels** — PDH/PDL and PWH/PWL on a `Довідкові:` line (on), the
+  nearest unfilled FVG edge on D/H4 (off: `fvgmeasure.mjs` found it behaves like any level at
+  the same distance — touched 82% vs 76% D, 88% vs 87% H4; the touching bar closed back beyond
+  it 52–53% vs 51%). Tests 86/86 (marco). Live daily 2026-09-26: 6E H4 leg ↓ with the heading,
+  MNQ battleground 30998.5 printed without a setup (heading D↓ against the long bias).
 
 - **Intraday brief format v3.1 — meaning first, levels after** (trader, 2026-09-24 ~09:30,
   on the first v3 brief with the hand MTF lines: "перерахування — списком з булітами, не
@@ -455,6 +469,13 @@ recorded under *Rule candidates* → pocket flag.
      HTF-side event, the last counter extreme, the HTF zone ahead) → an `MTF:` line in
      the brief's Bias block and the scenario ranking keyed on it. Piloted by hand in
      `briefs/daily/2026-09-23.manual.md`.
+  **Status 2026-09-26:** the leg is **built as the H4 leg of the direction read** (acceptance
+  on H4 swings instead of LB births and deaths — one machine for W/D/H4), printed as one
+  descriptive line in the Напрямок block; the D heading carries what U2 asked for (the 22 Sep
+  longs sat against D ↓ since 17 Sep). Part 2 (ranking) and part 3 (MTF-continuation trades
+  against the HTF) are **not built**: on two years of H4 bars a leg against the D heading
+  persisted 46–55% (noise) — no ground for a setup type (`h4measure.mjs`, *Approved changes*
+  → "HTF direction read" → second build).
 
 - **HTF sell-side read of a range: the draw first, the failed breakout as the trap**
   `[CALIBRATION, user-raised, 2026-09-25 — case U4; SOURCE support §3 step 2 (V3, V4),

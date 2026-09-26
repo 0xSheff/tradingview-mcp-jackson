@@ -1266,6 +1266,50 @@ export function dailySetups(r, daily = {}) {
     addAlert(nextLvl);
   }
 
+  // the battleground (docs/MARCO.md §3.2): yesterday closed beyond the day
+  // before against the heading — a correction day. Its extreme is run the next
+  // day ≈63% of the time and the close decides: back toward the heading = the
+  // trap (23% vs 13% base), beyond it = the correction goes on (31% vs 23%).
+  // A setup only when the heading is the bias side; a level already in a setup
+  // gets a note instead of a twin.
+  const dayRead = dirNow?.day ?? null;
+  const bg = dayRead?.role === "correction_day" && dirNow.heading === sideSign ? dayRead.battleground : null;
+  if (bg != null && price != null && (long ? bg < price : bg > price)) {
+    const dmyBg = dayRead.date ? `${dayRead.date.slice(8, 10)}.${dayRead.date.slice(5, 7)}` : "учора";
+    const twin = opp.find((o) => o.trigger != null && Math.abs(o.trigger - bg) <= respect / 3);
+    if (twin) {
+      twin.lines.splice(Math.max(0, twin.lines.length - 2), 0, `поле бою: ${fmt(bg)} = ${lowWord} корекційного дня ${dmyBg} — run + закриття назад = trap, денне закриття за ним = корекція триває`);
+    } else {
+      const near = reachable(bg);
+      const targets = targetsFrom(bg, null);
+      opp.push(
+        mk({
+          kind: "battleground",
+          setup_type: "sweep-trigger",
+          trigger: bg,
+          key_levels: [bg],
+          targets,
+          stop: null,
+          risk: null,
+          planned_r: null,
+          actionable: near,
+          over_cap: false,
+          far: near ? null : farTxt(bg),
+          lines: [
+            `entry when: run ${fmt(bg)} (${lowWord} корекційного дня ${dmyBg}) + 1h/15m-закриття назад ${over} ним → тап LB, яку лишить закриття · ${win}`,
+            row(`K1 sweep+reclaim ${fmt(bg)}`, stopRule, "RR —", `поле бою: корекційний день проти напрямку, ${dist(bg)} від ціни`),
+            beLine(targets[0]),
+            `breakdown: денне закриття ${under} ${fmt(bg)} = корекція триває — сетап скасовано`,
+            globalLine,
+            dirLine,
+          ].filter(Boolean),
+          short: row(`поле бою ${fmt(bg)} (${dist(bg)}) → ${side}`, "stop з 1h/15m LB", `T1 ${fmt(targets[0])}`),
+        }),
+      );
+    }
+    addAlert(bg);
+  }
+
   // the counter edge: a partial always; a counter-trend setup on Mon–Tue only
   let top = null;
   if (counterEdge?.edge != null) {

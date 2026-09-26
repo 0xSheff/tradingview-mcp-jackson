@@ -355,6 +355,22 @@ test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when p
   for (const needle of ["| X | LONG | W↑ D↑ | VALID |", "**Напрямок.** W і D в один бік — ринок зараз іде вгору.", "- W ↑ з 04.09 — рівень інвалідовано.", "Рівні: W 97 · D 99 · наступні рішення D 104 / 95 · W 104 / 95"]) {
     assert.ok(mdD.includes(needle), `brief is missing: ${needle}\n---\n${mdD}`);
   }
+
+  // the battleground (docs/MARCO.md §3.2): yesterday was a correction day against
+  // the heading — its extreme becomes a setup of its own, or a note on the setup
+  // already sitting there
+  const corr = (bg) => ({ ...withDir, direction: { ...withDir.direction, day: { role: "correction_day", battleground: bg, date: "2026-09-10" } } });
+  const own = dailySetups(corr(99), daily).setups.find((s) => s.key_levels[0] === 99);
+  assert.ok(own, "a battleground setup at 99");
+  assert.equal(own.setup_type, "sweep-trigger");
+  assert.match(own.setup_description, /- entry when: run 99 \(лоу корекційного дня 10\.09\) \+ 1h\/15m-закриття назад над ним → тап LB/);
+  assert.match(own.setup_description, /- breakdown: денне закриття під 99 = корекція триває — сетап скасовано/);
+  const twinned = dailySetups(corr(98.3), daily).setups;
+  assert.ok(!twinned.some((s) => s.key_levels[0] === 98.3), "no twin next to 98.2");
+  assert.match(twinned.find((s) => s.key_levels[0] === 98.2).setup_description, /- поле бою: 98\.3 = лоу корекційного дня 10\.09/);
+  // against the heading's side (bias long, heading down) there is no battleground setup
+  const against = { ...withDir, direction: { ...withDir.direction, heading: -1, weekly: -1, daily: -1, day: { role: "correction_day", battleground: 101.5, date: "2026-09-10" } } };
+  assert.ok(!dailySetups(against, daily).setups.some((s) => s.key_levels[0] === 101.5));
 });
 
 test("splitForming: the bar still open is cut from the series and returned as forming; a closed last bar and D/W timeframes pass through untouched", () => {

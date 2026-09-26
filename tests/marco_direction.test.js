@@ -21,6 +21,7 @@ import {
   directionStack,
   directionLinesEn,
   directionBlockUa,
+  fvgEdges,
 } from "../src/core/marco.js";
 
 const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf-8"));
@@ -189,4 +190,52 @@ test("6E U4 (real W bars): a pivot beyond a thin zone's inner edge, within eq_to
   assert.ok(lvl && lvl.touches >= 2, "1.1404 is a build-up on the W map");
   const st = storyRead(map, W, MARCO_DEFAULTS);
   assert.notEqual(st.mode, "buy_story");
+});
+
+test("the H4 leg (U2) on real 6E bars: ↓ with the heading from the late acceptance under 1.1495 (22.09 14:00Z); no leg that morning", () => {
+  const at = (iso) => {
+    const t = Date.parse(`${iso}:00Z`) / 1000;
+    return directionStack({
+      W: E6.bars.W.filter((b) => b.time + 119 * 3600 <= t),
+      D: E6.bars.D.filter((b) => b.time + 23 * 3600 <= t),
+      H4: E6.bars["240"].filter((b) => b.time + 4 * 3600 <= t),
+    });
+  };
+  const morning = at("2026-09-22T09:00");
+  assert.equal(morning.leg.heading, 0);
+  assert.equal(morning.leg.relation, "none");
+  const later = at("2026-09-22T17:00");
+  assert.equal(later.leg.heading, -1);
+  assert.equal(later.leg.relation, "with");
+  assert.equal(later.leg.since.decision, "late_acceptance");
+  assert.equal(later.leg.since.level, 1.1495);
+  assert.equal(later.leg.since.decide_date, "2026-09-22T14:00");
+  const ua = directionBlockUa(later, 1).join("\n");
+  assert.match(ua, /- H4-нога ↓ з 22\.09 — запізніле закріплення; за напрямком \(опис, не сигнал\)\./);
+  assert.match(directionLinesEn(later, 1).join("\n"), /H4 leg ↓ since 2026-09-22T14:00Z — late acceptance 1\.1495/);
+});
+
+test("reference levels: the previous D/W bar's high/low on by default, FVG edges only when switched on", () => {
+  const W = through(E6.bars.W, "2026-09-18");
+  const D = through(E6.bars.D, "2026-09-18");
+  const off = directionStack({ W, D });
+  assert.deepEqual(off.levels.prev.D, { high: 1.15315, low: 1.1495, date: "2026-09-18" });
+  assert.deepEqual([off.levels.prev.W.high, off.levels.prev.W.low], [1.164, 1.1495]);
+  assert.equal(off.levels.fvg, null);
+  assert.match(directionBlockUa(off).join("\n"), /\nДовідкові: PDH 1\.15315 \/ PDL 1\.1495 · PWH 1\.164 \/ PWL 1\.1495$/);
+  const on = directionStack({ W, D }, { ict: { fvg_levels: true, prev_bar_levels: false } });
+  assert.equal(on.levels.prev, null);
+  assert.equal(on.levels.fvg.D.above.price, 1.15385);
+});
+
+test("fvgEdges: the unfilled edge nearest to price on each side — candle 3's low under a bullish gap, candle 3's high over a bearish one; a filled gap is gone", () => {
+  const rows = [
+    [100, 101, 99, 100.5],
+    [100.5, 103, 100.4, 102.8],
+    [102.8, 104, 101.6, 103.8], // bullish gap: c1.high 101 < c3.low 101.6 → edge 101.6
+    [103.8, 104.5, 102.2, 102.4],
+    [102.4, 102.6, 101.8, 102],
+  ];
+  assert.equal(fvgEdges(mk(rows)).below.price, 101.6);
+  assert.equal(fvgEdges(mk([...rows, [102, 102.2, 101.5, 101.7]])).below, null); // traded through 101.6
 });

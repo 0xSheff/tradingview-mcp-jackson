@@ -32,6 +32,25 @@ export const DIRECTION_DEFAULTS = {
   pivot_len: 1, // a 3-bar fractal
   decision_bars: 2, // the run bar + the next one; the last close decides
   session_hours: 23, // CME Globex: 17:00–16:00 CT — when a D/W bar is closed
+  // the H4 leg (case U2) — a descriptive line, not a signal: on 2 years of H4
+  // bars an H4 heading WITH the D heading ran on 52–56% of the time, AGAINST it
+  // 46–55% (noise), the same for one and two closes. Two, as on HTF: with one
+  // close every H4 run that closed back was a pause and the 6E leg of 16–23 Sep
+  // showed no heading at all; two closes catch the late acceptance under
+  // 1.1495 on 22 Sep [CALIBRATION — docs/MARCO-DIRECTION.md §10 step 7]
+  h4_pivot_len: 3,
+  h4_decision_bars: 2,
+};
+
+// ICT add-ons (docs/ICT-NOTES.md, the trader's "optional, switchable"): reference
+// levels only — never a stop anchor, never a forecast. The previous D/W bar's
+// high/low are Marco's HTF candle extremes (V7); the FVG edge nearest to price
+// (candle 3's low after an up-move, high after a down-move) behaved like any
+// level at the same distance in the data (touched 82% vs 76% D, 88% vs 87% H4;
+// held 52–53% vs 51%), so it is off by default.
+export const ICT_DEFAULTS = {
+  prev_bar_levels: true,
+  fvg_levels: false,
 };
 
 /** D, W, M (with or without a leading 1) — the timeframes the trader reads significant levels on. */
@@ -48,6 +67,9 @@ export const sessionDate = (t) => new Date(t * 1000 + 12 * 3600 * 1000).toISOStr
  * D decision on the Tuesday of the same week comes before it, not after.
  */
 export const closeDate = (t, tf) => {
+  const mins = Number(tf);
+  // intraday: the bar's close in UTC, "YYYY-MM-DDTHH:MM"
+  if (Number.isFinite(mins) && mins > 0) return new Date((t + mins * 60) * 1000).toISOString().slice(0, 16);
   const d = sessionDate(t);
   if (normTf(tf) !== "W") return d;
   const x = new Date(`${d}T12:00:00Z`);
@@ -304,18 +326,63 @@ export function composeDirection(W, D) {
   return { state, weekly: w, daily: d, heading: w || d };
 }
 
-/** The whole read for one symbol: W and D over closed bars, the composition and the last D bar. */
-export function directionStack({ W = null, D = null } = {}, cfg = {}) {
+/**
+ * The nearest unfilled FVG edge on each side of the last close: a bullish gap
+ * (candle 1's high under candle 3's low) leaves candle 3's low as the edge, a
+ * bearish gap candle 3's high; "unfilled" = no bar has traded through the edge
+ * since. Looks back `lookback` bars.
+ */
+export function fvgEdges(bars, { lookback = 60 } = {}) {
+  const n = Array.isArray(bars) ? bars.length : 0;
+  if (n < 4) return { above: null, below: null };
+  const close = bars[n - 1].close;
+  let above = null;
+  let below = null;
+  for (let i = Math.max(2, n - lookback); i < n; i++) {
+    const c1 = bars[i - 2];
+    const c3 = bars[i];
+    for (const d of [1, -1]) {
+      if (!(d > 0 ? c1.high < c3.low : c1.low > c3.high)) continue;
+      const edge = d > 0 ? c3.low : c3.high;
+      let filled = false;
+      for (let k = i + 1; k < n && !filled; k++) filled = d > 0 ? bars[k].low <= edge : bars[k].high >= edge;
+      if (filled) continue;
+      if (edge < close && (!below || edge > below.price)) below = { price: r7(edge), date: sessionDate(c3.time), side: d > 0 ? "bull" : "bear" };
+      if (edge > close && (!above || edge < above.price)) above = { price: r7(edge), date: sessionDate(c3.time), side: d > 0 ? "bull" : "bear" };
+    }
+  }
+  return { above, below };
+}
+
+/** The whole read for one symbol: W and D over closed bars, the composition, the last D bar, the H4 leg and the reference levels. */
+export function directionStack({ W = null, D = null, H4 = null } = {}, cfg = {}) {
   const c = { ...DIRECTION_DEFAULTS, ...(cfg.direction ?? {}) };
+  const ict = { ...ICT_DEFAULTS, ...(cfg.ict ?? {}) };
   const opts = { pivot_len: c.pivot_len, decision_bars: c.decision_bars };
   const w = Array.isArray(W) ? directionRead(W, { ...opts, timeframe: "W" }) : null;
   const d = Array.isArray(D) ? directionRead(D, { ...opts, timeframe: "D" }) : null;
   const both = composeDirection(w, d);
+  // the H4 leg (U2): the same machine on H4 swings — described, never a signal
+  let leg = null;
+  if (Array.isArray(H4) && H4.length) {
+    const h = directionRead(H4, { timeframe: "240", pivot_len: c.h4_pivot_len, decision_bars: c.h4_decision_bars });
+    if (!h.error) leg = { ...h, relation: !h.heading || !both.heading ? "none" : h.heading === both.heading ? "with" : "against" };
+  }
+  const prevOf = (bars, tf) => {
+    const b = Array.isArray(bars) && bars.length ? bars[bars.length - 1] : null;
+    return b ? { high: r7(b.high), low: r7(b.low), date: closeDate(b.time, tf) } : null;
+  };
+  const levels = {
+    prev: ict.prev_bar_levels ? { D: prevOf(D, "D"), W: prevOf(W, "W") } : null,
+    fvg: ict.fvg_levels ? { D: Array.isArray(D) ? fvgEdges(D) : null, H4: Array.isArray(H4) ? fvgEdges(H4) : null } : null,
+  };
   return {
     W: w,
     D: d,
     ...both,
     day: Array.isArray(D) ? barRead(D, both.heading) : null,
+    leg,
+    levels,
     rule: `HTF 3-bar fractals; the close after the run bar decides (decision_bars ${c.decision_bars}) — docs/MARCO-DIRECTION.md §9.2 [CALIBRATION]`,
   };
 }
@@ -361,8 +428,27 @@ export function directionLinesEn(dir, storyBias = 0) {
     ...(againstStory(dir, storyBias)
       ? [`  - against the story: its ${storyBias > 0 ? "long" : "short"} targets stay on the map, the market is not heading to them now`]
       : []),
+    ...(dir.leg
+      ? [
+          dir.leg.heading
+            ? `  - H4 leg ${arrow(dir.leg.heading)}${dir.leg.since ? ` since ${dir.leg.since.decide_date}Z — ${evEn(dir.leg.since)}` : ""} (${dir.leg.relation === "with" ? "with the heading" : dir.leg.relation === "against" ? "against the heading — a leg, not a turn" : "no HTF heading to compare"}; descriptive, not a signal)`
+            : "  - H4 leg: no heading (descriptive, not a signal)",
+        ]
+      : []),
     `  - next decisions: W ${next(dir.W)} · D ${next(dir.D)}`,
+    ...(refLevelsTxt(dir) ? [`  - reference levels: ${refLevelsTxt(dir)}`] : []),
   ];
+}
+
+// PDH/PDL, PWH/PWL and (when on) the nearest unfilled FVG edges — reference only
+function refLevelsTxt(dir) {
+  const L = dir?.levels;
+  if (!L) return "";
+  const out = [];
+  if (L.prev?.D) out.push(`PDH ${fmtP(L.prev.D.high)} / PDL ${fmtP(L.prev.D.low)}`);
+  if (L.prev?.W) out.push(`PWH ${fmtP(L.prev.W.high)} / PWL ${fmtP(L.prev.W.low)}`);
+  for (const [tf, f] of Object.entries(L.fvg ?? {})) if (f && (f.above || f.below)) out.push(`FVG ${tf} ↑${fmtP(f.above?.price)} / ↓${fmtP(f.below?.price)}`);
+  return out.join(" · ");
 }
 
 const UA = {
@@ -409,6 +495,14 @@ export function directionBlockUa(dir, storyBias = 0) {
   if (againstStory(dir, storyBias)) {
     lines.push(`- Проти біасу story: цілі ${storyBias > 0 ? "long" : "short"} лишаються на карті, але ринок зараз іде не до них.`);
   }
+  if (dir.leg) {
+    const l = dir.leg;
+    if (!l.heading) lines.push("- H4-нога без напрямку (опис, не сигнал).");
+    else {
+      const rel = l.relation === "with" ? "за напрямком" : l.relation === "against" ? "проти напрямку — нога, не розворот" : "HTF-напрямку для порівняння немає";
+      lines.push(`- H4-нога ${arrow(l.heading)}${l.since ? ` з ${dmy(l.since.decide_date)} — ${UA[l.since.decision]}` : ""}; ${rel} (опис, не сигнал).`);
+    }
+  }
   const day = dir.day;
   if (day?.role) {
     lines.push(
@@ -424,5 +518,7 @@ export function directionBlockUa(dir, storyBias = 0) {
   const next = [nx(dir.D, "D"), nx(dir.W, "W")].filter(Boolean);
   if (next.length) lv.push(`наступні рішення ${next.join(" · ")}`);
   if (lv.length) lines.push(`Рівні: ${lv.join(" · ")}`);
+  const ref = refLevelsTxt(dir);
+  if (ref) lines.push(`Довідкові: ${ref}`);
   return lines;
 }

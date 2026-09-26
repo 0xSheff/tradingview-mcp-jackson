@@ -26,6 +26,8 @@ import {
 } from "./marco_grid.js";
 import {
   DIRECTION_DEFAULTS,
+  ICT_DEFAULTS,
+  fvgEdges,
   isHtfTf,
   sessionDate,
   closeDate,
@@ -41,6 +43,8 @@ import {
 export { h4Grid, flagPocket, clipToGrid, detectRoll, shiftPrices, basisBars, splitForming, dailyScenarios, dailySetups, renderDailyMarkdown };
 export {
   DIRECTION_DEFAULTS,
+  ICT_DEFAULTS,
+  fvgEdges,
   isHtfTf,
   sessionDate,
   closeDate,
@@ -102,6 +106,8 @@ export const MARCO_DEFAULTS = {
   htf_pivot_len: 3,
   // the direction-now read (src/core/marco_direction.js, docs/MARCO.md §3.2)
   direction: { ...DIRECTION_DEFAULTS },
+  // ICT add-ons (docs/ICT-NOTES.md): reference levels in the direction block
+  ict: { ...ICT_DEFAULTS },
   confirm_bars: 3, // sweep must reclaim the swept level within N bars
   atr_length: 14,
   eq_tolerance_atr: 0.25, // "equal" levels merge within this ATR fraction
@@ -1888,7 +1894,7 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
       }
       // the direction-now read (docs/MARCO.md §3.2): targets come from the
       // story above, the heading from acceptance at the W/D 3-bar fractals
-      const direction = cfg.direction?.enabled === false ? null : directionStack({ W: reads.W.bars, D: reads.D.bars }, cfg);
+      const direction = cfg.direction?.enabled === false ? null : directionStack({ W: reads.W.bars, D: reads.D.bars, H4: reads[execTf]?.bars ?? null }, cfg);
       // two layers [user, 2026-09-02]: the GLOBAL bias is the author's
       // weekly→daily read (§3.1) with the big targets that will not be hit
       // this week — recorded and re-evaluated every weekend. The INTRAWEEK
@@ -1998,7 +2004,14 @@ function directionLine(x) {
 
 function compactDirection(dir) {
   if (!dir) return null;
-  return { state: dir.state, W: directionLine(dir.W), D: directionLine(dir.D), day: dir.day?.role ?? null };
+  return {
+    state: dir.state,
+    W: directionLine(dir.W),
+    D: directionLine(dir.D),
+    H4: dir.leg ? `${directionLine(dir.leg)} (${dir.leg.relation})` : null,
+    day: dir.day?.role ?? null,
+    battleground: dir.day?.battleground ?? null,
+  };
 }
 
 function alignmentOf(storyDirection, bias) {
@@ -2016,6 +2029,7 @@ function mergeConfig(rules) {
   out.h4 = { ...MARCO_DEFAULTS.h4, ...(c.h4 || {}) };
   out.htf = c.htf === null ? null : { ...MARCO_DEFAULTS.htf, ...(c.htf || {}) };
   out.direction = { ...MARCO_DEFAULTS.direction, ...(c.direction || {}) };
+  out.ict = { ...MARCO_DEFAULTS.ict, ...(c.ict || {}) };
   return out;
 }
 
@@ -2352,7 +2366,7 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
             await sleep(900);
             htf[tf] = closedBars((await data.getOhlcv({ count: 500 })).bars, tf, cfg).closed;
           }
-          direction = directionStack(htf, cfg);
+          direction = directionStack({ ...htf, H4: Array.isArray(barsBy[execTf]) ? barsBy[execTf] : null }, cfg);
         } catch (err) {
           direction = { error: `direction read failed: ${err.message}` };
         }

@@ -685,6 +685,27 @@ failed upside breaks — the case this layer exists for.
   labels only; nothing is blocked. `marco scan` adds `direction` to D/W
   reads. Closed bars only: D/W bars end at the session close
   (`splitFormingHtf`), not at time + tf.
+- **The battleground setup.** When yesterday was a correction day and the
+  heading is the bias side, its extreme becomes a setup of its own in the
+  daily brief (`kind: "battleground"`, sweep-trigger grammar: run + 1h/15m
+  close back → tap of the LB it leaves; a daily close beyond it = the
+  correction goes on, the setup is off); a level already carried by a setup
+  gets a `поле бою:` note instead of a twin. Against the bias side there is
+  no such setup — the block names the level only.
+- **The H4 leg (case U2)** — the same machine on H4 swings (`pivot_len` 3,
+  two closes), printed as one line: with the heading / against it ("a leg,
+  not a turn") / none. Descriptive, never a label or a filter: on two years
+  of H4 bars (6E/MNQ/MES/MGC) an H4 heading with the D heading ran on 52–56%
+  of the time, against it 46–55% — noise; U2's "trade the leg against the
+  HTF" is therefore not built.
+- **Reference levels (ICT add-ons, `ict.*`, docs/ICT-NOTES.md).** The
+  previous D/W bar's high/low (PDH/PDL, PWH/PWL — Marco's HTF candle
+  extremes, V7) print on a `Довідкові:` line, on by default; the nearest
+  unfilled FVG edge (candle 3's low after an up-gap, high after a down-gap)
+  only when `ict.fvg_levels` is on — in the data it behaved like any level at
+  the same distance (touched 82% vs 76% on D, 88% vs 87% on H4; the touching
+  bar closed back beyond it 52–53% vs 51%). Never a stop anchor, never a
+  target of their own.
 
 ## 4. Entry models
 
@@ -798,6 +819,8 @@ Everything below is ours to tune — the videos show it by eye only.
 | Direction now: closes that decide a run (the run bar + the next) | `direction.decision_bars` | 2 |
 | Direction now: closes back through the heading's level that switch it off | `direction.decision_bars` (reused) | 2 |
 | When a D/W bar is closed (the session length) | `direction.session_hours` | 23 (CME Globex) |
+| The H4 leg (§3.2): swing and decision closes | `direction.h4_pivot_len` / `direction.h4_decision_bars` | 3 / 2 |
+| Reference levels (§3.2): previous D/W bar high/low · nearest unfilled FVG edge | `ict.prev_bar_levels` / `ict.fvg_levels` | on / off |
 | Must the sweep close back above the swept level, and how fast | `confirmBars` | 3 |
 | LB zone top edge | `zoneTopMode` | swept level |
 | How long a zone stays alive untapped | `maxAgeBars` | 300 |

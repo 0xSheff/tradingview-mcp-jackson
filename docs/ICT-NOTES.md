@@ -136,3 +136,19 @@ the order-flow vocabulary goes into the MTF leg layer, previous-candle extremes 
 become map levels (switchable). CRT is not used as-is: its bar-by-bar core (the close against
 the previous D / W bar's extremes) enters as one order-flow factor of the heading read, never
 as a forecast on its own — alone it matched its baselines, in context it reads as above.
+
+**Built 2026-09-26** (`src/core/marco_direction.js`, `docs/MARCO.md` §3.2):
+
+- Order flow → the **H4 leg**: acceptance on H4 swings (pivot 3, two closes) = the leg,
+  printed as one descriptive line (with / against the heading). Measured first on 3300 H4
+  bars × 4 contracts: a leg with the D heading ran on 52–56% of the time over 6–12 H4 bars,
+  against it 46–55% (noise) — so no leg-based setups (HRLR/LRLR "trade the flow against the
+  HTF" is not supported by our data).
+- Bar-by-bar → `barRead` (the last D bar vs the previous) and the **battleground setup**: a
+  correction day's extreme is run the next day ≈63%; the close decides.
+- Previous-candle extremes → **PDH/PDL, PWH/PWL** on the brief's `Довідкові:` line (on).
+- FVG → the **nearest unfilled FVG edge** on D/H4 (candle 3's low after an up-gap, high after
+  a down-gap), switch `ict.fvg_levels`, **off by default**: in the data it behaved like any
+  level at the same ATR distance — touched within 10 D / 30 H4 bars 82% vs 76% (D, n=247) and
+  88% vs 87% (H4, n=2903); the touching bar closed back beyond it 52% vs 51% / 53% vs 51%.
+- Not taken: CRT as a pattern, PO3/AMD/opens, OB/STB/BTS (see above).
