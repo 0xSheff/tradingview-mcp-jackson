@@ -518,7 +518,8 @@ test("an internal low consumed while the qualified LB holds is inducement, not c
   assert.equal(brk.qualified, false);
   const story = storyRead(map, bars, CFG);
   assert.equal(story.mode, "buy_story");
-  assert.match(story.read, /low 103\.6 consumed .* was an internal point: inducement/);
+  // with FVG markers on (2026-09-27) the internal low sits at the gap's edge 103.5 the swing 103.6 built up to — still an internal point, still inducement
+  assert.match(story.read, /low 103\.[56] consumed .* was an internal point: inducement/);
 });
 
 test("a live qualified LB anchors the story past story_lookback (V1: 68 bars at the tap)", () => {
@@ -1205,4 +1206,42 @@ test("resolveBias: a stale trap plus a mere continuation on the other side is a 
   const live = resolveBias(w, dFresh);
   assert.equal(live.regime, "aligned");
   assert.equal(live.stale, false);
+});
+
+test("FVG edge as a marker [user, 2026-09-26/27]: a lone edge is not liquidity — filled silently when traded through; a later pivot within eq_tolerance promotes it into a level at the edge's price with fvg: true, the gap's own third candle is no tap; off with fvg_levels: false", () => {
+  // a bullish gap on bar 2 (bar 0 high 100.6 < bar 2 low 101.2): the edge 101.2 is a marker
+  const gap = [
+    [100, 100.6, 99.5, 100.4],
+    [100.4, 101.9, 100.2, 100.8], // bar 1's high 101.9 keeps bars 1–3 from gapping too
+    [101.5, 102.4, 101.2, 102.2], // candle 3 — its low 101.2 is the edge, its pivot low (if any) no tap of it
+    [102.2, 102.6, 101.8, 102.4],
+  ];
+  const lone = buildLiquidityMap(mkBars([...gap, [102.4, 102.7, 102.0, 102.5]]), CFG);
+  assert.deepEqual(lone.fvg.lows.map((e) => e.price), [101.2]);
+  assert.ok(!lone.levels.lows.some((l) => l.price === 101.2), "the lone edge is not a level");
+  assert.ok(lone.events.some((e) => e.type === "low_fvg_edge" && e.level === 101.2));
+  // traded through: filled, no sweep, no pending
+  const filled = buildLiquidityMap(mkBars([...gap, [102.4, 102.5, 101.0, 102.1]]), CFG);
+  assert.deepEqual(filled.fvg.lows, []);
+  assert.ok(filled.events.some((e) => e.type === "low_fvg_filled" && e.level === 101.2));
+  assert.ok(!filled.events.some((e) => e.type === "low_swept" && e.level === 101.2), "no sweep of a marker");
+  assert.equal(filled.pending.bull, null);
+  // a later pivot low 101.3 within eq_tolerance of the edge promotes it: the level sits at the edge 101.2, fvg, taps from price only
+  const built = mkBars([...gap, [102.4, 102.5, 101.3, 102.0], [102.0, 102.8, 101.9, 102.6], [102.6, 102.9, 102.2, 102.7]]);
+  const promoted = buildLiquidityMap(built, CFG);
+  const lv = promoted.levels.lows.find((l) => l.fvg);
+  assert.ok(lv, "the edge became a level");
+  assert.equal(lv.price, 101.2);
+  assert.equal(lv.touches, 1); // fvg_edge_touches 0: the pivot's own tap only
+  assert.ok(promoted.events.some((e) => e.type === "low_fvg_promoted" && e.edge === 101.2 && e.swing === 101.3));
+  assert.deepEqual(promoted.fvg.lows, []);
+  // with the edge bringing a tap of its own the same pivot makes a x2 build-up
+  const eager = buildLiquidityMap(built, { ...CFG, fvg_edge_touches: 1 });
+  assert.equal(eager.levels.lows.find((l) => l.fvg).touches, 2);
+  assert.ok(eager.buildups.some((b) => b.price === 101.2 && b.fvg === true));
+  // the switch
+  const off = buildLiquidityMap(built, { ...CFG, fvg_levels: false });
+  assert.deepEqual(off.fvg.lows, []);
+  assert.ok(!off.levels.lows.some((l) => l.fvg));
+  assert.ok(off.levels.lows.some((l) => l.price === 101.3), "the pivot is a plain level without FVG");
 });

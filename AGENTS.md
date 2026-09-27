@@ -111,7 +111,16 @@ ChrisFX, CLS, EMA/RSI or the regular morning-brief reads.**
   `marco-case-review` skill.
 - **Indicator:** `scripts/marco_liquidity_blocks.pine`, saved on TradingView
   as the user's script "Liq blocks". It mirrors the exact state machine in
-  `src/core/marco.js` — change defaults in both or neither.
+  `src/core/marco.js` — change defaults in both or neither. **Every change to
+  it is pushed to TradingView without a separate confirmation** (the trader,
+  2026-09-27 — TradingView keeps the version history):
+  `node scripts/push_liq_blocks.mjs` (checks the editor before and after;
+  `--check` compares only). Never `pine_new`.
+- **Direction layer and FVG markers:** rules in `docs/MARCO.md` §3.2 and §2.1;
+  the decisions, the options not taken and the numbers behind them in
+  `docs/MARCO-DIRECTION.md` §17. Switches in `rules.json` → `marco`:
+  `direction.*` (incl. `reach_atr`), `fvg_levels`, `fvg_edge_touches`. The
+  read states the current fact, never a scenario.
 - **Config:** optional `marco` section in `rules.json` overrides
   `MARCO_DEFAULTS` in `src/core/marco.js`. Instruments come from
   `watchlists.json` (`marco` list).

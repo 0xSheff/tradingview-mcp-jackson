@@ -58,6 +58,16 @@
 //     beyond the zone's inner edge but within eqTol of its extreme is a
 //     respect too (a 4-pip zone never collected one); a zone retired into a
 //     build-up releases the Auto bias it set — it tells no story any more.
+//   * FVG edge as a marker (v13, [user, 2026-09-26/27]): the 3rd candle's low
+//     of a bullish gap / high of a bearish gap is a dashed marker on every
+//     timeframe (a "retail point of interest") — on its own it is not
+//     liquidity: no level, no pending, no LB; a bar trading through it fills
+//     it. A later pivot within eqTol of the edge promotes it into a level at
+//     the edge's price (liquidity rests beyond the edge), the edge bringing
+//     "FVG edge taps" of its own (0 by default) plus the pivot's; from then on
+//     the ordinary build-up / sweep / LB machinery runs. The gap's own third
+//     candle is no tap; an edge within eqTol of a live level only flags it.
+//     Mirrors `fvg_levels` / `fvg_edge_touches` in the engine (docs/MARCO.md §2.1).
 //@version=6
 indicator("Marco LB — Liquidity Blocks", "Marco LB", overlay = true,
      max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -99,6 +109,10 @@ keepSwept   = input.bool(true, "Keep swept build-up boxes (grey)", group = grpU,
 
 grpV = "Visuals"
 showLevels  = input.bool(true, "Show liquidity levels", group = grpV)
+showFvg     = input.bool(true, "FVG edge as a marker (dashed)", group = grpV,
+     tooltip = "The 3rd candle's low of a bullish gap / high of a bearish gap on this timeframe — a retail point of interest. A marker only: a bar trading through it fills it. A later pivot within the equal-level tolerance of the edge turns it into a level at the edge's price — a build-up to the FVG, its run the trap [user, 2026-09-26/27]. Mirrors the engine's fvg_levels.")
+fvgEdgeTaps = input.int(0, "FVG edge taps", minval = 0, maxval = 1, group = grpV,
+     tooltip = "Taps the edge itself brings when a pivot builds up to it: 0 = the taps come from price alone (a build-up needs two pivots at the edge); 1 = like any extreme (one pivot at the edge is already a build-up). Mirrors the engine's fvg_edge_touches.")
 showPointers = input.bool(true, "Trap pointers (V8 origins)", group = grpV,
      tooltip = "After a high is run (buyers induced) a dashed line marks the low that move came from — where the induced buyers' stops rest; its run is the trap, a reclaim there the long. Mirror for sellers. Not drawn when the origin is an alive LB extreme (the box already says it). docs/MARCO.md §3, V8.")
 showTaps    = input.bool(true, "Label zone taps", group = grpV)
@@ -118,6 +132,13 @@ type LqLevel
     int   touches
     line  ln
     box   bx = na   // build-up box, once touches >= minTouches
+    bool  fvg = false // v13: an FVG edge sits at this level (dashed line)
+
+// v13: a lone FVG edge — a marker until a pivot builds up to it
+type FvgEdge
+    float price
+    int   born
+    line  ln
 
 type Pending
     float lvl     = na // nearest swept level (reclaim target / zone inner edge)
@@ -185,6 +206,10 @@ type SweptBox
 // ----------------------------------------------------------------- state ---
 var array<LqLevel> lowLvls  = array.new<LqLevel>()
 var array<LqLevel> highLvls = array.new<LqLevel>()
+// v13: lone FVG edges (markers, not liquidity) until a pivot builds up to one
+var array<FvgEdge> fvgLows  = array.new<FvgEdge>()
+var array<FvgEdge> fvgHighs = array.new<FvgEdge>()
+var array<FvgEdge> noPool   = array.new<FvgEdge>() // for registrations that are not pivots
 var array<Block>   blocks   = array.new<Block>()
 var array<SweptBox> sweptBoxes = array.new<SweptBox>()
 var Pending pendBull = Pending.new()
@@ -384,9 +409,26 @@ retireBuildup(LqLevel lv) =>
         lv.bx := na
 
 // ------------------------------------ register liquidity levels ------------
+// v13: a lone FVG edge within eqTol of a level is absorbed by it — the level
+// is flagged (dashed), the edge's marker goes; no extra tap
+absorbEdges(LqLevel lv, array<FvgEdge> pool) =>
+    if array.size(pool) > 0
+        for i = array.size(pool) - 1 to 0
+            FvgEdge e = array.get(pool, i)
+            if math.abs(e.price - lv.price) <= eqTol * atrVal
+                lv.fvg := true
+                if not na(lv.ln)
+                    line.set_style(lv.ln, line.style_dashed)
+                if not na(e.ln)
+                    line.delete(e.ln)
+                array.remove(pool, i)
+
 // t0 = touches the level already carries (an expired/retired zone's extreme
-// brings its respects); fresh levels start at 1
-registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice, int t0 = 1) =>
+// brings its respects); fresh levels start at 1. pool (v13): the lone FVG
+// edges of this side — a pivot within eqTol of one promotes the edge into the
+// level (at the edge's price, with fvgEdgeTaps of its own); pass noPool for
+// registrations that are not pivots
+registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice, array<FvgEdge> pool, int t0 = 1) =>
     bool merged = false
     if array.size(lvls) > 0
         for lv in lvls
@@ -394,6 +436,7 @@ registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice, int t0 = 
                 lv.touches += t0
                 lv.price := isLow ? math.min(lv.price, pPrice) : math.max(lv.price, pPrice)
                 lv.near  := isLow ? math.max(lv.near, pPrice) : math.min(lv.near, pPrice)
+                absorbEdges(lv, pool)
                 if not na(lv.ln)
                     line.set_y1(lv.ln, lv.price)
                     line.set_y2(lv.ln, lv.price)
@@ -415,10 +458,40 @@ registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice, int t0 = 
                 bestLv  := lv
         if not na(bestLv)
             bestLv.touches += t0
+            absorbEdges(bestLv, pool)
             if bestLv.touches >= minTouches and not na(bestLv.ln)
                 line.set_width(bestLv.ln, 2)
                 line.set_color(bestLv.ln, color.new(isLow ? colBull : colBear, 30))
             updateBuildup(bestLv, isLow)
+            merged := true
+    // v13: a build-up to a lone FVG edge — a LATER pivot within eqTol of the
+    // edge promotes it into a level at the edge's price (liquidity rests
+    // beyond the edge); the gap's own third candle is no tap
+    if not merged and array.size(pool) > 0
+        int hit = -1
+        float gapBest = na
+        for i = 0 to array.size(pool) - 1
+            FvgEdge e = array.get(pool, i)
+            float gap = math.abs(pPrice - e.price)
+            if e.born != pBar and gap <= eqTol * atrVal and (na(gapBest) or gap < gapBest)
+                gapBest := gap
+                hit := i
+        if hit >= 0
+            FvgEdge e = array.get(pool, hit)
+            array.remove(pool, hit)
+            int tp = fvgEdgeTaps + t0
+            bool strongP = tp >= minTouches
+            if not na(e.ln)
+                line.set_color(e.ln, color.new(isLow ? colBull : colBear, strongP ? 30 : 65))
+                line.set_width(e.ln, strongP ? 2 : 1)
+            LqLevel promoted = LqLevel.new(price = isLow ? math.min(e.price, pPrice) : math.max(e.price, pPrice),
+                 near = isLow ? math.max(e.price, pPrice) : math.min(e.price, pPrice), born = e.born, touches = tp, ln = e.ln, fvg = true)
+            if not na(promoted.ln)
+                line.set_y1(promoted.ln, promoted.price)
+                line.set_y2(promoted.ln, promoted.price)
+            array.push(lvls, promoted)
+            if strongP
+                updateBuildup(promoted, isLow)
             merged := true
     if not merged
         bool strongLv = t0 >= minTouches
@@ -428,6 +501,7 @@ registerLevel(array<LqLevel> lvls, bool isLow, int pBar, float pPrice, int t0 = 
                  width = strongLv ? 2 : 1, style = line.style_dotted) : na
         LqLevel fresh = LqLevel.new(price = pPrice, near = pPrice, born = pBar, touches = t0, ln = lin)
         array.push(lvls, fresh)
+        absorbEdges(fresh, pool)
         if strongLv
             updateBuildup(fresh, isLow)
         if array.size(lvls) > maxLevels
@@ -587,9 +661,9 @@ if array.size(blocks) > 0
                 // map as a level carrying the respects it collected
                 if expired and not invalid
                     if blk.isBull
-                        registerLevel(lowLvls, true, blk.left, blk.bot, 1 + blk.respects)
+                        registerLevel(lowLvls, true, blk.left, blk.bot, noPool, 1 + blk.respects)
                     else
-                        registerLevel(highLvls, false, blk.left, blk.top, 1 + blk.respects)
+                        registerLevel(highLvls, false, blk.left, blk.top, noPool, 1 + blk.respects)
                 // docs/MARCO.md §7.1: the extreme of an invalidated zone is swept
                 // liquidity — open a pending sweep so a reclaim can print the new LB.
                 // v10 (E1): a wick within eqTol through a zone younger than
@@ -708,6 +782,25 @@ if array.size(sweptBoxes) > 0
             array.remove(sweptBoxes, i)
 
 // --------------------------------------- 3. sweep scan: consume levels -----
+// v13: a lone FVG edge traded through is filled — the marker goes, no event
+if array.size(fvgLows) > 0
+    for i = array.size(fvgLows) - 1 to 0
+        FvgEdge e = array.get(fvgLows, i)
+        if low < e.price
+            if not na(e.ln)
+                line.delete(e.ln)
+            array.remove(fvgLows, i)
+        else if not na(e.ln)
+            line.set_x2(e.ln, bar_index)
+if array.size(fvgHighs) > 0
+    for i = array.size(fvgHighs) - 1 to 0
+        FvgEdge e = array.get(fvgHighs, i)
+        if high > e.price
+            if not na(e.ln)
+                line.delete(e.ln)
+            array.remove(fvgHighs, i)
+        else if not na(e.ln)
+            line.set_x2(e.ln, bar_index)
 // v9 pocket floor: a run that stops within eqTol short of a deeper intact
 // level is a stab INTO the pocket, not a trap — the inner level is consumed,
 // no pending opens, the floor keeps the liquidity
@@ -900,9 +993,9 @@ respectZone(bool isBull, float p, int pBar, int anchorBorn) =>
                         res := not na(anchorBorn) and blk.born == anchorBorn ? 3 : 2
                         blk.dead := true
                         if isBull
-                            registerLevel(lowLvls, true, blk.left, ext, 1 + blk.respects)
+                            registerLevel(lowLvls, true, blk.left, ext, noPool, 1 + blk.respects)
                         else
-                            registerLevel(highLvls, false, blk.left, ext, 1 + blk.respects)
+                            registerLevel(highLvls, false, blk.left, ext, noPool, 1 + blk.respects)
                         killBlock(i, blk)
                     break
     res
@@ -918,7 +1011,7 @@ if not na(pl)
     if na(pendBull.lvl) or pl > pendBull.lvl
         int rzB = respectZone(true, pl, bar_index - pivotLen, lastLbBorn)
         if rzB == 0 and not insideAliveZone(true, pl)
-            registerLevel(lowLvls, true, bar_index - pivotLen, pl)
+            registerLevel(lowLvls, true, bar_index - pivotLen, pl, fvgLows)
         // v12: a zone retired into a build-up tells no story — the Auto bias
         // it set is released (the engine's storyRead treats it as superseded)
         if rzB == 3 and lastLbDir == 1
@@ -931,12 +1024,50 @@ if not na(ph)
     if na(pendBear.lvl) or ph < pendBear.lvl
         int rzS = respectZone(false, ph, bar_index - pivotLen, lastLbBorn)
         if rzS == 0 and not insideAliveZone(false, ph)
-            registerLevel(highLvls, false, bar_index - pivotLen, ph)
+            registerLevel(highLvls, false, bar_index - pivotLen, ph, fvgHighs)
         if rzS == 3 and lastLbDir == -1
             lastLbDir := 0
             if biasMode == "Auto" and biasDir != 0
                 biasDir := 0
                 applyBias(biasDir)
+
+// ------------------------------------ 5b. FVG edge as a marker (v13) --------
+// [user, 2026-09-26/27] the 3rd candle's low of a bullish gap (candle 1's high
+// below it) / high of a bearish gap — a retail point of interest, a dashed
+// marker on every timeframe. On its own it is not liquidity: no level, no
+// pending, no LB. A later pivot within eqTol of the edge promotes it into a
+// level (registerLevel, pool). An edge within eqTol of a live level only flags
+// that level; one inside a live zone, or during a sweep's own excursion, is
+// nothing. Mirrors the engine's step 5 (`fvg_levels`).
+markEdge(bool isLow, array<LqLevel> lvls, array<FvgEdge> pool, float edge) =>
+    bool near = false
+    if array.size(lvls) > 0
+        for lv in lvls
+            if math.abs(lv.price - edge) <= eqTol * atrVal
+                lv.fvg := true
+                if not na(lv.ln)
+                    line.set_style(lv.ln, line.style_dashed)
+                near := true
+    if not near and not insideAliveZone(isLow, edge)
+        bool dup = false
+        if array.size(pool) > 0
+            for e in pool
+                if math.abs(e.price - edge) <= eqTol * atrVal
+                    dup := true
+        if not dup
+            line lin = showLevels ?
+                 line.new(bar_index, edge, bar_index, edge, color = color.new(isLow ? colBull : colBear, 70), width = 1, style = line.style_dashed) : na
+            array.push(pool, FvgEdge.new(price = edge, born = bar_index, ln = lin))
+            if array.size(pool) > maxLevels
+                FvgEdge old = array.shift(pool)
+                if not na(old.ln)
+                    line.delete(old.ln)
+
+if showFvg and bar_index >= 2
+    if high[2] < low and (na(pendBull.lvl) or low > pendBull.lvl)
+        markEdge(true, lowLvls, fvgLows, low)
+    if low[2] > high and (na(pendBear.lvl) or high < pendBear.lvl)
+        markEdge(false, highLvls, fvgHighs, high)
 
 // ------------------------------------------ 6. trap pointers (v11, V8) -----
 // "grab this low, drag it over": the intact origin of the last inducing move

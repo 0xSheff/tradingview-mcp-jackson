@@ -28,6 +28,7 @@ import {
   DIRECTION_DEFAULTS,
   ICT_DEFAULTS,
   fvgEdges,
+  biasVsDirection,
   isHtfTf,
   sessionDate,
   closeDate,
@@ -45,6 +46,7 @@ export {
   DIRECTION_DEFAULTS,
   ICT_DEFAULTS,
   fvgEdges,
+  biasVsDirection,
   isHtfTf,
   sessionDate,
   closeDate,
@@ -104,6 +106,19 @@ export const MARCO_DEFAULTS = {
   // §10 step 3, scripts/research/direction/regress_pivot.mjs), so the map
   // keeps 3 until the thresholds are recalibrated for it.
   htf_pivot_len: 3,
+  // the FVG edge as a level [user, 2026-09-26]: the 3rd candle's low of a
+  // bullish gap / high of a bearish gap is a level like any extreme, on every
+  // timeframe (a "retail point of interest"); nothing else of ICT's FVG use.
+  // Levels carry `fvg: true` so a later measurement can split the LBs born
+  // with an FVG behind the swept liquidity from those without (docs/MARCO.md §2.1)
+  fvg_levels: true,
+  // taps the FVG edge itself brings when a swing builds up to it: 1 = "like any
+  // extreme" (one swing at the edge is already a x2 build-up — in the
+  // regression that made the V1 inducement low qualified and flipped MGC's
+  // September weekends to short), 0 = the edge positions and flags the level,
+  // the taps come from price alone (a build-up needs two swings at the edge)
+  // [CALIBRATION, 2026-09-27]
+  fvg_edge_touches: 0,
   // the direction-now read (src/core/marco_direction.js, docs/MARCO.md §3.2)
   direction: { ...DIRECTION_DEFAULTS },
   // ICT add-ons (docs/ICT-NOTES.md): reference levels in the direction block
@@ -203,13 +218,29 @@ function registerLevel(lvls, side, born, price, atrNow, cfg, events, bar, buildu
     if (lv.buildup == null && lv.touches >= cfg.min_touches) {
       events.push({ bar, type: `${side}_buildup`, level: lv.price, touches: lv.touches, ...(respect ? { respect: true } : {}) });
       lv.buildup = buildups.length;
-      buildups.push({ side, price: lv.price, near: lv.near, touches: lv.touches, born: lv.born, lastTouch: born, swept: null, sweptExt: null, lb: null });
+      buildups.push({ side, price: lv.price, near: lv.near, touches: lv.touches, born: lv.born, lastTouch: born, swept: null, sweptExt: null, lb: null, fvg: lv.fvg === true });
     } else if (lv.buildup != null) {
       const bu = buildups[lv.buildup];
       bu.touches = lv.touches;
       bu.price = lv.price;
       bu.near = lv.near;
       bu.lastTouch = born;
+      if (lv.fvg) bu.fvg = true;
+    }
+  };
+  // opts.pool: the lone FVG edges of this side [user, 2026-09-26] — markers,
+  // not liquidity, until price builds up to one: a swing within eq_tolerance
+  // of an edge (or holding short of it within respect_tolerance) promotes the
+  // edge into a level with both taps, `fvg: true`. An edge next to a level a
+  // swing just confirmed is absorbed by that level (flagged, no extra tap).
+  const pool = opts.pool ?? null;
+  const absorb = (lv) => {
+    if (!pool) return;
+    for (let k = pool.length - 1; k >= 0; k--) {
+      if (Math.abs(pool[k].price - lv.price) <= tol) {
+        lv.fvg = true;
+        pool.splice(k, 1);
+      }
     }
   };
   for (const lv of lvls) {
@@ -220,6 +251,8 @@ function registerLevel(lvls, side, born, price, atrNow, cfg, events, bar, buildu
       lv.price = side === "low" ? Math.min(lv.price, price) : Math.max(lv.price, price);
       lv.near = side === "low" ? Math.max(lv.near, price) : Math.min(lv.near, price);
       lv.lastTouch = born;
+      if (opts.fvg) lv.fvg = true; // an FVG edge at this level
+      absorb(lv);
       track(lv, false);
       return;
     }
@@ -236,11 +269,53 @@ function registerLevel(lvls, side, born, price, atrNow, cfg, events, bar, buildu
   if (best) {
     best.lv.touches += 1;
     best.lv.lastTouch = born;
+    if (opts.fvg) best.lv.fvg = true;
+    absorb(best.lv);
     track(best.lv, true);
     return;
   }
-  const fresh = { price, near: price, born, touches: add, lastTouch: born, buildup: null, ...(opts.seeded ? { seeded: true } : {}) };
+  // a build-up to a lone FVG edge: a LATER swing within eq_tolerance of the
+  // edge ("трохи не досяг" — the equal-level tolerance, not the wider respect
+  // one: 0.75 ATR swallowed the May-2025 W low 1.1408 into an edge 157 pips
+  // below it and the U4 June LB was never born) promotes the edge into a level
+  // carrying its own tap and this one; liquidity rests beyond the edge. The
+  // gap's own third candle is not a tap of it — that swing is a plain level
+  // flagged `fvg` (absorbed below).
+  if (pool) {
+    let hit = -1;
+    let gapBest = Infinity;
+    for (let k = 0; k < pool.length; k++) {
+      const e = pool[k];
+      const gap = Math.abs(price - e.price);
+      if (e.born !== born && gap <= tol && gap < gapBest) {
+        gapBest = gap;
+        hit = k;
+      }
+    }
+    if (hit >= 0) {
+      const e = pool.splice(hit, 1)[0];
+      const promoted = {
+        price: side === "low" ? Math.min(e.price, price) : Math.max(e.price, price),
+        near: side === "low" ? Math.max(e.price, price) : Math.min(e.price, price),
+        born: e.born,
+        touches: (cfg.fvg_edge_touches ?? 0) + add,
+        lastTouch: born,
+        buildup: null,
+        fvg: true,
+      };
+      lvls.push(promoted);
+      events.push({ bar, type: `${side}_fvg_promoted`, level: promoted.price, edge: e.price, swing: price, touches: promoted.touches });
+      if (promoted.touches >= cfg.min_touches) track(promoted, true);
+      if (lvls.length > cfg.max_levels) {
+        const idx = lvls.findIndex((lv) => !lv.seeded);
+        if (idx >= 0) lvls.splice(idx, 1);
+      }
+      return;
+    }
+  }
+  const fresh = { price, near: price, born, touches: add, lastTouch: born, buildup: null, ...(opts.seeded ? { seeded: true } : {}), ...(opts.fvg ? { fvg: true } : {}) };
   lvls.push(fresh);
+  absorb(fresh);
   if (add >= cfg.min_touches) track(fresh, false);
   if (lvls.length > cfg.max_levels) {
     const idx = lvls.findIndex((lv) => !lv.seeded);
@@ -259,6 +334,9 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
   const atr = atrSeries(bars, cfg.atr_length);
   const lowLvls = [];
   const highLvls = [];
+  // lone FVG edges (markers, not liquidity) until a swing builds up to one — step 5
+  const fvgLows = [];
+  const fvgHighs = [];
   const blocks = [];
   const events = [];
   const buildups = [];
@@ -391,6 +469,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
       registerLevel(lvls, side, -cfg.min_level_age, sd.price, atr0, cfg, events, 0, buildups, {
         touches: sd.touches ?? 1,
         seeded: true,
+        fvg: sd.fvg === true,
       });
     }
   }
@@ -537,6 +616,19 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
     // the poked level is consumed, no pending opens, the floor keeps the
     // liquidity (the 6E 1.15765 / 6B 1.3474 cases).
     const tol = tolAt(i);
+    // a lone FVG edge traded through is filled: the marker goes, no event of liquidity
+    for (let k = fvgLows.length - 1; k >= 0; k--) {
+      if (b.low < fvgLows[k].price) {
+        events.push({ bar: i, type: "low_fvg_filled", level: fvgLows[k].price });
+        fvgLows.splice(k, 1);
+      }
+    }
+    for (let k = fvgHighs.length - 1; k >= 0; k--) {
+      if (b.high > fvgHighs[k].price) {
+        events.push({ bar: i, type: "high_fvg_filled", level: fvgHighs[k].price });
+        fvgHighs.splice(k, 1);
+      }
+    }
     const floorBelow = lowLvls.some((o) => o.price < b.low && b.low - o.price <= tol);
     const floorAbove = highLvls.some((o) => o.price > b.high && o.price - b.high <= tol);
     for (let k = lowLvls.length - 1; k >= 0; k--) {
@@ -554,9 +646,10 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           continue;
         }
         if (!pendBull) {
-          pendBull = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.low, extBar: i, bar: i, miss: 0, buildup: lv.buildup ?? null, origin: upOrigin };
+          pendBull = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.low, extBar: i, bar: i, miss: 0, buildup: lv.buildup ?? null, origin: upOrigin, fvg: lv.fvg === true };
         } else {
           if (lv.buildup != null && lv.touches >= pendBull.touches) pendBull.buildup = lv.buildup;
+          if (lv.fvg) pendBull.fvg = true;
           pendBull.lvl = Math.min(pendBull.lvl, lv.price);
           pendBull.touches = Math.max(pendBull.touches, lv.touches);
           pendBull.age = Math.max(pendBull.age, i - lv.born);
@@ -565,7 +658,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           buildups[lv.buildup].swept = i;
           buildups[lv.buildup].sweptExt = b.low;
         }
-        events.push({ bar: i, type: "low_swept", level: lv.price, touches: lv.touches, buildup: lv.buildup ?? null });
+        events.push({ bar: i, type: "low_swept", level: lv.price, touches: lv.touches, buildup: lv.buildup ?? null, fvg: lv.fvg === true });
         lowLvls.splice(k, 1);
         flip(-1, i, lv.price);
       }
@@ -585,9 +678,10 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           continue;
         }
         if (!pendBear) {
-          pendBear = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.high, extBar: i, bar: i, miss: 0, buildup: lv.buildup ?? null, origin: downOrigin };
+          pendBear = { lvl: lv.price, touches: lv.touches, age: i - lv.born, ext: b.high, extBar: i, bar: i, miss: 0, buildup: lv.buildup ?? null, origin: downOrigin, fvg: lv.fvg === true };
         } else {
           if (lv.buildup != null && lv.touches >= pendBear.touches) pendBear.buildup = lv.buildup;
+          if (lv.fvg) pendBear.fvg = true;
           pendBear.lvl = Math.max(pendBear.lvl, lv.price);
           pendBear.touches = Math.max(pendBear.touches, lv.touches);
           pendBear.age = Math.max(pendBear.age, i - lv.born);
@@ -596,7 +690,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           buildups[lv.buildup].swept = i;
           buildups[lv.buildup].sweptExt = b.high;
         }
-        events.push({ bar: i, type: "high_swept", level: lv.price, touches: lv.touches, buildup: lv.buildup ?? null });
+        events.push({ bar: i, type: "high_swept", level: lv.price, touches: lv.touches, buildup: lv.buildup ?? null, fvg: lv.fvg === true });
         highLvls.splice(k, 1);
         flip(1, i, lv.price);
       }
@@ -645,6 +739,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           trap,
           deepened: pendBull.deepened ?? null,
           buildup: pendBull.buildup ?? null,
+          fvg: pendBull.fvg === true,
           tapped: false,
           dead: false,
         });
@@ -659,6 +754,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           left: left ? { price: left.price, touches: left.touches, kind: left.kind } : null,
           trap,
           deepened: pendBull.deepened ?? null,
+          fvg: pendBull.fvg === true,
         });
         if (!left) lastBullLbBorn = i;
         pendBull = null;
@@ -700,6 +796,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           trap,
           deepened: pendBear.deepened ?? null,
           buildup: pendBear.buildup ?? null,
+          fvg: pendBear.fvg === true,
           tapped: false,
           dead: false,
         });
@@ -714,6 +811,7 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
           left: left ? { price: left.price, touches: left.touches, kind: left.kind } : null,
           trap,
           deepened: pendBear.deepened ?? null,
+          fvg: pendBear.fvg === true,
         });
         if (!left) lastBearLbBorn = i;
         pendBear = null;
@@ -740,16 +838,43 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
         if (insideZone(blocks, "bull", lo)) {
           respectZone(blocks, "bull", lo, i, j, tolAt(i));
         } else if (!respectZone(blocks, "bull", lo, i, j, tolAt(i))) {
-          registerLevel(lowLvls, "low", j, lo, atr[i], cfg, events, i, buildups);
+          registerLevel(lowLvls, "low", j, lo, atr[i], cfg, events, i, buildups, { pool: fvgLows });
         }
       }
       if (!(pendBear && hi >= pendBear.lvl) && isPivot(j, "high")) {
         if (insideZone(blocks, "bear", hi)) {
           respectZone(blocks, "bear", hi, i, j, tolAt(i));
         } else if (!respectZone(blocks, "bear", hi, i, j, tolAt(i))) {
-          registerLevel(highLvls, "high", j, hi, atr[i], cfg, events, i, buildups);
+          registerLevel(highLvls, "high", j, hi, atr[i], cfg, events, i, buildups, { pool: fvgHighs });
         }
       }
+    }
+
+    // 5. the FVG edge as a marker [user, 2026-09-26]: the 3rd candle's low of
+    // a bullish gap (candle 1's high below it) or high of a bearish gap — a
+    // "retail point of interest", drawn dashed on every timeframe. On its own
+    // it is not liquidity ("FVG рівень сам по собі не цікавий"): it holds no
+    // pending, no LB, no target, no seed, and a bar trading through it just
+    // fills it. It matters once price builds up to it — a later swing within
+    // eq_tolerance of the edge, or holding short of it within
+    // respect_tolerance, promotes the edge into a level with both taps
+    // (`registerLevel`, opts.pool): from then on the ordinary build-up / sweep /
+    // LB machinery runs and the level, its build-up and its LB carry
+    // `fvg: true` for the measurement. An edge forming within eq_tolerance of
+    // a live level only flags that level; one inside a live zone is nothing.
+    if (cfg.fvg_levels !== false && i >= 2) {
+      const c1 = bars[i - 2];
+      const mark = (side, lvls, pool, edge) => {
+        const near = lvls.find((lv) => Math.abs(lv.price - edge) <= tolAt(i));
+        if (near) near.fvg = true;
+        else if (!insideZone(blocks, side === "low" ? "bull" : "bear", edge) && !pool.some((e) => Math.abs(e.price - edge) <= tolAt(i))) {
+          pool.push({ price: edge, born: i });
+          events.push({ bar: i, type: `${side}_fvg_edge`, level: edge });
+          if (pool.length > cfg.max_levels) pool.shift();
+        }
+      };
+      if (c1.high < b.low && !(pendBull && b.low <= pendBull.lvl)) mark("low", lowLvls, fvgLows, b.low);
+      if (c1.low > b.high && !(pendBear && b.high >= pendBear.lvl)) mark("high", highLvls, fvgHighs, b.high);
     }
   }
 
@@ -789,6 +914,8 @@ export function buildLiquidityMap(bars, cfg = MARCO_DEFAULTS, { seed = null } = 
       : null;
   return {
     levels: { lows: lowLvls, highs: highLvls },
+    // lone FVG edges still standing — markers (dashed on the indicator), not liquidity
+    fvg: { lows: fvgLows.map((e) => ({ price: e.price, born: e.born })), highs: fvgHighs.map((e) => ({ price: e.price, born: e.born })) },
     blocks,
     events,
     buildups,
@@ -808,7 +935,7 @@ export function seedFromMap(htfMap, htfBars, { before = null, price = null, cfg 
   const pick = (lvls) =>
     lvls
       .filter((lv) => before == null || lv.seeded || (htfBars?.[lv.born]?.time ?? 0) < before)
-      .map((lv) => ({ price: lv.price, touches: lv.touches }))
+      .map((lv) => ({ price: lv.price, touches: lv.touches, fvg: lv.fvg === true }))
       .sort((a, b) => (price == null ? 0 : Math.abs(a.price - price) - Math.abs(b.price - price)))
       .slice(0, cfg.seed_levels ?? 10);
   return { lows: pick(htfMap.levels.lows), highs: pick(htfMap.levels.highs) };
@@ -826,6 +953,7 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
     price: round(l.price),
     touches: l.touches,
     buildup: l.touches >= cfg.min_touches,
+    fvg: l.fvg === true,
     bars_ago: n - 1 - l.born,
   });
   const above = map.levels.highs
@@ -1058,13 +1186,17 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
   }
   // pocket floor [user, 2026-09-06]: a run that stopped within eq_tolerance of
   // a deeper intact level took an inner level only — the trap completes
-  // beyond the pocket's furthest extreme, so this is inducement into the pocket
+  // beyond the pocket's furthest extreme, so this is inducement into the
+  // pocket. A map fact, never a direction verdict (the trader, 2026-09-26,
+  // U4: "not a trap" used to read as "the floor is still the target now" —
+  // whether the market is heading there is the direction read's call).
   const lastPoke = lastOf("low_poke", "high_poke");
   if (lastPoke) {
     const low = lastPoke.type === "low_poke";
     read +=
       ` — the ${low ? "stab under" : "spike over"} ${round(lastPoke.level)} ${ago(lastPoke.bar)} stopped at ${round(lastPoke.ext)}, ` +
-      `${low ? "above" : "below"} the pocket floor ${round(lastPoke.floor)}: inducement into the pocket, not a trap`;
+      `${low ? "above" : "below"} the pocket floor ${round(lastPoke.floor)}: inducement into the pocket — no LB, the floor keeps its liquidity ` +
+      `and the trap needs a run beyond it; whether the market is heading there now is the direction read's call`;
   }
 
   const direction =
@@ -1817,7 +1949,10 @@ export function renderWeeklyMarkdown(result) {
       continue;
     }
     const b = r.bias;
-    lines.push(`## ${r.symbol} — ${b.bias_word.toUpperCase()} (${b.regime}${b.stale ? ", stale" : ""})`, "");
+    // the regime word is downgraded in print when the direction is against on
+    // both timeframes (the trader, 2026-09-26; docs/MARCO.md §3.2) — the value stays
+    const vs = biasVsDirection(r.direction, b.bias);
+    lines.push(`## ${r.symbol} — ${b.bias_word.toUpperCase()} (${b.regime}${b.stale ? ", stale" : ""})${vs.text_en ? ` — ${vs.text_en}` : ""}`, "");
     lines.push(`- Price: ${r.price}`);
     lines.push(`- Weekly: ${b.weekly.mode} — ${b.weekly.read}`);
     lines.push(`- Daily: ${b.daily.mode} — ${b.daily.read}`);
@@ -1892,9 +2027,13 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
         const map = buildLiquidityMap(bars, tcfg, { seed });
         reads[tf] = { bars, map, story: storyRead(map, bars, tcfg) };
       }
-      // the direction-now read (docs/MARCO.md §3.2): targets come from the
-      // story above, the heading from acceptance at the W/D 3-bar fractals
-      const direction = cfg.direction?.enabled === false ? null : directionStack({ W: reads.W.bars, D: reads.D.bars, H4: reads[execTf]?.bars ?? null }, cfg);
+      // the direction-now read (docs/MARCO.md §3.2): the heading from the traps
+      // at the W/D 3-bar fractals, the level roles (build-up = target) from the
+      // maps above
+      const direction =
+        cfg.direction?.enabled === false
+          ? null
+          : directionStack({ W: reads.W.bars, D: reads.D.bars, H4: reads[execTf]?.bars ?? null }, cfg, { maps: { W: reads.W.map, D: reads.D.map, H4: reads[execTf]?.map ?? null } });
       // two layers [user, 2026-09-02]: the GLOBAL bias is the author's
       // weekly→daily read (§3.1) with the big targets that will not be hit
       // this week — recorded and re-evaluated every weekend. The INTRAWEEK
@@ -1930,6 +2069,7 @@ export async function runMarcoWeekly({ rules_path, symbols, out_dir } = {}) {
         price,
         bias,
         direction,
+        vs_direction: biasVsDirection(direction, bias.bias).state,
         intraweek,
         triggers,
         false_reactions,
@@ -1976,7 +2116,7 @@ export function compactMarcoWeekly(result) {
         ? { symbol: r.symbol, error: r.error }
         : {
             symbol: r.symbol,
-            bias: `${r.bias.bias_word} (${r.bias.regime})`,
+            bias: `${r.bias.bias_word} (${r.bias.regime})${r.vs_direction && r.vs_direction !== "with" && r.vs_direction !== "none" ? ` — ${r.vs_direction} the direction` : ""}`,
             direction: compactDirection(r.direction),
             primary_target: r.bias.primary_target,
             intraweek: r.intraweek
@@ -1995,11 +2135,14 @@ export function compactMarcoWeekly(result) {
   };
 }
 
-/** One line per timeframe for the compact payloads: "↓ since 2026-08-28 (failed_breakout 1.1705)". */
+/** One line per timeframe for the compact payloads: "↓ since 2026-08-28 (trap 1.1705, kill 1.17625); target 1.1404 x3". */
 function directionLine(x) {
   if (!x) return null;
   if (x.error) return x.error;
-  return `${x.heading > 0 ? "↑" : x.heading < 0 ? "↓" : "—"}${x.since ? ` since ${x.since.decide_date} (${x.since.decision} ${x.since.level})` : ""}${x.last && x.last.decide_date !== x.since?.decide_date ? `; last ${x.last.decision} ${x.last.level} ${x.last.decide_date}` : ""}${x.pending?.length ? `; pending ${x.pending.map((e) => `${e.side} ${e.level}`).join(", ")}` : ""}`;
+  const arrow = (h) => (h > 0 ? "↑" : h < 0 ? "↓" : "—");
+  if (x.done) return `${arrow(x.done.side)} done: target ${x.done.target.price} x${x.done.target.touches} taken ${x.done.target.date} (${x.done.target.by})`;
+  const lastRole = x.last?.role && !["trap", "path", "target"].includes(x.last.role) && x.last.decide_date !== x.since?.decide_date ? `; last ${x.last.role} ${x.last.level} ${x.last.decide_date}` : "";
+  return `${arrow(x.heading)}${x.since ? ` since ${x.since.decide_date} (trap ${x.since.level}, kill ${x.kill})` : x.killed ? ` (LB killed ${x.killed.date}, ${x.killed.crowd} induced)` : ""}${x.target ? `; target ${x.target.price}${x.target.touches >= 2 ? ` x${x.target.touches}` : ""}` : ""}${x.taken ? `; taken ${x.taken.price} ${x.taken.date}` : ""}${lastRole}${x.pending?.length ? `; pending ${x.pending.map((e) => `${e.side} ${e.level}`).join(", ")}` : ""}`;
 }
 
 function compactDirection(dir) {
@@ -2010,7 +2153,8 @@ function compactDirection(dir) {
     D: directionLine(dir.D),
     H4: dir.leg ? `${directionLine(dir.leg)} (${dir.leg.relation})` : null,
     day: dir.day?.role ?? null,
-    battleground: dir.day?.battleground ?? null,
+    pd_level: dir.day?.pd_level ?? null,
+    pd_kind: dir.day?.pd_kind ?? null,
   };
 }
 
@@ -2108,14 +2252,26 @@ export async function runMarcoBrief({ rules_path, symbols, timeframes, bias } = 
         // closed bars only — the forming bar is reported, never read as an event
         // (D/W/M by the session close: the Fri 25.09 scan read the open W39 as "0 bars ago")
         const { closed: bars, forming } = closedBars((await data.getOhlcv({ count: cfg.bars_to_fetch, max: cfg.bars_to_fetch })).bars, tf, cfg);
-        const read = analyzeMarco(bars, cfgForTf(cfg, tf), {
+        const wantDirection = isHtfTf(tf) && cfg.direction?.enabled !== false;
+        const tcfg = cfgForTf(cfg, tf);
+        const read = analyzeMarco(bars, tcfg, {
           bias: manualBias !== null ? manualBias : useWeekly ? wk?.bias?.bias || null : null,
           seed: htfMap ? seedFromMap(htfMap, htfBars, { before: bars[0]?.time, price: bars.at(-1)?.close, cfg }) : null,
+          withMap: wantDirection,
         });
         if (!read.error) read.forming_bar = forming;
-        // the direction-now read on the HTF timeframes (docs/MARCO.md §3.2)
-        if (!read.error && isHtfTf(tf) && cfg.direction?.enabled !== false) {
-          read.direction = directionRead(bars, { timeframe: tf, pivot_len: cfg.direction.pivot_len, decision_bars: cfg.direction.decision_bars });
+        // the direction-now read on the HTF timeframes (docs/MARCO.md §3.2) —
+        // the map of the same bars gives the levels their roles
+        if (!read.error && wantDirection) {
+          read.direction = directionRead(bars, {
+            timeframe: tf,
+            pivot_len: cfg.direction.pivot_len,
+            decision_bars: cfg.direction.decision_bars,
+            reach_atr: cfg.direction.reach_atr,
+            map: read.map ?? null,
+            cfg: tcfg,
+          });
+          delete read.map;
         }
         if (!read.error && htfBars) read.htf = htfContext(htfBars, read.last_price, cfg);
         if (!read.error && wk) {
@@ -2355,9 +2511,12 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
         results.push({ symbol, error: short });
         continue;
       }
-      // 1b. the direction-now read (docs/MARCO.md §3.2): W and D, closed bars
-      // only — the answer to "is the market heading to the targets now?"
+      // 1b. the W/D bars for the direction-now read (docs/MARCO.md §3.2), closed
+      // bars only, with the maps of the same bars (build-up = the target; the D
+      // map inherits the W levels as in the weekly run). The read itself runs
+      // after the per-timeframe reads below, so the H4 leg gets the 4h map too.
       let direction = null;
+      let dirInput = null;
       if (cfg.direction?.enabled !== false) {
         try {
           const htf = {};
@@ -2366,7 +2525,9 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
             await sleep(900);
             htf[tf] = closedBars((await data.getOhlcv({ count: 500 })).bars, tf, cfg).closed;
           }
-          direction = directionStack({ ...htf, H4: Array.isArray(barsBy[execTf]) ? barsBy[execTf] : null }, cfg);
+          const maps = { W: buildLiquidityMap(htf.W, cfgForTf(cfg, "W")) };
+          maps.D = buildLiquidityMap(htf.D, cfgForTf(cfg, "D"), { seed: seedFromMap(maps.W, htf.W, { before: htf.D[0]?.time, price: htf.D.at(-1)?.close, cfg }) });
+          dirInput = { htf, maps };
         } catch (err) {
           direction = { error: `direction read failed: ${err.message}` };
         }
@@ -2423,6 +2584,15 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
           read.alignment = alignmentOf(read.story.direction, bias);
         }
         perTf[tf] = read;
+      }
+
+      // 3b. the direction-now read: W and D on their maps, the H4 leg on the 4h map
+      if (dirInput) {
+        try {
+          direction = directionStack({ ...dirInput.htf, H4: execBars }, cfg, { maps: { ...dirInput.maps, H4: perTf[execTf]?.map ?? null } });
+        } catch (err) {
+          direction = { error: `direction read failed: ${err.message}` };
+        }
       }
 
       // 4. the H4 grid, the LTF reads clipped to it, the scenarios

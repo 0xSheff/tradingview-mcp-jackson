@@ -18,7 +18,7 @@
  * docs/MARCO.md §6.
  */
 import { atrSeries } from "./marco.js";
-import { directionBlockUa } from "./marco_direction.js";
+import { directionBlockUa, biasVsDirection } from "./marco_direction.js";
 
 // significant digits, like marco.js — 6J trades at 0.0063x, MNQ at 30000+
 function round(n) {
@@ -41,7 +41,7 @@ const itemTxt = (it) => {
     ].filter(Boolean);
     return `LB ${zoneTxt(it.zone)}${flags.length ? ` [${flags.join(" ")}]` : ""}`;
   }
-  return `${fmt(it.price)} x${it.touches}${it.seeded ? " (HTF)" : ""}`;
+  return `${fmt(it.price)} x${it.touches}${it.fvg ? " (FVG)" : ""}${it.seeded ? " (HTF)" : ""}`;
 };
 
 // ------------------------------------------------------------------ grid --
@@ -78,6 +78,7 @@ export function h4Grid(map, bars, cfg, { bias = 0, sinceBar = null } = {}) {
         buildup: l.touches >= cfg.min_touches,
         bars_ago: n - 1 - l.born,
         seeded: l.seeded === true,
+        fvg: l.fvg === true,
       })),
       ...zones.map((b) => ({
         kind: "lb",
@@ -1010,15 +1011,16 @@ export function dailySetups(r, daily = {}) {
   const nextLvl = edgeLvl(nextEdgeItem);
   const header = row(`${w.mode ?? side}/${w.regime ?? "—"}`, w.invalidation ? `inval ${fmt(w.invalidation.level)} ${invalTag(w.invalidation.rule)}` : null);
   const globalLine = w.primary_target != null ? `global: ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""} лише фінальна ціль` : null;
-  // the direction-now label (docs/MARCO.md §3.2): every setup says whether it
-  // trades with the HTF heading, against it, or with none — the journal keeps it
+  // the direction-now label (docs/MARCO.md §3.2): every setup states both
+  // layers as a fact — the fractal market's W and D — and how the setup sits
+  // against each; no verdict word (the trader, 2026-09-26). The journal keeps it.
   const dirNow = r.direction && !r.direction.error ? r.direction : null;
   const arrowOf = (x) => (x > 0 ? "↑" : x < 0 ? "↓" : "—");
+  const symOf = (x) => (!x || x.error ? "—" : x.done ? `${arrowOf(x.done.side)}✓` : arrowOf(x.heading));
+  const relOf = (x, name, sign) =>
+    !x || x.error || !x.heading ? (x?.done ? `${name} ціль знята` : `${name} без напрямку`) : x.heading === sign ? `за ${name}` : `проти ${name}`;
   const sideSign = long ? 1 : -1;
-  const dirLineFor = (sign) =>
-    dirNow
-      ? `напрямок: W${arrowOf(dirNow.weekly)} D${arrowOf(dirNow.daily)} — ${dirNow.heading === sign ? "за напрямком" : dirNow.heading === -sign ? "ПРОТИ напрямку" : "напрямку немає"}`
-      : null;
+  const dirLineFor = (sign) => (dirNow ? `напрямок: W ${symOf(dirNow.W)} · D ${symOf(dirNow.D)} — ${relOf(dirNow.W, "W", sign)}, ${relOf(dirNow.D, "D", sign)}` : null);
   const dirLine = dirLineFor(sideSign);
   const invalLine = w.invalidation ? `breakdown: ${invalUa(w.invalidation.rule)} ${fmt(w.invalidation.level)} = інвалідація W-біасу, ${long ? "лонгів" : "шортів"} нема` : null;
 
@@ -1266,48 +1268,54 @@ export function dailySetups(r, daily = {}) {
     addAlert(nextLvl);
   }
 
-  // the battleground (docs/MARCO.md §3.2): yesterday closed beyond the day
-  // before against the heading — a correction day. Its extreme is run the next
-  // day ≈63% of the time and the close decides: back toward the heading = the
-  // trap (23% vs 13% base), beyond it = the correction goes on (31% vs 23%).
-  // A setup only when the heading is the bias side; a level already in a setup
-  // gets a note instead of a twin.
+  // the PDL/PDH sweep-trigger (docs/MARCO.md §3.2; the trader, 2026-09-26: a
+  // plain sweep-trigger on the previous day's extreme, Marco's HTF candle
+  // extreme, V7): yesterday closed beyond the day before against the heading
+  // — a correction day. Its extreme is run the next day ≈63% of the time and
+  // the close decides: back toward the heading = the trap, beyond it = the
+  // correction goes on. A setup only when the heading is the bias side and W
+  // and D are not at odds (a D correction inside the W move is not the place
+  // for it — the block names the level only); a level already in a setup gets
+  // a note instead of a twin.
   const dayRead = dirNow?.day ?? null;
-  const bg = dayRead?.role === "correction_day" && dirNow.heading === sideSign ? dayRead.battleground : null;
-  if (bg != null && price != null && (long ? bg < price : bg > price)) {
-    const dmyBg = dayRead.date ? `${dayRead.date.slice(8, 10)}.${dayRead.date.slice(5, 7)}` : "учора";
-    const twin = opp.find((o) => o.trigger != null && Math.abs(o.trigger - bg) <= respect / 3);
+  const layersAgree = dirNow && dirNow.state !== "correction" && dirNow.state !== "mixed";
+  const pd = dayRead?.role === "correction_day" && layersAgree && dirNow.heading === sideSign ? dayRead.pd_level : null;
+  if (pd != null && price != null && (long ? pd < price : pd > price)) {
+    const pdWord = dayRead.pd_kind ?? (long ? "PDL" : "PDH");
+    const dmyPd = dayRead.date ? `${dayRead.date.slice(8, 10)}.${dayRead.date.slice(5, 7)}` : "учора";
+    const twin = opp.find((o) => o.trigger != null && Math.abs(o.trigger - pd) <= respect / 3);
     if (twin) {
-      twin.lines.splice(Math.max(0, twin.lines.length - 2), 0, `поле бою: ${fmt(bg)} = ${lowWord} корекційного дня ${dmyBg} — run + закриття назад = trap, денне закриття за ним = корекція триває`);
+      const at = Math.max(0, twin.lines.length - (twin.lines.includes(globalLine) ? 2 : 1));
+      twin.lines.splice(at, 0, `${pdWord} ${fmt(pd)}: ${lowWord} корекційного дня ${dmyPd} — run + закриття назад = trap, денне закриття за ним = корекція триває`);
     } else {
-      const near = reachable(bg);
-      const targets = targetsFrom(bg, null);
+      const near = reachable(pd);
+      const targets = targetsFrom(pd, null);
       opp.push(
         mk({
-          kind: "battleground",
+          kind: "pd_sweep",
           setup_type: "sweep-trigger",
-          trigger: bg,
-          key_levels: [bg],
+          trigger: pd,
+          key_levels: [pd],
           targets,
           stop: null,
           risk: null,
           planned_r: null,
           actionable: near,
           over_cap: false,
-          far: near ? null : farTxt(bg),
+          far: near ? null : farTxt(pd),
           lines: [
-            `entry when: run ${fmt(bg)} (${lowWord} корекційного дня ${dmyBg}) + 1h/15m-закриття назад ${over} ним → тап LB, яку лишить закриття · ${win}`,
-            row(`K1 sweep+reclaim ${fmt(bg)}`, stopRule, "RR —", `поле бою: корекційний день проти напрямку, ${dist(bg)} від ціни`),
+            `entry when: run ${fmt(pd)} (${pdWord}, ${lowWord} корекційного дня ${dmyPd}) + 1h/15m-закриття назад ${over} ним → тап LB, яку лишить закриття · ${win}`,
+            row(`K1 sweep+reclaim ${fmt(pd)}`, stopRule, "RR —", `${pdWord}: корекційний день проти напрямку, ${dist(pd)} від ціни`),
             beLine(targets[0]),
-            `breakdown: денне закриття ${under} ${fmt(bg)} = корекція триває — сетап скасовано`,
+            `breakdown: денне закриття ${under} ${fmt(pd)} = корекція триває — сетап скасовано`,
             globalLine,
             dirLine,
           ].filter(Boolean),
-          short: row(`поле бою ${fmt(bg)} (${dist(bg)}) → ${side}`, "stop з 1h/15m LB", `T1 ${fmt(targets[0])}`),
+          short: row(`${pdWord} ${fmt(pd)} (${dist(pd)}) → ${side}`, "stop з 1h/15m LB", `T1 ${fmt(targets[0])}`),
         }),
       );
     }
-    addAlert(bg);
+    addAlert(pd);
   }
 
   // the counter edge: a partial always; a counter-trend setup on Mon–Tue only
@@ -1423,8 +1431,11 @@ export function renderDailyMarkdown(daily) {
     } else if (r.roll?.status === "inconsistent") {
       out.push(`**Дані.** ${r.roll.note}`);
     }
+    // the regime word is downgraded in print when the direction is against on
+    // both layers (the trader, 2026-09-26, docs/MARCO.md §3.2) — the value stays
+    const vs = biasVsDirection(r.direction, w.bias === "long" ? 1 : w.bias === "short" ? -1 : 0);
     out.push(
-      `**Bias.** W ${w.mode ? (MODE_UA[w.mode] ?? w.mode) : (w.bias ?? "—")}/${w.regime ?? "—"}${w.daily_mode ? ` · D ${MODE_UA[w.daily_mode] ?? w.daily_mode}` : ""}${w.stale ? " (stale)" : ""} · глобальна ціль ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""}.`,
+      `**Bias.** W ${w.mode ? (MODE_UA[w.mode] ?? w.mode) : (w.bias ?? "—")}/${w.regime ?? "—"}${w.daily_mode ? ` · D ${MODE_UA[w.daily_mode] ?? w.daily_mode}` : ""}${w.stale ? " (stale)" : ""} · глобальна ціль ${fmt(w.primary_target)}${w.primary_atr_weeks != null ? ` (≈${w.primary_atr_weeks}w)` : ""}${vs.text_ua ? ` · ${vs.text_ua}` : ""}.`,
     );
 
     // ---- Direction now (docs/MARCO.md §3.2): the heading from HTF acceptance;
@@ -1522,8 +1533,8 @@ export function renderDailyMarkdown(daily) {
     }
     out.push("");
     blocks.push(...out);
-    const hd = (x) => (x > 0 ? "↑" : x < 0 ? "↓" : "—");
-    const dirCell = r.direction && !r.direction.error ? `W${hd(r.direction.weekly)} D${hd(r.direction.daily)}` : "—";
+    const hd = (x) => (!x || x.error ? "—" : x.done ? `${x.done.side > 0 ? "↑" : "↓"}✓` : x.heading > 0 ? "↑" : x.heading < 0 ? "↓" : "—");
+    const dirCell = r.direction && !r.direction.error ? `W${hd(r.direction.W)} D${hd(r.direction.D)}` : "—";
     summary.push(`| ${name} | ${(w.bias ?? "none").toUpperCase()} | ${dirCell} | ${S.state} | ${mainShort ?? "—"} |`);
   }
 

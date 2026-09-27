@@ -339,37 +339,69 @@ test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when p
 
   // the direction-now read (docs/MARCO.md §3.2): a label on every setup, a
   // block after Bias, a column in the summary — labels only, nothing blocked
-  const tfDir = (level, date) => ({
+  const tfDir = (level, date, kill) => ({
     heading: 1,
-    since: { decision: "invalidated", side: "high", level, decide_date: date, closes: [] },
-    last: { decision: "invalidated", side: "high", level, decide_date: date, closes: [] },
+    since: { decision: "failed_breakout", role: "trap", side: "low", level, decide_date: date, closes: [], extreme: kill },
+    last: { decision: "failed_breakout", role: "trap", side: "low", level, decide_date: date, closes: [], extreme: kill },
+    kill,
+    target: { price: 104, touches: 2, buildup: true },
+    taken: null,
+    done: null,
+    killed: null,
+    correction: null,
+    path: [],
+    has_map: true,
     pending: [],
     next: { above: { price: 104 }, below: { price: 95 } },
   });
-  const withDir = { ...r1, direction: { state: "with", weekly: 1, daily: 1, heading: 1, W: tfDir(97, "2026-09-04"), D: tfDir(99, "2026-09-10"), day: null } };
+  const withDir = { ...r1, direction: { state: "with", weekly: 1, daily: 1, heading: 1, W: tfDir(97, "2026-09-04", 96.5), D: tfDir(99, "2026-09-10", 98.8), day: null } };
   const SD = dailySetups(withDir, daily);
-  assert.ok(SD.setups.every((s) => s.setup_description.includes("\n- напрямок: W↑ D↑ — за напрямком")), SD.setups[0].setup_description);
+  // the label states both layers as a fact and the setup's relation to each — no verdict word
+  assert.ok(SD.setups.every((s) => s.setup_description.includes("\n- напрямок: W ↑ · D ↑ — за W, за D")), SD.setups[0].setup_description);
   const ctD = dailySetups(withDir, { ...daily, weekday: "Mon", counter_trend_open: true }).setups.find((s) => s.setup_type === "early-week-counter-trend");
-  assert.match(ctD.setup_description, /- напрямок: W↑ D↑ — ПРОТИ напрямку/);
+  assert.match(ctD.setup_description, /- напрямок: W ↑ · D ↑ — проти W, проти D/);
   const mdD = renderDailyMarkdown({ ...daily, results: [withDir] });
-  for (const needle of ["| X | LONG | W↑ D↑ | VALID |", "**Напрямок.** W і D в один бік — ринок зараз іде вгору.", "- W ↑ з 04.09 — рівень інвалідовано.", "Рівні: W 97 · D 99 · наступні рішення D 104 / 95 · W 104 / 95"]) {
+  for (const needle of [
+    "| X | LONG | W↑ D↑ | VALID |",
+    "**Напрямок.** W ↑ · D ↑.",
+    "- W ↑ з 04.09 — trap 97 (невдалий пробій), kill 96.5; ціль 104 x2.",
+    "Рівні: W trap 97 / kill 96.5 · ціль W 104 x2 · D trap 99 / kill 98.8 · ціль D 104 x2 · рівні рішень D 104 / 95 · W 104 / 95",
+  ]) {
     assert.ok(mdD.includes(needle), `brief is missing: ${needle}\n---\n${mdD}`);
   }
+  // a D correction inside the W move: both layers named, no PDL setup
+  const corrState = { ...withDir, direction: { ...withDir.direction, state: "correction", daily: -1, D: { ...tfDir(99, "2026-09-10", 98.8), heading: -1 } } };
+  assert.ok(dailySetups(corrState, daily).setups.every((s) => s.setup_description.includes("\n- напрямок: W ↑ · D ↓ — за W, проти D")), "correction label");
+  assert.ok(renderDailyMarkdown({ ...daily, results: [corrState] }).includes("**Напрямок.** W ↑ · D ↓ — D коригується всередині W-руху."));
+  const corrDay = { ...corrState, direction: { ...corrState.direction, day: { role: "correction_day", pd_level: 99, pd_kind: "PDL", date: "2026-09-10" } } };
+  assert.ok(!dailySetups(corrDay, daily).setups.some((s) => s.kind === "pd_sweep"), "no PDL sweep setup while D corrects against W");
+  // a D whose target is taken: the layer says so
+  const doneState = { ...withDir, direction: { ...withDir.direction, state: "weekly_only", daily: 0, daily_done: true, D: { ...tfDir(99, "2026-09-10", 98.8), heading: 0, since: null, done: { side: 1, since: { decide_date: "2026-09-10" }, target: { price: 104, touches: 2, date: "2026-09-16", by: "held", extreme: 104.3 }, date: "2026-09-16" }, taken: { price: 104, touches: 2, date: "2026-09-16", by: "held", extreme: 104.3 }, target: null } } };
+  const mdDone = renderDailyMarkdown({ ...daily, results: [doneState] });
+  assert.ok(mdDone.includes("| X | LONG | W↑ D↑✓ | VALID |"), mdDone);
+  assert.ok(mdDone.includes("- D ↑ завершено (з 10.09): ціль 104 x2 знята 16.09 run і закриттям назад — trap-кандидат, підтверджує карта; далі цілей у межах досяжності немає."), mdDone);
+  assert.ok(dailySetups(doneState, daily).setups.every((s) => s.setup_description.includes("\n- напрямок: W ↑ · D ↑✓ — за W, D ціль знята")), "done label");
+  // the Bias line is downgraded in print when the direction is against on both layers (p.6, 2026-09-26); the regime value stays
+  const againstState = { ...withDir, direction: { ...withDir.direction, weekly: -1, daily: -1, heading: -1, W: { ...tfDir(97, "2026-09-04", 96.5), heading: -1 }, D: { ...tfDir(99, "2026-09-10", 98.8), heading: -1 } } };
+  assert.ok(renderDailyMarkdown({ ...daily, results: [againstState] }).includes(" · проти напрямку (W ↓ · D ↓)."), "bias downgraded");
+  assert.ok(renderDailyMarkdown({ ...daily, results: [corrState] }).includes(" · напрямок змішаний (W ↑ · D ↓)."), "bias mixed");
+  assert.ok(!mdD.includes("проти напрямку ("), "with the direction: no downgrade");
 
-  // the battleground (docs/MARCO.md §3.2): yesterday was a correction day against
-  // the heading — its extreme becomes a setup of its own, or a note on the setup
-  // already sitting there
-  const corr = (bg) => ({ ...withDir, direction: { ...withDir.direction, day: { role: "correction_day", battleground: bg, date: "2026-09-10" } } });
+  // the PDL/PDH sweep-trigger (docs/MARCO.md §3.2): yesterday was a correction day
+  // against the heading — its extreme becomes a plain sweep-trigger setup of its
+  // own, or a note on the setup already sitting there
+  const corr = (pd) => ({ ...withDir, direction: { ...withDir.direction, day: { role: "correction_day", pd_level: pd, pd_kind: "PDL", date: "2026-09-10" } } });
   const own = dailySetups(corr(99), daily).setups.find((s) => s.key_levels[0] === 99);
-  assert.ok(own, "a battleground setup at 99");
+  assert.ok(own, "a PDL sweep setup at 99");
   assert.equal(own.setup_type, "sweep-trigger");
-  assert.match(own.setup_description, /- entry when: run 99 \(лоу корекційного дня 10\.09\) \+ 1h\/15m-закриття назад над ним → тап LB/);
+  assert.match(own.setup_description, /- entry when: run 99 \(PDL, лоу корекційного дня 10\.09\) \+ 1h\/15m-закриття назад над ним → тап LB/);
   assert.match(own.setup_description, /- breakdown: денне закриття під 99 = корекція триває — сетап скасовано/);
+  assert.ok(!/поле бою/.test(own.setup_description));
   const twinned = dailySetups(corr(98.3), daily).setups;
   assert.ok(!twinned.some((s) => s.key_levels[0] === 98.3), "no twin next to 98.2");
-  assert.match(twinned.find((s) => s.key_levels[0] === 98.2).setup_description, /- поле бою: 98\.3 = лоу корекційного дня 10\.09/);
-  // against the heading's side (bias long, heading down) there is no battleground setup
-  const against = { ...withDir, direction: { ...withDir.direction, heading: -1, weekly: -1, daily: -1, day: { role: "correction_day", battleground: 101.5, date: "2026-09-10" } } };
+  assert.match(twinned.find((s) => s.key_levels[0] === 98.2).setup_description, /- PDL 98\.3: лоу корекційного дня 10\.09/);
+  // against the heading's side (bias long, heading down) there is no such setup
+  const against = { ...withDir, direction: { ...withDir.direction, heading: -1, weekly: -1, daily: -1, day: { role: "correction_day", pd_level: 101.5, pd_kind: "PDH", date: "2026-09-10" } } };
   assert.ok(!dailySetups(against, daily).setups.some((s) => s.key_levels[0] === 101.5));
 });
 

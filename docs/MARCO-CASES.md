@@ -410,6 +410,44 @@ recorded under *Rule candidates* → pocket flag.
   buyers was x1. Pine v11 uploaded to TradingView as "Liq blocks" the same day
   (see the case for the check).
 
+- **HTF direction read — superseded semantics (trader, 2026-09-26 evening / 27; the machine
+  as it stands: docs/MARCO.md §3.2, design record docs/MARCO-DIRECTION.md §17).** The two
+  builds above are history: the "lost" state is gone (both anchors were consumed levels;
+  after a lost the next decision was opposite only 55–60%; the MNQ justification was wrong —
+  the June highs 31 272.75 / 31 397.75 stayed intact above the August rally), acceptance no
+  longer sets a heading, the "battleground" is a plain sweep-trigger on PDL/PDH (`pd_sweep`).
+  Now: a decision's meaning depends on the level's side against the heading and its map role
+  — the failed breakout is the trap (turns or confirms), a held sweep on the counter side
+  confirms, one on the heading side is a pause (possible correction to the nearest opposite
+  liquidity) unless it takes a build-up — the target, and with nothing further in reach the
+  heading is *done*; a with-trend acceptance is nothing (the path), one against the heading
+  is inducement until it clears the trap's extreme (the kill). `since` = the trap that turned
+  the heading, `kill` its extreme, `target` the nearest build-up in reach (2 weekly ATR,
+  √bars-per-week scaling). Labels state both layers as a fact ("W ↓ · D ↓ — за W, за D"); the
+  bias headline is downgraded in print when both layers are against it. Rev-4 decisions and
+  the options kept for the sprint-3 close: docs/MARCO-DIRECTION.md §17.5. FVG edges entered
+  the map the same night as markers (§2.1, §17.6): an FVG-backed build-up's LB carries `fvg`
+  for the measurement.
+
+- **FVG edge as a marker — the trader's "retail point of interest"** (trader, 2026-09-26/27;
+  built 2026-09-27, engine + Pine v13; rule in docs/MARCO.md §2.1, record in
+  docs/MARCO-DIRECTION.md §17.6). His words: the IE team never says "FVG", they draw a line at
+  the edge nearest to price and count the liquidity that built up short of it; "FVG рівень сам
+  по собі не цікавий статистично … лише в комплексі": edge + engineered liquidity → the run
+  takes the whole build-up and enters the gap → closes back → continuation. "Я б не
+  ускладнював": the 3rd candle's low (bullish gap) / high (bearish) on every timeframe; with a
+  build-up to it — marked like an extreme and traded; without — a dashed line. Built as: a lone
+  edge is a marker (no level, target, seed or pending; a bar through it fills it); a later
+  swing within `eq_tolerance` promotes it into a level at the edge's price, `fvg: true`, taps
+  from price only (`fvg_edge_touches` 0). Three literal variants were rejected on the
+  regression: edge = x1 level at once (sweeps and LBs tripled, the weekly bias changed on all
+  four instruments on all four weekends W36–W39), promotion by `respect_tolerance` (swallowed
+  the May-2025 W low 1.1408, the U4 June LB was never born), the edge bringing a tap of its own
+  (the V1 inducement low became qualified, MGC flipped short four weekends). With the built
+  variant the only change in 16 instrument-weeks is MNQ 18.09 `long/pullback` → `long/aligned`.
+  Open: the measurement the hypothesis needs — LBs with an FVG behind the swept cluster against
+  those without (`fvg` on blocks, build-ups and `*_lb_created` events) — once cases accumulate.
+
 ## Rule candidates
 
 - **LTF build-up after the run = the entry; the close back = the grid state only**

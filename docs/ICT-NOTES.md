@@ -51,7 +51,12 @@ Tue–Thu. **PO3 / AMD**: accumulation (Asia, near the open) → manipulation be
 **FVG as a level (the trader, 2026-09-26).** Marco says IE does not use FVG, yet the trader has
 seen the IE team mark the FVG edge nearest to price as a plain level: after an up-move the
 **low of the third candle** (the FVG top), after a down-move the **high of the third candle**
-(the FVG bottom). Proposed: take that edge as a level of ours.
+(the FVG bottom). Proposed: take that edge as a level of ours. **Clarified the same evening:**
+the IE team does not call it FVG — a "retail point of interest" — and the edge alone is
+nothing; what they trade is the liquidity engineered short of it: one, two or more swings that
+stop just before the edge, then the run that takes the whole build-up and enters the gap,
+closes back and continues. Order flow in the trader's words is that chain — liquidity taken,
+an LB formed, the move resumes toward the target.
 
 ## Mapping to the Marco vocabulary
 
@@ -151,4 +156,10 @@ as a forecast on its own — alone it matched its baselines, in context it reads
   a down-gap), switch `ict.fvg_levels`, **off by default**: in the data it behaved like any
   level at the same ATR distance — touched within 10 D / 30 H4 bars 82% vs 76% (D, n=247) and
   88% vs 87% (H4, n=2903); the touching bar closed back beyond it 52% vs 51% / 53% vs 51%.
+  **Superseded 2026-09-27 by the map feature** (the trader's actual use, docs/MARCO.md §2.1,
+  docs/MARCO-DIRECTION.md §17.6): the edge is a dashed *marker* on every timeframe that
+  becomes a level only when a later swing builds up to it within `eq_tolerance`; the LB born
+  from that liquidity carries `fvg` for the measurement that matters — LBs with an FVG
+  behind the swept cluster against those without. The reference line above measured the
+  edge alone, which is exactly what the trader says is uninformative.
 - Not taken: CRT as a pattern, PO3/AMD/opens, OB/STB/BTS (see above).

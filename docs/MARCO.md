@@ -86,6 +86,27 @@ A swing high/low left behind by price. Sub-types the author marks on charts:
   why the engine runs the HTF second pass (`htfContext`) and why the V3
   replay's entry zone was missed (§7.1). No FVG/imbalance is involved
   anywhere in the method. **[SOURCE, V7]**
+- **FVG edge — the trader's marker, not Marco's [CALIBRATION, user,
+  2026-09-26/27].** The IE team draws a line at the FVG edge nearest to price
+  (the 3rd candle's low of a bullish gap, its high of a bearish one — a
+  "retail point of interest") and counts the liquidity that builds up short
+  of it; the edge alone is nothing. Engine (`fvg_levels`) and indicator (v13)
+  mirror that literally: a lone edge is a dashed marker on every timeframe —
+  no level, no target, no seed, no pending; a bar trading through it just
+  fills it. A later swing within `eq_tolerance` of the edge promotes it into
+  a level at the edge's price (liquidity rests beyond the edge) with
+  `fvg: true`, carrying `fvg_edge_touches` taps of its own (0 by default —
+  the taps come from price; 1 = "like any extreme", which in the September
+  regression made the V1 inducement low qualified and flipped MGC's four
+  weekends to short) plus the swing's; from then on the ordinary build-up /
+  sweep / LB machinery runs, and the LB born from that liquidity carries
+  `fvg` for the measurement — LBs with an FVG behind the swept cluster
+  against those without, the trader's actual hypothesis. The gap's own third
+  candle is no tap; an edge forming within `eq_tolerance` of a live level only
+  flags that level; the wider `respect_tolerance` is not used for promotion
+  (0.75 ATR swallowed the May-2025 W low 1.1408 into an edge 157 pips below
+  it and the U4 June LB was never born). Nothing else of ICT's FVG use is
+  taken.
 
 **Memory and swings [CALIBRATION, 2026-09-06].** TradingView hands the
 engine at most 500 bars of a timeframe, so a lower-timeframe map inherits
@@ -650,26 +671,67 @@ failed upside breaks — the case this layer exists for.
 - **Acceptance** is the close. The bar that runs a level gives a provisional
   read; the close of the NEXT bar decides — "we give up to two bars for
   acceptance beyond the level; three is already a lot for HTF":
-  - beyond · beyond → the level is invalidated — heading = the run side;
-  - back · beyond → late acceptance — heading = the run side;
-  - beyond · back → failed breakout = acceptance on the original side (the
-    trap, U4's W34 → W35 at 1.1705) — heading = the other side;
-  - back · back → the sweep held — a pause, the heading unchanged.
+  - beyond · beyond / back · beyond → accepted beyond the level;
+  - beyond · back → failed breakout;
+  - back · back → the sweep held (a run without acceptance).
   A bar that runs levels on both sides decides nothing; of several levels on
   one side the furthest is the one decided. A decided level is off this read.
-- **Lost.** Two closes in a row back through the level that set the heading
-  switch it off (not over): a V-move leaves no fractal to decide on (MNQ W ↓
-  24.07 under 28 817 would otherwise have held through the +2000-point
-  August rally).
+- **What a decision means** depends on the level's side against the heading
+  and on its role on the map (the trader, 2026-09-26 evening;
+  docs/MARCO-DIRECTION.md §17):
+  - the failed breakout is the trap — the heading becomes the acceptance side
+    (U4: W34 → W35 at 1.1705, D 03–04.09 at 1.1671); on the counter side it
+    confirms the heading and refreshes its kill;
+  - a held sweep on the counter side — price came into the level with the
+    trend and closed back — confirms the heading (6E D 09–10.09 at 1.1685:
+    "we came into this zone from above — a confirmation of the move down");
+  - a held sweep on the heading side is a run without acceptance: a pause,
+    "possibly a move to the nearest opposite liquidity — bias, order flow and
+    the weekday decide" (6E D 11.09 at 1.16125); when the level is a build-up
+    on the map it is THE target: taken, and with nothing further in reach
+    the heading is *done* (6E D 24–25.09 at 1.1404 x3: "the down target is
+    taken, no targets below") — no heading, a reversal candidate the map's
+    LB and story confirm;
+  - acceptance beyond a level with the trend is nothing — "just another
+    inducement of sellers (down) or buyers (up)": kept as the path (6E D
+    1.16125 → 1.15645 → 1.1495), never printed as a decision; through a
+    build-up it takes the target;
+  - acceptance against the heading is inducement of the other crowd while the
+    trap's LB stands; beyond the LB extreme — the *kill*, the trade beyond the
+    extreme of §2.3 — the heading's basis is gone: no heading until the
+    induced crowd is trapped;
+  - with no heading only a trap sets one: a failed breakout, or a held sweep
+    of a build-up; a held sweep of a single-touch level is inducement.
+  A consumed level is gone: a later close back through a level that was run
+  is no event. (The v0.3 "lost" state — two closes back through the heading's
+  level — was removed the evening of 2026-09-26: both of its anchors were
+  consumed levels, after a "lost" the next decision was opposite only 55–60%
+  and came 2–4 bars later anyway, and its MNQ justification was wrong: MNQ W ↓
+  from the 05.06 trap at 30 373.75 held through the August rally to 30 637
+  because the June highs 31 272.75 / 31 397.75 stayed intact.)
+- **Targets and reach.** The level roles come from the liquidity map of the
+  same closed bars (D inherits the W levels, as in the runs): a build-up
+  (`min_touches`) is a target, a single-touch level the path, a sweep extreme
+  no level at all (§2.3 — left out of the "decision levels" line, which also
+  shows only levels in reach: a fractal days away is a target of the map,
+  not "now"). The
+  working target is the nearest build-up in reach beyond the last close, else
+  the nearest level in reach; "in reach" = `direction.reach_atr` weekly ATR
+  (2; other timeframes scale their own ATR by √(bars per week)) — 6E W 1.11 at
+  ≈2.5 weekly ATR was "no targets below" for the trader, 1.1404 at 0.9 the
+  week's target [CALIBRATION]. The brief dates a heading from the trap that
+  turned it, prints its kill and target, and names the latest decision by its
+  meaning (confirm / pause / induce), never a with-trend acceptance.
 - **W + D.** W is the week's heading, D the day's. Both the same → *with*; a
   D decision against W that came after W's → *correction*; W turned after
   the D heading → *mixed*; one of them without a heading → *weekly only* /
   *daily only*. A W decision is dated at the Friday close.
 - **The last D bar** against the previous one (close beyond / run and close
   back / inside / outside), read against the heading: a *correction day*
-  (closed beyond the previous extreme against the heading) names tomorrow's
-  battleground — its extreme is run the next day ≈63% of the time, the close
-  then deciding trap vs continued correction; a *failed push* is a pause; a
+  (closed beyond the previous extreme against the heading) names the next
+  day's PDL / PDH sweep-trigger level — its extreme is run the next day ≈63%
+  of the time, the close then deciding trap vs continued correction; a
+  *failed push* is a pause; a
   one-day sweep against the heading is not the trap yet (V8, "the first
   reaction at the origin is not the trap"). Never printed as a forecast.
 - **Evidence** (docs/MARCO-DIRECTION.md §8, W+D of 6E/MNQ/MES/MGC against
@@ -681,17 +743,28 @@ failed upside breaks — the case this layer exists for.
 - **In the briefs.** Weekly: "Direction now" lines per symbol, with a line
   when the heading is against the story's side. Daily: a **Напрямок** block
   after Bias, a W/D column in the summary, and a `напрямок:` label on every
-  journal setup — *за напрямком* / *ПРОТИ напрямку* / *напрямку немає*. v1
-  labels only; nothing is blocked. `marco scan` adds `direction` to D/W
-  reads. Closed bars only: D/W bars end at the session close
-  (`splitFormingHtf`), not at time + tf.
-- **The battleground setup.** When yesterday was a correction day and the
-  heading is the bias side, its extreme becomes a setup of its own in the
-  daily brief (`kind: "battleground"`, sweep-trigger grammar: run + 1h/15m
-  close back → tap of the LB it leaves; a daily close beyond it = the
-  correction goes on, the setup is off); a level already carried by a setup
-  gets a `поле бою:` note instead of a twin. Against the bias side there is
-  no such setup — the block names the level only.
+  journal setup stating both layers as a fact and the setup's relation to
+  each — `W ↓ · D ↓ — за W, за D`, `W ↓ · D ↑ — за W, проти D`, `W ↓ · D ↓✓ —
+  за W, D ціль знята` — no verdict word (the trader, 2026-09-26: W and D
+  disagreeing is the fractal market, a D correction inside the W move, not a
+  conflict). v1 labels only; nothing is blocked. The bias headline keeps the
+  divergence rule of §3.1 and its `regime` value, but is downgraded in print
+  when both layers are against it — `LONG (aligned) — against the direction
+  (W ↓ · D ↓)`, daily `· проти напрямку (W ↓ · D ↓)`; one layer against =
+  `direction mixed` (the trader's choice, 2026-09-26; the alternatives — no
+  downgrade, or dropping the rule — return at the sprint-3 close). `marco
+  scan` adds `direction` to D/W reads. Closed bars only: D/W bars end at the
+  session close (`splitFormingHtf`), not at time + tf.
+- **The PDL / PDH sweep setup.** When yesterday was a correction day and the
+  heading is the bias side, its extreme — the previous day's low or high,
+  Marco's HTF candle extreme (V7) — becomes a plain sweep-trigger setup in
+  the daily brief (`kind: "pd_sweep"`: run + 1h/15m close back → tap of the
+  LB it leaves; a daily close beyond it = the correction goes on, the setup
+  is off); a level already carried by a setup gets a `PDL …:` / `PDH …:`
+  note instead of a twin. Against the bias side there is no such setup —
+  the block names the level only. (Called "battleground" / «поле бою» until
+  the evening of 2026-09-26 — the previous session's coinage, not the
+  trader's; on watch during sprint 3 like every 26.09 addition.)
 - **The H4 leg (case U2)** — the same machine on H4 swings (`pivot_len` 3,
   two closes), printed as one line: with the heading / against it ("a leg,
   not a turn") / none. Descriptive, never a label or a filter: on two years
@@ -815,9 +888,10 @@ Everything below is ours to tune — the videos show it by eye only.
 | --- | --- | --- |
 | What counts as a swing point | `pivotLen` | 3 |
 | …on the D/W/M map (`htf_pivot_len`, engine; the trader's 1 regressed the weekly layer — docs/MARCO-DIRECTION.md §10 step 3) | `pivotLen` (Pine: the chart's input) | 3 |
+| FVG edge as a marker (§2.1); taps the edge itself brings when a swing builds up to it | `fvg_levels` / `fvg_edge_touches` (Pine: "FVG edge as a level", "FVG edge taps") | on / 0 |
 | Direction now (§3.2): significant level on D/W | `direction.pivot_len` (engine) | 1 — a 3-bar fractal |
 | Direction now: closes that decide a run (the run bar + the next) | `direction.decision_bars` | 2 |
-| Direction now: closes back through the heading's level that switch it off | `direction.decision_bars` (reused) | 2 |
+| Direction now: how far a target may sit to be "in reach" (weekly ATR; other timeframes scale their ATR by √bars-per-week) | `direction.reach_atr` | 2 |
 | When a D/W bar is closed (the session length) | `direction.session_hours` | 23 (CME Globex) |
 | The H4 leg (§3.2): swing and decision closes | `direction.h4_pivot_len` / `direction.h4_decision_bars` | 3 / 2 |
 | Reference levels (§3.2): previous D/W bar high/low · nearest unfilled FVG edge | `ict.prev_bar_levels` / `ict.fvg_levels` | on / off |
@@ -878,11 +952,21 @@ tuning any default:
 - **`scripts/marco_liquidity_blocks.pine`** — the visual indicator. Saved on
   TradingView as the user's script "Liq blocks".
 - **`src/core/marco_direction.js`** — the direction-now read (§3.2):
-  `directionRead` (one TF), `directionStack` (W + D + the last D bar),
-  `composeDirection`, `barRead`, `splitFormingHtf`, the EN / UA renderers.
-  No map, no Pine counterpart yet; tests `tests/marco_direction.test.js`
+  `directionRead` (one TF; the liquidity map of the same bars gives the
+  levels their roles — a decision is a trap / confirm / pause / path /
+  target / kill), `directionStack` (W + D + the last D bar + the H4 leg,
+  `maps: { W, D, H4 }`), `composeDirection`, `barRead`, `biasVsDirection`
+  (the print-only downgrade of the bias headline), `splitFormingHtf`, the
+  EN / UA renderers. No Pine counterpart yet — trap, kill and target are
+  read in the brief, not on the chart; tests `tests/marco_direction.test.js`
   (fixtures `6e_2026-09-26.json`, `mnq_W_2026-09-26.json`). Research
-  scripts behind its numbers: `scripts/research/direction/` (local, gitignored).
+  scripts behind its numbers: `scripts/research/direction/` (local,
+  gitignored; the `review_*.mjs` set is the 26–27.09 review —
+  docs/MARCO-DIRECTION.md §13).
+- **`scripts/push_liq_blocks.mjs`** — pushes the indicator file into the
+  user's TradingView script "Liq blocks" with a check before (the editor
+  must hold a committed version of the file) and after (the editor equals
+  the working file); `--check` only compares. The standing rule is in §8.
 - **`src/core/marco.js`** — the analysis engine: the same levels/sweep/LB
   replay plus the narrative layer (`storyRead`, §3 — anchored on the last
   live qualified LB; inducement zones are flagged, never a flip; the build-up
@@ -1098,3 +1182,20 @@ primary = zone bottom, final = zone top.
   approved-but-unbuilt changes, rule candidates and the engine-gap table. The
   procedure is the `marco-case-review` skill. A rule enters this file only after
   it is built (engine + Pine together, §7).
+- The indicator on TradingView follows the repo: every change to
+  `scripts/marco_liquidity_blocks.pine` is pushed into the user's current
+  script "Liq blocks" without a separate confirmation — TradingView keeps the
+  version history, a rollback is cheap (the trader, 2026-09-27).
+  `node scripts/push_liq_blocks.mjs` does it with the checks; never
+  `pine_new` — it drafts inside whatever script is open and the save
+  overwrites that script.
+- The direction layer states the current fact — is the market going with the
+  bias now, against it, or has it reached its target — never a scenario
+  ("if D accepts above X…"): a level days away is a target of the map, not
+  "now". W and D disagreeing is the fractal market (a D correction inside
+  the W move), not a conflict (the trader, 2026-09-26).
+- Additions are observed before they are trusted: the 26–27.09 build
+  (direction roles, PDL/PDH sweep, H4 leg, bias downgrade, FVG markers) is on
+  watch through sprint 3 against two questions — does it contradict Marco's
+  core (targets and traps from the map), does it confuse. The options not
+  taken are kept for that review in docs/MARCO-DIRECTION.md §17.5.
