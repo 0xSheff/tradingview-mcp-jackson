@@ -76,6 +76,24 @@ repo. Read `docs/MARCO.md` first — the tags and section numbers below refer to
    anywhere else"). Against a live story the stricter E1 test stays: a counter-side
    LB that leaves the leg's origin intact is inducement (MNQ 29 317.25).
    `[SOURCE, V8; E1]`
+7. **After the trap the other side is off the cards; what is left from the left is a
+   future target** (agreed 2026-09-27, from V9). Marco's sequence, bullish side: a high is
+   run (buyers induced) → the low that move came from is run → "buyers are trapped … no
+   more sells … sells need to be off your cards 100%". A deeper low "from the left" that
+   stays intact is neither a requirement for the long nor a reason to keep selling — "this
+   long can occur and we can leave this low for the future": it is a *future target*.
+   Three states, not one: (1) until the origin is run, the move toward it is the read;
+   (2) once it is run — longs only, and with the left low intact as a *continuation* on
+   the way back up ("I won't look to catch the bottom"; "not my favorite" trades — waiting
+   for the left low, sizing down and sitting out are all his options); (3) if price comes
+   back down after the bounce — no short and no chase: "you stay out of this short … and
+   you wait for the low to be taken from the left-hand side. Now buys should be on the
+   cards". Mirror for "no more buys". The point is frequency, not direction: "we do not
+   need to participate in every single move. Quality over quantity … it's not wrong to be
+   involved in it, it's lower probable". A reading principle for the analyst and the
+   trader, **not a mechanical state**: a lock derived from the engine's trap events showed
+   no edge on history and would have sided with the trader's losing longs of W39 (case
+   V9). `[SOURCE, V9]`
 
 ## Approved changes
 
@@ -84,6 +102,65 @@ All four below were **built on 2026-09-11** (`src/core/marco_grid.js`, wired int
 `docs/MARCO.md` §3.1 and §6). Two things were learned in the build and are
 recorded under *Rule candidates* → pocket flag.
 
+- **Daily brief format v4 — what to expect first, the setups below, checked against the
+  journal** (trader, 2026-09-27 evening, after the V9 work: "щодо m15 я б не хотів дуже сильно
+  заглиблюватись в аналіз поточного ринку … проаналізуєш біас на тиждень і на день і даси
+  бриф у форматі «чого сьогодні чекати», але виконання в моменті лишаємо для мене"; on the
+  worked example: "формат підходить, але сетапи також потрібні — можна давати рекомендовані
+  сетапи нижче основного брифу, але треба звірятись з уже існуючими, щоб не дублюватись";
+  **built the same evening** — `expectBlock`, `notRecommended`, `matchPlanSetup`,
+  `normalizePlan`, `renderDailyMarkdown` in `src/core/marco_grid.js`, `--plan` and `--format` on
+  `marco daily`; tests in `tests/marco_grid.test.js`). Supersedes the v3 *layout* as the default;
+  the v3 grammar of a setup and every rule of v3.1 stay.
+  1. **The main brief carries no execution.** Per instrument four lines: *Тиждень* (the story's
+     modes on W and D, then both direction layers as a fact and how they sit against the
+     bias), *Сьогодні* (the last daily bar against the one before it, the state word and the
+     timeframe that gave it, the H4 leg), *Чекаємо* (events, at W / D / 4h levels only: the
+     correction day's PDH / PDL or the daily kill, the bias edge — run, close back or the trade
+     through the zone — the counter edge, a pending weekly decision, the invalidation),
+     *Рівні* (one line, seven at most, high to low, levels within the 4h `eq_tolerance` merged).
+     No entry, stop, dollar figure, RR or size above the setups section; no 15m / 5m structure
+     anywhere in it.
+  2. **A zone is quoted by its extreme**, not by the buffered stop: "4h-трейд під 4273.1", as
+     §2.3 kills it.
+  3. **The setups come after all instruments**, in the journal's grammar (v3), and are checked
+     against the plan whoever runs the brief hands over (`--plan <file>`: the `plan_get_active`
+     object; only its structured fields are read — instrument, direction, setup type, key
+     levels, targets — the journal's text never enters the brief). A setup is *covered* when
+     the plan has the same instrument and side and one of the engine's key levels sits inside
+     the span of the plan's key levels, the 4h `eq_tolerance` either way `[CALIBRATION]`. A
+     covered setup is one line ("у плані: … — engine бачить те саме"); a plan setup the engine
+     no longer names says so.
+  4. **Outside the plan, "recommended" has a definition** — the strategy's own numbers: reachable
+     today, inside the cap, min RR (the planned one, or the floor a cap-sized stop gives when
+     the stop is only known after the run), and no counter-trend setup while the bias-side trap
+     is in force (Principle 7). What fails is still named, in one line, with the reason — the
+     trader may take it knowingly. First live case, W40 Monday: the three with-bias setups were
+     all in the plan; the three counter-trend candidates failed (MNQ: RR 1 at a cap-sized stop;
+     MGC and 6E: against the trap in force) — nothing new to add.
+  5. `marco daily --format v3` prints the former layout; the JSON carries `results[].expect` and
+     `in_plan` on every setup.
+  Not built: the journal is not read by the CLI (no way in from there) — the plan file is
+  written by the assistant from `plan_get_active` before the run.
+- **A zone traded through — no direction, the PENDING family** (analyst's proposal after the
+  V9 measurement, the trader 2026-09-27: "ок, згоден, давай зробимо"; **built the same day**,
+  engine only; rule in `docs/MARCO.md` §3, the table of the measurement in *Rule candidates*).
+  `storyRead`: the branch that read "the trap failed; treat as continuation" is now mode
+  `zone_run`, direction 0 — "the … LB a–b was traded through N bars ago — the run deepened, no
+  direction from it: a close back above L makes the new LB (extreme E, k of `confirm_bars`
+  bars left), a miss is the breakdown", or "wait for the next run and its close back" when
+  the sweep the kill opened is already resolved; new fields `lean` and `killed`. Kept on
+  purpose: the breakdown read and its direction; `resolveBias` on `lean`, so `pullback` /
+  `aligned` come out as before — checked on 4704 cuts of 240 / 60 (1088 of them with a zone
+  run on either timeframe): no difference in bias, regime, targets, invalidation or note.
+  What changes for the trader: the 1h line of the daily brief ("зону пройдено, напрямку
+  немає · LB …: закриття назад над L → новий LB (лишилось k з 3 барів), без нього →
+  breakdown" instead of "NOISE · continuation вниз проти біасу"), the mode word in the Bias
+  and Now lines, and a bias-less `marco scan`, which prints no triggers out of this state. On
+  the V9 bars: gold 1h 14 Sep 19:00 and NQ 2h 11 and 16 Sep read `zone_run`, gold 1h 15 Sep
+  (the breakdown of 4282.4) still `down_continuation`. Pine untouched — it has no story
+  modes, its Auto bias follows the last clean LB created. Tests 94 / 94 (`npm run
+  test:marco`): the old "an invalidated LB reads as a failed trap" rewritten, four added.
 - **HTF direction read — targets from the map, heading from acceptance** (trader, 2026-09-26,
   after U4; **not built**). The trader's decisions, in his words where they are rules:
   1. **Significant levels for the direction read live on HTF only — D, W, M**: "any 3-bar
@@ -449,6 +526,88 @@ recorded under *Rule candidates* → pocket flag.
   those without (`fvg` on blocks, build-ups and `*_lb_created` events) — once cases accumulate.
 
 ## Rule candidates
+
+- **Attempts per idea — what V9 points at in the journal** `[CALIBRATION, analyst, 2026-09-27 —
+  case V9; SOURCE support V9 "quality over quantity", V7 "one or two small losses before the
+  real trade is normal"; the trader's decision, not built]`. The 42 trades of W36–W39 split by
+  what is known *before* the entry: the first attempt at an idea (instrument + side) — n 21,
+  38% winners, +$4276; a re-entry within 24 h of a losing exit — n 21, 24%, −$962 (attempt 2:
+  9 / −$184, attempt 3: 4 / −$469, attempts 4–5: 4 / −$543, attempts 6–7: 4 / +$233 — two ideas
+  ran to a seventh attempt, MNQ long 8–10 Sep six losses −$792 then +$536, MGC long 22–24 Sep
+  six losses −$1131 then +$122); a re-entry within 30 minutes of the stop — n 4, no
+  winner, −$441; days with 5+ trades (3 days) — n 20, 15%, −$2064, against days with 1–2 trades
+  (6 days) — n 11, 55%, +$3334. By week: W36 7 trades +$3583, W37 18 −$615, W38 3 +$1696, W39
+  14 −$1350. Proposal for the next strategy revision: at most two attempts per idea per day
+  (the entry and one re-entry), no re-entry within 30 minutes of a stop, a third attempt only
+  after a new event at the level on the grid timeframe (a new run and reclaim); the brief
+  prints the attempt number next to a setup that was already tried. Small sample, one month —
+  a hypothesis to watch in sprint 3, not a finding.
+- **The pocket verdict against V9: "no entry until X is run" → "lower grade, X is a future
+  target"** `[CALIBRATION, analyst, 2026-09-27 — case V9; render only; not built]`. `flagPocket`
+  and the *invalid* grade print "no entry until the floor is run"; in two of Marco's four
+  examples the floor was never run and the move went without it (gold 16 Sep: tap 4253.6,
+  floor 4223.505 x1 11.7 below the extreme, +165 to 4399.7; EUR 4h 9 Sep: bear LB
+  1.16494–1.16544 *invalid* under 1.166 x2, −295 pips to 1.13592). Measured on the four
+  futures (1710 zone taps, 240 / 60 / 30): an LB with a build-up left beyond it reached 2R in
+  27% against 31% with nothing left, 3R in 17% against 23% (n 168 / 1148); 1R 39% against 41%.
+  A modest penalty — "not my favorite", not "no entry". Proposal: keep the grades and the
+  ranking, change the wording of the verdict (continuation entry or reduced size; the floor
+  named as the future target), leave the decision to the trader.
+- **"The trap failed → continuation" flips the side on a deeper run** `[CALIBRATION, analyst,
+  2026-09-27 — case V9; measured and **built the same day** on the trader's "ок, згоден, давай
+  зробимо" — see *Approved changes* → "A zone traded through"; the measurement stays here]`.
+  `storyRead` turned a killed trap LB
+  into `down_continuation`, direction −1. In V9's examples the deeper run was the same story:
+  gold 1h 14 Sep (LB 4278.3–4282.6 killed after three bars, low 4253.6, then 4366), NQ 2h
+  16 Sep (LB 29 112.25–29 127.75 killed by the FOMC spike to 29 053, 29 916 two days later). The
+  H4 kept `buy_story` on gold through both because its LB was the deeper one.
+  **Measured** (`tmp/v9_trapfailed.mjs`, `tmp/v9_chain.mjs`; MGC / MES / MNQ / 6E, 240 from
+  Dec 2023, 60 from Nov 2025, 30 from Mar 2026, to 25 Sep 2026; the story read on every closed
+  bar over a sliding 600-bar window, an episode = the bar the read changes on; outcome = first
+  passage from that bar's close, X ATR along the read before X ATR against it; baseline = the
+  same test from every bar, 50%):
+
+  | The read | n | 1 ATR | 2 ATR | 3 ATR | 16 bars, along / against |
+  | --- | --- | --- | --- | --- | --- |
+  | the trap failed → continuation | 1385 | 49% | 50% | 49% | 2.33 / 2.23 ATR |
+  | … the killed LB qualified | 838 | 51% | 53% | 51% | 2.41 / 2.14 |
+  | … unqualified | 547 | 47% | 46% | 47% | 2.21 / 2.37 |
+  | … qualified and `trap` (V9's case) | 244 | 48% | 48% | 49% | 2.14 / 2.15 |
+  | breakdown (no reclaim) → continuation | 1182 | 50% | 48% | 49% | 2.17 / 2.25 |
+  | buy / sell story, fresh | 3155 | 50% | 51% | 51% | 2.30 / 2.27 |
+
+  The read carries no direction — neither the engine's "continuation" nor V9's "the trap
+  stands": a coin either way, on every timeframe, instrument and side, whatever the killed
+  LB's grade, life or the reaction it had given. (On the first, shorter sample the qualified
+  `trap` row read 38% / 36% / 44% on n 57 — it did not survive the deeper history.) What the
+  read *is*: a transient. It turned into a new trap on the same side as the killed LB — the
+  run deepened, then the reclaim — in 52% (median 2 bars later), into a breakdown in 37%
+  (median 3 bars), into a trap on the other side in 10% (median 13 bars). Chains of traps do
+  not decay: zone taps reached 1R / 2R / 3R in 41 / 30 / 22% for the first trap (n 2004),
+  39 / 28 / 22% for the second link, 40 / 30 / 24% the third, 39 / 30 / 20% the fourth and on;
+  the one row that stands out is the *qualified* LB born after a killed one — a deepened run
+  of a qualified level or the run of an old LB extreme — 46 / 35 / 30% (n 323) against
+  43 / 30 / 22% for a qualified first trap (n 836); one subgroup out of dozens looked at, on
+  correlated timeframes — to watch, not to build on.
+  **Proposal, supported by the numbers:** the read becomes what it measures as — "the zone
+  was traded through: the run deepened; a close back makes the new LB, no close back within
+  `confirm_bars` is the breakdown", **direction 0**, the PENDING family (§3.1) — and the word
+  "failed" goes. Engine only (`storyRead`, the renders); the Pine draws zones, not story
+  modes. To check in the build: `resolveBias` reads a daily continuation against a weekly trap
+  as `pullback` — a neutral daily must not turn that into `weekly_only` by accident.
+  The same table says more than was asked: on a first-passage test none of the story reads
+  tilts the next 1–3 ATR. The story says where the entry zone and the targets are; it is not
+  a directional signal, and should not be printed as one.
+- **The V9 lock as a state of the brief — measured, not supported** `[analyst, 2026-09-27 —
+  case V9; rejected as a mechanical rule]`. Two prototypes, sticky, latest wins: *literal* (an
+  LB whose run took an intact origin, `trap`) and *anchor* (qualified, not invalid, not
+  inducement). On seven series × 240 / 60 / 30 (2921 zone taps, target 2R, break-even 33%):
+  taps against the lock 30% / 28%, with it 27% / 27%, the trap's own LB 29% / 32%, every tap
+  28%. On the trader's 42 trades the trades against the lock were net positive under every
+  variant (+$646 … +$2223) and the losing longs of W39 sat *with* it: in a falling leg the
+  engine prints one bull trap after another (6E 1h "no sells" on 10, 11, 14, 22, 23, 24 Sep
+  while price went 1.1651 → 1.1397). What separates Marco's traps from those is not in the
+  map's labels; the direction read (§3.2) is the layer that speaks to it. Kept as Principle 7.
 
 - **LTF build-up after the run = the entry; the close back = the grid state only**
   `[CALIBRATION, user-raised, 2026-09-24 — case U3; SOURCE support V2 §4.2, V6 §4.4, V8 §2.2;
@@ -1310,3 +1469,121 @@ invalidation on the draw, a W map blind to the range top, a D that could not see
 failed breakout because the close back came late, and a draw that counted 2021 fuel. U2's
 MTF leg layer is the intraday face of the same week; this case is the HTF face. Candidates
 logged above; nothing built.
+
+### V9 — Marco, YouTube `LWEuNvtjQNA`, reviewed 2026-09-27 — "Trade Liquidity Properly (MUST WATCH)" (17:32)
+
+Marco's own video, so `[SOURCE, V9]`; the row is in `docs/MARCO.md`'s source table. Reviewed
+from the auto-generated transcript (502 segments) and 195 frames taken by the analyst from
+the video itself, one every 5 s, 1080p (`tmp/Marco when not to trade/`, filename = timecode;
+contact sheets in `_sheets/`) — not the user's screenshots this time. The charts are
+TradingView replay, UTC−4, and all four examples are September 2026 on instruments of the
+watchlist. The reading is Principle 7; one calibration was built from the measurements the
+same day (the `zone_run` read — *Approved changes*).
+
+**What he says.** The subject is "when to actually stay patient, when to not trade when the
+conditions are lower probability" (00:16). Diagram 1 (02:05–05:15): a high is run — "buyers
+are induced" — and the low that move came from is "engineered liquidity"; "as soon as we take
+out this low and this low, sells need to be off your cards 100%" (04:10); the leg that then
+runs on to the deep lows is "not really a short you need to be involved in … we do not need to
+participate in every single move. Quality over quantity" (04:21–04:34); "when you have early
+buyers induced and then trapped, the only thing that should be on your cards is longs … it's
+not wrong to be involved in it, it's lower probable" (04:59–05:16). Diagram 2 (05:18–07:22),
+the low from the left left behind: "as soon as we stab below it, we have still trapped traders
+and we still ran a level of liquidity — this long can occur and we can leave this low for the
+future. Are these my favorite trades? Not my favorite … but it's still possible to take"
+(06:51–07:10). Mirror (08:11): "as soon as we trade above this one, no more buying". How he
+enters when the left level stays: "I will look for continuations on the way back up … I won't
+look to catch the bottom" (09:45–10:05); waiting for the left level, sizing down and sitting
+out are named as equally fine (09:39, 14:44–14:57). What the left level becomes: "this will be
+a future target" (10:43, 14:36). What waiting for it costs: "even if you want to see that low
+from the left get taken, you will stack up so many losses that way" (10:25); "you'll catch
+yourself always marking the next low from the left-hand side and trying to continue looking
+for sells" (15:57).
+
+**The four examples, read off the frames.**
+
+| Video | Chart | Inducement | The trap (his line) | Left from the left | What followed on his chart |
+| --- | --- | --- | --- | --- | --- |
+| 08:55–10:50 | XAUUSD 30m OANDA, 13–17 Sep | highs ≈4317.5 and ≈4341 run 15–16 Sep — "induced buyers many of times" | low **4253.635** (Mon 14 Sep) stabbed Wed 16 Sep on news, wick ≈4235 | **4223.505** (6 Aug), "price has been respecting it multiple times" — *Future Target* | ≈4380 on 17 Sep |
+| 11:00–13:10 | NQ1! 2h CME, B-ADJ, 24 Aug – 18 Sep | high ≈30 040 run Fri 28 Aug (wick ≈30 090) | low **29 242.75** (Mon 24 Aug) stabbed Wed 2 Sep | **29 127.75** (3 Aug), a second line 29 189.50 | rally into the 8 Sep high (pink zone 29 960–30 100), the sell-off he sits out ("most likely no … an advanced technique", 12:00), the left low taken Mon 14 Sep — "now buys should be on the cards" — ≈29 950 on 18 Sep |
+| 13:15–15:10 | EURUSD 30m OANDA, 1–10 Sep | lows ≈1.16275 / ≈1.16245 run Wed 9 Sep — *Inducing Sellers* | high **≈1.16495** run the same morning, wick ≈1.1654 | **1.16596**, the top of the area 1.16465–1.16596 "tapped multiple times from the left" — *Future target* | ≈1.1592 on 10 Sep; "you want to look for that buy again. No, don't do that" (13:58) |
+| 15:15–16:50 | XAUUSD 1h OANDA, 1–17 Sep | the high from the left ≈4487 run Thu 3 Sep | low **4282.625** (Wed 2 Sep) run Mon 14 Sep — *Lower prob* for sells from there | 4223.505 | the 16 Sep high ≈4367 and spike low ≈4235 circled — *No more selling* |
+
+**Engine on the same bars** (`OANDA:XAUUSD`, `CME_MINI:NQ1!`, `OANDA:EURUSD` pulled from the
+chart 2026-09-27; engine defaults; 30 / 60 / 120 seeded from 240; closed bars only; ET;
+`tmp/v9_replay.mjs`, `tmp/v9_h4.mjs`). Our NQ1! prints his levels to the tick (29 242.75,
+29 127.75), so no basis shift.
+
+| Example | On the timeframe he shows | On the 240 |
+| --- | --- | --- |
+| Gold 30m, 16 Sep | trap pointer at **4253.635** since 14 Sep 11:30; 14:30 bar L 4257.2 = `low_poke` (floor 4253.6); 15:00 bar L 4235.2 runs 4253.6 x2; 15:30 close → bull LB 4235.2–4253.6 Q clean `trap` → `buy_story` — **agrees**. The 1h tap is flagged "pocket — no entry until 4223.505 is run" | `buy_story`, the same LB — **agrees** |
+| Gold 1h, 14 Sep | `buyers_induced` 2 Sep with origin **4282.6**; 14 Sep 05:00 run → bull LB 4278.3–4282.6 Q clean `trap`; killed 08:00 (low 4253.6) → `down_continuation`, "the trap failed", through 15 Sep; 16 Sep `sell_story` at bear LBs 4355.4–4360.5 and 4355.4–4361.6 (Q clean, both killed by 13:00), targets 4253.6 / 4223.5 — **the sells he calls lower probable** | `buy_story` from the 14 Sep 09:00 bar (LB 4253.6–4282.6 Q clean), held to the rally — **agrees** |
+| NQ 2h, 2 Sep → 16 Sep | `buyers_induced` 26 Aug with origin **29 242.75**; 28 Aug bear LB 30 053.25–30 107.5 (x3 run) → `sell_story` toward the low — agrees with "back down to this low"; 2 Sep 06:00 bull LB 29 223.25–29 242.75 Q clean → `buy_story` — **agrees**; 8 Sep bear LB 30 000.5–30 060.75 Q clean `trap` → `sell_story` — **the short he sits out** (its tap 30 000.5 never came, high 29 929.75); 11 Sep `down_continuation`; 14 Sep 04:00 bull LB 29 112.25–29 127.75 Q clean → `buy_story` — **agrees**; 16 Sep killed by the FOMC spike (29 053) → `down_continuation` while price went to 29 916 | `down_continuation` at every one of those moments: each bull LB unqualified and inducement under the alive bear anchors (30 082–30 107.5, 30 616–30 639), the 2 Sep LB included although it carries `trap` — **disagrees** |
+| EUR 30m, 9 Sep | `sellers_induced` 05:30 (level 1.16276, origin **1.16494**); 08:00 `origin_run` → bear LB 1.16494–1.16544, `trap`, unqualified (x1, nine bars old) and inducement under the bull anchor 1.15848–1.15936 → no flip; 11:00 bull LB 1.16202–1.16208 Q clean `trap` → `buy_story`, targets 1.166 / 1.1675 — **the buy he forbids**; killed 10 Sep 07:30 | `up_continuation`; the bear LB *invalid* — "the high 1.166 x2 from the left is intact: a pullback origin, not a flip" — **disagrees** |
+
+The inducement and its origin were found on every example (four of four, to the tick);
+the differences are in what the engine does next — the verdict at a level left beyond the
+trap, the read after the trap's zone is killed, and the flip on the next counter-side LB.
+
+**Outcome (to the close of Fri 25 Sep).** Gold: 4223.505 never run, low 4235.165 (the trap),
+high 4399.67 on 18 Sep, close 4284.97. EURUSD: 1.16596 never run, high 1.16544 (the trap), low
+1.13592 on 24 Sep, close 1.13911. NQ: low 29 053 on 16 Sep, high 31 094.75 on 23 Sep.
+
+**Measured, because four examples chosen by the author prove nothing**
+(`tmp/v9_measure.mjs`, `tmp/v9_grades.mjs`; zone-tap entries: entry at the swept level, stop
+beyond the extreme + 0.1 ATR, thin zones skipped, the tap bar cannot pay; MGC / MES / MNQ / 6E
+on 240 ≈ 10 months, 60 ≈ 4.5 months, 30 ≈ 2 months; no costs, entries overlap — read the
+differences, not the levels):
+
+| Zone taps, four futures | n | reached 1R | 2R | 3R |
+| --- | --- | --- | --- | --- |
+| every LB | 1710 | 41% | 30% | 23% |
+| qualified | 405 | 46% | 32% | 25% |
+| unqualified | 1305 | 39% | 29% | 22% |
+| `trap` (the run took an origin) | 252 | 44% | 31% | 23% |
+| grade *invalid* | 523 | 40% | 29% | 22% |
+| a build-up left beyond the extreme | 168 | 39% | 27% | 17% |
+| nothing left beyond | 1148 | 41% | 31% | 23% |
+| break-even | | 50% | 33% | 25% |
+
+The lock itself (seven series, 2921 taps, target 2R): against the lock 30% (literal) / 28%
+(anchor), with it 27% / 27% — nothing. Qualification is the only label with a steady effect
+(+7 points at 1R); a build-up left beyond the trap costs the far targets (17% against 23% at
+3R) — his "not my favorite", in numbers; the *invalid* grade as a whole and the inducement
+flag separate nothing.
+
+**Second pass, the same evening — "the trap failed"** (the trader: "давай виміряємо"; deep
+history, 1385 episodes; the table is in *Rule candidates*). After a killed trap LB price went
+X ATR with the engine's "continuation" first in 49 / 50 / 49% (1 / 2 / 3 ATR) — a coin, and
+so is the opposite claim; 52% of those reads became a deeper trap on the same side within a
+median of two bars, 37% a breakdown within three. The gold and NQ kills of the examples above
+were ordinary members of that 52%.
+
+**The journal against it** (42 trades, 31 Aug – 24 Sep, 13 winners, net +$3314;
+`tmp/v9_frequency.mjs`). Inside his own chart window: MNQ six longs on 8–9 Sep, bought into the
+sell-off he sits out before the left low was taken, −$792, and the long of 16 Sep after it was
+taken, +$1284 (the long of 10 Sep, +$536, came before it as well); MGC short of 16 Sep 02:04
+ET, two days into "sells lower probable", −$197; 6E on 9 Sep — a short at 07:26 ET stopped by
+the trap's spike (−$117), a short at 09:03 ET after it (+$177). Beyond his window, the
+analyst's extension and marked as such: 6E five longs on 22–24 Sep, −$835, under a "no more
+buys" nothing had cancelled; MGC seven longs on 22–24 Sep, net −$1009, on the side of his
+lock but bought into a decline with 4223.5 intact below — state 3 of Principle 7. What the
+journal shows without any lock is in *Rule candidates* → "Attempts per idea".
+
+**Verdict.** Confirms: the trap as the run of the origin (Principle 6), "a run, not a touch"
+(Principle 2), counter-story LBs marked and never entered (§3, V1), the H4 as the layer that
+carries the story — on gold it held the long through a killed 1h zone. Adds the negative side
+(Principle 7) and the phrase *future target*. Contradicts, in the engine: the verdict "no
+entry until the floor is run" (pocket flag, *invalid* grade), the side flip on a killed trap,
+the H4 anchor rule on NQ (a `trap` LB read as inducement for two weeks while it was the low).
+Does **not** give a mechanical filter: measured, the lock separates nothing, and applied to
+the journal it would have endorsed the longs of W39. Candidates logged above. Built from the
+case, the same day: the side flip on a killed trap is gone (`zone_run`, direction 0 —
+`docs/MARCO.md` §3); the pocket verdict and the attempts rule wait for the trader; the Pine
+is unchanged.
+
+**Correction to the analyst's first read (2026-09-27, before the replay).** "V9 conflicts
+with E1's *invalid* grade on the gold example" was wrong as stated: the engine graded the
+16 Sep LB *clean* — 4223.5 was born in August, outside the structure window
+(`story_lookback`) — and read `buy_story`. The conflict is real but sits elsewhere: in the
+pocket flag on the 1h tap of the same LB, and in the *invalid* grade of the EUR 4h bear LB.

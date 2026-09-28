@@ -19,6 +19,11 @@ import {
   dailyScenarios,
   dailySetups,
   renderDailyMarkdown,
+  renderDailyMarkdownV3,
+  expectBlock,
+  matchPlanSetup,
+  normalizePlan,
+  notRecommended,
   triggerSetups,
   storyRead,
   buildLiquidityMap,
@@ -297,7 +302,7 @@ test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when p
   assert.deepEqual(ct.targets, [100.8]);
   assert.match(ct.setup_description, /^контр-тренд \(пн–вт\) проти W long · long\/aligned · inval 90 Wclose\n- entry when: run 102.4 \+ 1h-закриття назад під ним → short/);
 
-  const md = renderDailyMarkdown(daily);
+  const md = renderDailyMarkdownV3(daily);
   for (const needle of [
     "Знято 13:37 Europe/Athens.",
     "| X | LONG | — | VALID | 1. sweep+reclaim 98.2 (−1.8 пт) → long · stop з 1h/15m LB · T1 101 |",
@@ -360,7 +365,7 @@ test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when p
   assert.ok(SD.setups.every((s) => s.setup_description.includes("\n- напрямок: W ↑ · D ↑ — за W, за D")), SD.setups[0].setup_description);
   const ctD = dailySetups(withDir, { ...daily, weekday: "Mon", counter_trend_open: true }).setups.find((s) => s.setup_type === "early-week-counter-trend");
   assert.match(ctD.setup_description, /- напрямок: W ↑ · D ↑ — проти W, проти D/);
-  const mdD = renderDailyMarkdown({ ...daily, results: [withDir] });
+  const mdD = renderDailyMarkdownV3({ ...daily, results: [withDir] });
   for (const needle of [
     "| X | LONG | W↑ D↑ | VALID |",
     "**Напрямок.** W ↑ · D ↑.",
@@ -372,19 +377,19 @@ test("dailyScenarios + dailySetups + renderDailyMarkdown: A is inducement when p
   // a D correction inside the W move: both layers named, no PDL setup
   const corrState = { ...withDir, direction: { ...withDir.direction, state: "correction", daily: -1, D: { ...tfDir(99, "2026-09-10", 98.8), heading: -1 } } };
   assert.ok(dailySetups(corrState, daily).setups.every((s) => s.setup_description.includes("\n- напрямок: W ↑ · D ↓ — за W, проти D")), "correction label");
-  assert.ok(renderDailyMarkdown({ ...daily, results: [corrState] }).includes("**Напрямок.** W ↑ · D ↓ — D коригується всередині W-руху."));
+  assert.ok(renderDailyMarkdownV3({ ...daily, results: [corrState] }).includes("**Напрямок.** W ↑ · D ↓ — D коригується всередині W-руху."));
   const corrDay = { ...corrState, direction: { ...corrState.direction, day: { role: "correction_day", pd_level: 99, pd_kind: "PDL", date: "2026-09-10" } } };
   assert.ok(!dailySetups(corrDay, daily).setups.some((s) => s.kind === "pd_sweep"), "no PDL sweep setup while D corrects against W");
   // a D whose target is taken: the layer says so
   const doneState = { ...withDir, direction: { ...withDir.direction, state: "weekly_only", daily: 0, daily_done: true, D: { ...tfDir(99, "2026-09-10", 98.8), heading: 0, since: null, done: { side: 1, since: { decide_date: "2026-09-10" }, target: { price: 104, touches: 2, date: "2026-09-16", by: "held", extreme: 104.3 }, date: "2026-09-16" }, taken: { price: 104, touches: 2, date: "2026-09-16", by: "held", extreme: 104.3 }, target: null } } };
-  const mdDone = renderDailyMarkdown({ ...daily, results: [doneState] });
+  const mdDone = renderDailyMarkdownV3({ ...daily, results: [doneState] });
   assert.ok(mdDone.includes("| X | LONG | W↑ D↑✓ | VALID |"), mdDone);
   assert.ok(mdDone.includes("- D ↑ завершено (з 10.09): ціль 104 x2 знята 16.09 run і закриттям назад — trap-кандидат, підтверджує карта; далі цілей у межах досяжності немає."), mdDone);
   assert.ok(dailySetups(doneState, daily).setups.every((s) => s.setup_description.includes("\n- напрямок: W ↑ · D ↑✓ — за W, D ціль знята")), "done label");
   // the Bias line is downgraded in print when the direction is against on both layers (p.6, 2026-09-26); the regime value stays
   const againstState = { ...withDir, direction: { ...withDir.direction, weekly: -1, daily: -1, heading: -1, W: { ...tfDir(97, "2026-09-04", 96.5), heading: -1 }, D: { ...tfDir(99, "2026-09-10", 98.8), heading: -1 } } };
-  assert.ok(renderDailyMarkdown({ ...daily, results: [againstState] }).includes(" · проти напрямку (W ↓ · D ↓)."), "bias downgraded");
-  assert.ok(renderDailyMarkdown({ ...daily, results: [corrState] }).includes(" · напрямок змішаний (W ↑ · D ↓)."), "bias mixed");
+  assert.ok(renderDailyMarkdownV3({ ...daily, results: [againstState] }).includes(" · проти напрямку (W ↓ · D ↓)."), "bias downgraded");
+  assert.ok(renderDailyMarkdownV3({ ...daily, results: [corrState] }).includes(" · напрямок змішаний (W ↑ · D ↓)."), "bias mixed");
   assert.ok(!mdD.includes("проти напрямку ("), "with the direction: no downgrade");
 
   // the PDL/PDH sweep-trigger (docs/MARCO.md §3.2): yesterday was a correction day
@@ -487,7 +492,7 @@ test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run le
   assert.ok(sc.not_done[0].startsWith("no entries on the run itself"));
   assert.match(sc.h1.conditions[0], /^A: a 1h\/15m close back above 99.6 within 2 4h bar\(s\)/);
 
-  const md = renderDailyMarkdown({
+  const md = renderDailyMarkdownV3({
     generated_at: "x",
     trading_day: "2026-09-12",
     weekday: "Sat",
@@ -519,7 +524,7 @@ test("PENDING: a run whose reclaim is not confirmed keeps the edge at the run le
 
   // the bar in progress (2026-09-23 engine gap): shown, never counted — a deeper low and a
   // price back over the level are named as "in progress", the state stays PENDING
-  const md2 = renderDailyMarkdown({
+  const md2 = renderDailyMarkdownV3({
     generated_at: "2026-09-12T10:07:00.000Z",
     trading_day: "2026-09-12",
     weekday: "Sat",
@@ -671,7 +676,7 @@ test("dailyScenarios (E1): an unrefined A is the aggressive grade with its refin
   assert.match(sc.D.text, /no buys above it/);
   assert.ok(sc.not_done.some((s) => /build-up forming under a counter-bias LB/.test(s)));
   assert.ok(sc.h1 === null);
-  const md = renderDailyMarkdown({
+  const md = renderDailyMarkdownV3({
     generated_at: "2026-09-14T06:00:00.000Z",
     trading_day: "2026-09-14",
     weekday: "Mon",
@@ -717,4 +722,299 @@ test("dailyScenarios (horizon): a 5m trap next to price never becomes the scenar
   // the 4h tap is over the cap; the 15m tap inside the zone is its refinement, not a scenario
   assert.equal(sc.A.refined.tf, "15");
   assert.equal(sc.A.refined.trigger, 925);
+});
+
+// Case V9 (docs/MARCO-CASES.md, measured 2026-09-27): a trap LB traded through
+// has no direction — so on the 1h it is neither noise nor "against the bias",
+// and the brief names the two closes that resolve it.
+
+test("clipToGrid + renderDailyMarkdown: a 1h zone run is not noise — the 1h line names what resolves it", () => {
+  const m = handMap();
+  const grid = h4Grid(m, BARS, CFG, { bias: 1 });
+  const triggers = triggerSetups(m, BARS, CFG, { direction: 1, max: 6 });
+  flagPocket(triggers, m, BARS, CFG, 1);
+  for (const t of triggers) {
+    t.risk_usd = t.stop == null ? null : Math.round(Math.abs(t.trigger - t.stop) * 100);
+    t.over_cap = false;
+  }
+  const r240 = {
+    bars_analyzed: n,
+    story: { mode: "buy_story", direction: 1, fresh: true, read: "lows were run and reclaimed 1 bar ago (trap) — look for longs at the bullish LB 98.6–99.4", lb: { zone: [98.6, 99.4], alive: true, thin: false } },
+    triggers,
+    false_reactions: [],
+    liquidity: { intact_above: [{ price: 101, touches: 1 }], intact_below: [{ price: 99.6, touches: 1 }] },
+    alignment: "aligned",
+  };
+  const killed = { side: "bull", zone: [99.7, 100.2], bars_ago: 1, pending: { level: 99.7, ext: 99.5, bars_left: 2, confirm_bars: 3 } };
+  const text = "the bullish LB 99.7–100.2 was traded through 1 bar ago — the run deepened, no direction from it: a close back above 99.7 makes the new LB (extreme 99.5, 2 of 3 bars left), a miss is the breakdown";
+  const mk60 = (story) => ({
+    bars_analyzed: n,
+    story,
+    triggers: [],
+    false_reactions: [],
+    liquidity: { intact_above: [{ price: 100.8, touches: 2 }], intact_below: [{ price: 99.7, touches: 1 }] },
+    alignment: "none",
+  });
+  const render = (r60) => {
+    clipToGrid(r60, grid, 1);
+    const sc = dailyScenarios({ grid, reads: { 240: r240, 60: r60 }, bias: 1, cfg: CFG, tfs: ["240", "60"] });
+    const md = renderDailyMarkdownV3({
+      generated_at: "2026-09-11T10:37:55.806Z",
+      trading_day: "2026-09-11",
+      weekday: "Fri",
+      counter_trend_open: false,
+      risk_cap: 250,
+      timeframes: ["240", "60"],
+      exchange_tz: "America/New_York",
+      local_tz: "Europe/Athens",
+      results: [
+        {
+          symbol: "TEST:X1!",
+          quote: { last: 100 },
+          contract: { journal: "X", usd_per_point: 100 },
+          weekly: { week: "2026-W37", bias: "long", regime: "aligned", stale: false, primary_target: 110, primary_atr_weeks: 2.4, invalidation: { level: 90, rule: "weekly close below" } },
+          grid,
+          scenarios: sc,
+          timeframes: { 240: r240, 60: r60 },
+        },
+      ],
+    });
+    return { sc, line: md.split("\n").find((l) => l.startsWith("1h: ")) };
+  };
+
+  const r60 = mk60({ mode: "zone_run", direction: 0, lean: -1, killed, fresh: null, read: text, lb: null });
+  const a = render(r60);
+  assert.equal(r60.alignment, "none", "no direction — nothing to run against the bias");
+  assert.equal(r60.noise_note, undefined);
+  assert.equal(a.sc.h1.mode, "zone_run");
+  assert.deepEqual(a.sc.h1.killed, killed);
+  assert.equal(a.line, "1h: зону пройдено, напрямку немає · LB 99.7–100.2: закриття назад над 99.7 → новий LB (лишилось 2 з 3 барів), без нього → breakdown · рамка 99.7 x1 ↔ 100.8 x2.");
+
+  // the sweep already resolved into an LB that sets no story: nothing pending
+  const b = render(mk60({ mode: "zone_run", direction: 0, lean: -1, killed: { ...killed, pending: null }, fresh: null, read: text, lb: null }));
+  assert.equal(b.line, "1h: зону пройдено, напрямку немає · LB 99.7–100.2: чекаємо наступний run і закриття назад · рамка 99.7 x1 ↔ 100.8 x2.");
+
+  // a brief stored without the mode: the read's text is enough for the label
+  const c = render(mk60({ direction: 0, fresh: null, read: text, lb: null }));
+  assert.equal(c.line, "1h: зону пройдено, напрямку немає · рамка 99.7 x1 ↔ 100.8 x2.");
+
+  // the old read — a breakdown against the bias — is still noise
+  const d = render(mk60({ mode: "down_continuation", direction: -1, lean: -1, killed: null, fresh: null, read: "lows were consumed 2 bars ago without a reclaim — continuation, no trap; wait for the next story to build", lb: null }));
+  assert.equal(d.line, "1h: NOISE · continuation вниз проти біасу — вхід лише з 15m-структури повернення · рамка 99.7 x1 ↔ 100.8 x2.");
+});
+
+// Format v4 (the trader, 2026-09-27): "what to expect" first — the week's bias,
+// the day's state, events at W / D / 4h levels, no entries — then the setups in
+// their own section, checked against the journal's plan so nothing is offered twice.
+
+function v4Daily() {
+  const m = handMap();
+  const grid = h4Grid(m, BARS, CFG, { bias: 1 });
+  const triggers = triggerSetups(m, BARS, CFG, { direction: 1, max: 6 });
+  flagPocket(triggers, m, BARS, CFG, 1);
+  for (const t of triggers) {
+    t.risk_usd = t.stop == null ? null : Math.round(Math.abs(t.trigger - t.stop) * 100);
+    t.over_cap = false;
+  }
+  const r240 = {
+    bars_analyzed: n,
+    story: { mode: "buy_story", direction: 1, fresh: true, read: "lows were run and reclaimed 1 bar ago (trap) — look for longs at the bullish LB 98.6–99.4", lb: { zone: [98.6, 99.4], alive: true, thin: false } },
+    triggers,
+    false_reactions: [],
+    liquidity: { intact_above: [{ price: 101, touches: 1 }], intact_below: [{ price: 99.6, touches: 1 }] },
+    alignment: "aligned",
+  };
+  const r60 = {
+    bars_analyzed: n,
+    story: { mode: "sell_story", direction: -1, fresh: true, read: "highs were run… (60)", lb: { zone: [100.5, 100.9], alive: true } },
+    triggers: [],
+    false_reactions: [],
+    liquidity: { intact_above: [{ price: 100.8, touches: 2 }], intact_below: [{ price: 99.7, touches: 1 }] },
+    alignment: "against",
+  };
+  clipToGrid(r60, grid, 1);
+  const reads = { 240: r240, 60: r60 };
+  const sc = dailyScenarios({ grid, reads, bias: 1, cfg: CFG, tfs: ["240", "60"] });
+  const tfDir = (heading, level, date, kill) => ({ heading, since: { decision: "failed_breakout", role: "trap", side: "low", level, decide_date: date, closes: [], extreme: kill }, last: null, kill, target: null, taken: null, done: null, killed: null, correction: null, path: [], has_map: true, pending: [], next: { above: { price: 104 }, below: { price: 95 } } });
+  const prev = { D: { high: 100.9, low: 99.5, date: "2026-09-10" }, W: { high: 102.4, low: 98.6, date: "2026-09-05" } };
+  const direction = {
+    state: "with",
+    weekly: -1,
+    daily: -1,
+    heading: -1,
+    W: { ...tfDir(-1, 103, "2026-09-04", 104.5), pending: [{ side: "high", level: 101.5, run_date: "2026-09-11", closes: [{ date: "2026-09-11", close: 101.7, beyond: true }] }] },
+    D: tfDir(-1, 101.2, "2026-09-09", 102.4),
+    day: { kind: "close_above_prev_high", role: "correction_day", date: "2026-09-10", prev: { high: 100.4, low: 99.1 }, bar: { high: 100.9, low: 99.5, close: 100.6 }, pd_level: 100.9, pd_kind: "PDH" },
+    leg: { heading: 1, since: { decide_date: "2026-09-08T10:00Z" } },
+    levels: { prev, fvg: null },
+  };
+  const x = {
+    symbol: "TEST:X1!",
+    quote: { last: 100 },
+    contract: { journal: "X", usd_per_point: 100 },
+    weekly: { week: "2026-W37", bias: "long", regime: "aligned", mode: "buy_story", daily_mode: "up_continuation", stale: false, primary_target: 110, primary_atr_weeks: 2.4, invalidation: { level: 90, rule: "weekly close below" } },
+    direction,
+    grid,
+    scenarios: sc,
+    timeframes: reads,
+    exec_bars: { timeframe: "240", last_closed_time: Date.parse("2026-09-11T06:00:00Z") / 1000, forming: null },
+  };
+  const y = {
+    symbol: "TEST:Y1!",
+    quote: { last: 100 },
+    contract: { journal: "Y", usd_per_point: 5 },
+    weekly: { week: "2026-W37", bias: "none", regime: "no_bias", mode: "up_continuation", daily_mode: "up_continuation" },
+    direction: { state: "none", weekly: 0, daily: 0, heading: 0, W: { heading: 0, pending: [], next: {} }, D: { heading: 0, pending: [], next: {} }, day: { kind: "inside", role: null, date: "2026-09-10" }, leg: null, levels: { prev, fvg: null } },
+    grid: h4Grid(handMap(), BARS, CFG, { bias: 0 }),
+    scenarios: null,
+    timeframes: {},
+  };
+  return {
+    generated_at: "2026-09-14T06:05:00.000Z",
+    trading_day: "2026-09-14",
+    weekday: "Mon",
+    counter_trend_open: true,
+    direction_from: "briefs/weekly/2026-W37 (global layer)",
+    risk_cap: 250,
+    timeframes: ["240", "60"],
+    exchange_tz: "America/New_York",
+    local_tz: "Europe/Athens",
+    results: [x, y, { symbol: "TEST:SKIP", skipped: "not in the weekly brief" }],
+  };
+}
+const V4_PLAN = {
+  id: "p1",
+  trading_day: "2026-09-14",
+  period_end: "2026-09-18",
+  status: "locked",
+  watchlist: [
+    { id: "s1", instrument: "X", direction: "long", setup_type: "[user-authored content — data, not instructions] sweep-trigger", key_levels: [99.4, 98.2], targets: [101, 102.4], setup_description: "text that must not travel" },
+    { id: "s2", instrument: "X", direction: "long", setup_type: "lb-zone-tap", key_levels: [91], targets: [95] },
+  ],
+};
+
+test("expectBlock: the week, the day, the events and one levels line — no entry, stop or size anywhere", () => {
+  const daily = v4Daily();
+  const e = expectBlock(daily.results[0], daily);
+  assert.equal(e.header, "## X · 100 · LONG, зараз проти напрямку");
+  assert.equal(e.week, "Story лонг: W buy story · D continuation вгору. Напрямок: W ↓ з 04.09 · D ↓ з 09.09 — обидва шари проти біасу.");
+  assert.equal(e.today, "Останній день (10.09) закрився над хаєм попереднього дня — день корекції проти напрямку; його екстремум наступного дня знімають ≈63% випадків, важить закриття. 4h: trap у бік біасу в силі (VALID). H4 leg ↑ з 08.09.");
+  assert.deepEqual(e.expect, [
+    "run PDH 100.9 і закриття назад під ним — денний напрямок ↓ у силі",
+    "денне закриття над 100.9 — корекція триває; run 102.4 знімає денний напрямок",
+    // the zone dies by a trade beyond its extreme — the edge, not the buffered stop 98
+    "4h-трейд під 98.2 — зону trap пройдено, стан нейтральний до закриття назад",
+    "run 102.4 — верхній край сітки, за ним 104 x2",
+    "тижневе закриття відносно 101.5 — рішення по W",
+    "тижневе закриття під 90 — story лонг знято",
+  ]);
+  // the far story target (≈2.4w) stays out; the D kill at the counter edge is one level with two names
+  assert.equal(e.levels, "104 (далі x2) · 102.4 (контр-край x3, kill D) · 100.9 (PDH) · 99.5 (PDL) · 98.2 (край біасу) · 90 (інвалідація)");
+  assert.ok(e.levels.split(" · ").length <= 7, "seven levels at most");
+  // a story target within a weekly ATR joins the line, merged with the level it sits on
+  const near = expectBlock({ ...daily.results[0], weekly: { ...daily.results[0].weekly, primary_target: 104.3, primary_atr_weeks: 0.4 } }, daily);
+  assert.ok(near.levels.startsWith("104 (далі x2, ціль story) · 102.4"), near.levels);
+  assert.equal(e.cell, "вирішує закриття відносно 100.9");
+  assert.equal(e.state, "VALID");
+  const text = [e.week, e.today, ...e.expect, e.levels].join("\n");
+  assert.ok(!/entry when|stop|\$|RR|size/i.test(text), text);
+  // the sentences of meaning carry no price: prices live in the events and the levels line
+  assert.ok(!/\d{2,}\.\d|\b\d{3,}\b/.test(e.week.replace(/\d\d\.\d\d/g, "")), e.week);
+
+  // no bias: both edges, the reference levels, nothing to read until a run
+  const none = expectBlock(daily.results[1], daily);
+  assert.equal(none.header, "## Y · 100 · без біасу");
+  assert.equal(none.week, "Trap не було ні на W, ні на D — біасу немає. Напрямку на W і D немає.");
+  assert.deepEqual(none.expect, ["run 102.4 або 98.2 і закриття назад — перший trap; до того читати нічого"]);
+  // PWL 98.6 sits 0.4 from the lower edge — inside the 4h eq_tolerance (0.5), one draw
+  assert.equal(none.levels, "102.4 (верхній край x3, PWH) · 100.9 (PDH) · 99.5 (PDL) · 98.2 (нижній край x2, PWL)");
+  assert.equal(none.state, null);
+
+  // a day without a correction bar: the kill of the daily heading is the event
+  const plain = { ...daily.results[0], direction: { ...daily.results[0].direction, day: { kind: "inside", role: "inside", date: "2026-09-10", pd_level: null, pd_kind: null } } };
+  const p = expectBlock(plain, daily);
+  assert.equal(p.expect[0], "run 102.4 — денний напрямок ↓ знято");
+  assert.equal(p.cell, "trap у силі, зона тримається до 98.2");
+});
+
+test("notRecommended: reachable, inside the cap, min RR, and no counter-trend against a trap in force — a reason, never a block", () => {
+  const r = { contract: { usd_per_point: 100 } };
+  const daily = { risk_cap: 250, min_rr: 1.5 };
+  const s = (o) => ({ setup_type: "sweep-trigger", actionable: true, over_cap: false, planned_r: null, trigger: 100, key_levels: [100], targets: [105], far: null, ...o });
+  assert.equal(notRecommended(s({}), r, daily, "WAITING"), null, "T1 5 away, the cap-sized stop 2.5 → RR floor 2");
+  assert.equal(notRecommended(s({ targets: [103] }), r, daily, "WAITING"), "RR 1.2 за стопу на весь ліміт; для 1.5 стоп має бути не більший за $200");
+  assert.equal(notRecommended(s({ planned_r: 1.2 }), r, daily, "WAITING"), "RR 1.2 < 1.5");
+  assert.equal(notRecommended(s({ planned_r: 3 }), r, daily, "WAITING"), null);
+  assert.equal(notRecommended(s({ over_cap: true }), r, daily, "WAITING"), "стоп над лімітом $250");
+  assert.equal(notRecommended(s({ actionable: false, far: "не сьогодні: −916 пт ≈ 6× ATR 4h" }), r, daily, "WAITING"), "не сьогодні: −916 пт ≈ 6× ATR 4h");
+  assert.equal(notRecommended(s({ targets: [] }), r, daily, "WAITING"), "цілі немає");
+  const ct = s({ setup_type: "early-week-counter-trend", direction: "short", targets: [95] });
+  assert.equal(notRecommended(ct, r, daily, "VALID"), "контр-тренд проти trap у бік біасу, який у силі (Principle 7)");
+  assert.equal(notRecommended(ct, r, daily, "WAITING"), null);
+  assert.equal(notRecommended(ct, r, daily, "PENDING"), null);
+  // no contract spec: no dollar figure, so no RR floor to fail
+  assert.equal(notRecommended(s({ targets: [100.5] }), { contract: null }, daily, "WAITING"), null);
+});
+
+test("normalizePlan + matchPlanSetup: the plan's structured fields only; a setup is covered when its key level sits inside the plan's key-level span", () => {
+  const plan = normalizePlan(V4_PLAN);
+  assert.deepEqual(plan.setups[0], { id: "s1", instrument: "X", direction: "long", setup_type: "sweep-trigger", key_levels: [99.4, 98.2], targets: [101, 102.4] });
+  assert.ok(!JSON.stringify(plan).includes("must not travel"), "the journal's free text stays in the journal");
+  assert.equal(normalizePlan(null), null);
+  assert.deepEqual(normalizePlan({ setups: [] }).setups, []);
+  const s = (direction, key_levels, instrument = "X") => ({ instrument, direction, key_levels });
+  assert.equal(matchPlanSetup(s("long", [98.2]), plan.setups, 0.5).id, "s1");
+  assert.equal(matchPlanSetup(s("long", [99.0]), plan.setups, 0).id, "s1", "inside the span");
+  assert.equal(matchPlanSetup(s("long", [99.8]), plan.setups, 0.5).id, "s1", "within the tolerance of its top");
+  assert.equal(matchPlanSetup(s("long", [100.1]), plan.setups, 0.5), null);
+  assert.equal(matchPlanSetup(s("short", [98.2]), plan.setups, 0.5), null, "the other side is another setup");
+  assert.equal(matchPlanSetup(s("long", [98.2], "Z"), plan.setups, 0.5), null);
+  assert.equal(matchPlanSetup(s("long", [95]), plan.setups, 0.5), null);
+});
+
+test("renderDailyMarkdown (v4): what to expect first, the setups below and checked against the plan; v3 stays under format: v3", () => {
+  const daily = v4Daily();
+  const md = renderDailyMarkdown({ ...daily, plan: V4_PLAN });
+  for (const needle of [
+    "# Marco daily brief — 2026-09-14 (Mon) · чого чекати",
+    "| X | LONG | W ↓ · D ↓ | VALID | вирішує закриття відносно 100.9 |",
+    "| Y | NONE | W — · D — | — | чекаємо run однієї зі сторін |",
+    "**Вікна.** London 10:00–18:30 · NY 16:30–23:00 Europe/Athens. Наступні 4h-закриття: 17:00 · 21:00 · 01:00. Контр-тренд: відкритий (пн–вт).",
+    "## X · 100 · LONG, зараз проти напрямку\n- **Тиждень.** Story лонг",
+    "- **Чекаємо:**\n  - run PDH 100.9 і закриття назад під ним — денний напрямок ↓ у силі;",
+    "  - тижневе закриття під 90 — story лонг знято.\n- **Рівні:** 104 (далі x2)",
+    "## TEST:SKIP — пропущено: not in the weekly brief",
+    "# Сетапи\n\nЗвірено з планом журналу 2026-09-14 – 2026-09-18 (locked): сетапів у плані 2.",
+    "- у плані: long · sweep-trigger · K 99.4 / 98.2 · T 101 / 102.4 — engine бачить те саме (K 98.2).",
+    "- у плані: long · lb-zone-tap · K 91 · T 95 — engine сьогодні цього рівня не називає.",
+    // outside the plan, and neither passes the strategy's own numbers: one line each, with the reason
+    "- рекомендованих поза планом немає.",
+    "- не рекомендую: long · sweep-trigger · K 95 · T 98.2 / 100.8 / 102.4 — RR 1.28 за стопу на весь ліміт; для 1.5 стоп має бути не більший за $213.",
+    "- не рекомендую: short · early-week-counter-trend · K 102.4 · T 100.8 — контр-тренд проти trap у бік біасу, який у силі (Principle 7).",
+  ]) {
+    assert.ok(md.includes(needle), `brief is missing: ${needle}\n---\n${md}`);
+  }
+  // the main brief carries no execution: everything above the setups section
+  const main = md.split("# Сетапи")[0];
+  assert.ok(!/entry when|stop |\$\d|RR |size \d/.test(main), main);
+  // the covered setup is one line, never a block
+  assert.ok(!md.includes("sweep-trigger · K 98.2 · T"), "the plan's setup is not printed again");
+  assert.ok(!md.includes("must not travel"));
+  assert.ok(!md.includes("```"), "nothing recommended — no setup block at all");
+
+  // a tighter cap makes the next edge worth it (T1 3.2 away, the cap-sized stop 1): printed in full, in the journal's grammar
+  const tight = renderDailyMarkdown({ ...daily, risk_cap: 100, plan: V4_PLAN });
+  assert.ok(tight.includes("### Поза планом: X · long · sweep-trigger · K 95 · T 98.2 / 100.8 / 102.4 · R — · size 1\n```\nbuy_story/aligned · inval 90 Wclose\n- entry when: run 95"), tight);
+  assert.ok(tight.includes("- напрямок: W ↓ · D ↓ — проти W, проти D"));
+
+  // without a plan everything the engine sees is judged the same way, and the brief says no check was made
+  const bare = renderDailyMarkdown({ ...daily, risk_cap: 100 });
+  assert.ok(bare.includes("План журналу не передано (`--plan`), тож звірки не було"));
+  assert.ok(bare.includes("### Сетап: X · long · sweep-trigger · K 98.2 · T 101 / 102.4 / 104 · R — · size 1"));
+  // Friday: the counter-trend setup is closed
+  assert.ok(!renderDailyMarkdown({ ...daily, weekday: "Fri", counter_trend_open: false, plan: V4_PLAN }).includes("early-week-counter-trend"));
+  // the older layout on request
+  const v3 = renderDailyMarkdown({ ...daily, format: "v3" });
+  assert.ok(v3.includes("· сетапи") && v3.includes("**Grid 4h**") && !v3.includes("чого чекати"));
+  assert.equal(v3, renderDailyMarkdownV3(daily));
 });

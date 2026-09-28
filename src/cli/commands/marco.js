@@ -63,7 +63,7 @@ register("marco", {
       "daily",
       {
         description:
-          "Morning run: direction from the weekend brief, the H4 grid and the day's scenarios computed live on 240/60/15/5 (closed bars only) with dollar risk, the per-trade cap and contract-roll detection, rendered as journal-shaped setups in Ukrainian (JSON: results[].setups, ready for plan_add_setup); writes briefs/daily/<date>.md + .json",
+          "Morning run: direction from the weekend brief, the H4 grid and the day's scenarios computed live on 240/60/15/5 (closed bars only) with dollar risk, the per-trade cap and contract-roll detection. Rendered in Ukrainian as format v4: 'what to expect' per instrument first (week's bias, the day's state, events at W/D/4h levels — no entries), then the setups in their own section, checked against the journal's plan when --plan is given (JSON: results[].expect, results[].setups with in_plan); writes briefs/daily/<date>.md + .json",
         options: {
           rules: commonOptions.rules,
           tf: commonOptions.tf,
@@ -76,14 +76,22 @@ register("marco", {
               "Manual weekly-layer shift after a contract roll the basis chain could not see: SYMBOL=offset (e.g. CME:6E1!=0.00405), repeatable",
           },
           out: { type: "string", description: "Output directory (default: briefs/daily)" },
+          plan: {
+            type: "string",
+            description:
+              "Path to the journal plan as JSON (the plan_get_active object, or { setups: [...] }) — engine setups the plan already covers are named in one line, only the rest is printed in full",
+          },
+          format: { type: "string", description: "v4 (default: what to expect first, setups below) | v3 (per-instrument setups layout)" },
         },
-        handler: async ({ rules, tf, compact, today, shift, out }, positionals) => {
+        handler: async ({ rules, tf, compact, today, shift, out, plan, format }, positionals) => {
           const result = await core.runMarcoDaily({
             rules_path: rules,
             timeframes: tf,
             today,
             shift,
             out_dir: out,
+            plan_path: plan,
+            format,
             symbols: positionals?.length ? positionals : undefined,
           });
           return compact ? core.renderDailyMarkdown(result) : result;

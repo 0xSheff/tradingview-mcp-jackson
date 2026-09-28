@@ -2,8 +2,8 @@
 
 This file is the single source of truth for the `marco` branch.
 
-Sources — seven public videos from the **Inter Equity Trading** YouTube channel
-(@InterEquity, Marco Accettone; V1–V6, V8) plus one long-form interview (V7).
+Sources — eight public videos from the **Inter Equity Trading** YouTube channel
+(@InterEquity, Marco Accettone; V1–V6, V8, V9) plus one long-form interview (V7).
 Rules below are distilled from the full auto-generated transcripts of:
 
 | Ref | Video ID | Title | What it contributes |
@@ -16,6 +16,7 @@ Rules below are distilled from the full auto-generated transcripts of:
 | **V6** | `aKoGbAe-xTE` | 10,000 Hours of Liquidity Trading in a 16 Minute Video | Weekly/daily bias, trend-line liquidity, the HTF→LTF entry chain |
 | **V7** | `5NrNBik2dmY` | MRKT interview (Jun 2026, XAUUSD/NQ walkthrough) | "Invisible" levels = HTF candle highs / highs respected multiple times; re-entry while the target is intact; counter-bias framing; the short-term play toward the local draw |
 | **V8** | `E2n7KMQDYIU` | Fix This Liquidity Mistake, Everything Will Change (Sep 2026) | Pattern trading vs the trap: the reaction origin ("where did this reaction occur from? look to the left-hand side"), the induce-sellers → induce-buyers → trap sequence, "we need to see a build-up", the go-long-again false move; gold 1h/30m/15m walkthrough (Jul–Aug 2025 chart) |
+| **V9** | `LWEuNvtjQNA` | Trade Liquidity Properly (MUST WATCH) (Sep 2026) | When *not* to trade: once the induced crowd is trapped, the other side is "off your cards" ("no more sells" / "no more buys"); a level left from the left is a "future target", not a requirement; the moves "you do not need to be involved in"; four Sep-2026 examples (XAUUSD 30m/1h, NQ 2h, EURUSD 30m). **Reviewed 2026-09-27** — the reading is Principle 7 of docs/MARCO-CASES.md, the replay and the measurements are case V9 there; built from it: the `zone_run` read (§3), which is a calibration, not his rule |
 
 > **Two kinds of statement in this document.**
 > Lines marked **[SOURCE]** are the author's rules, restated from the
@@ -391,6 +392,29 @@ the x1 structural low intact) and the E1 fixtures, of which only
 `UNREFINED_LEFT` changed its expectation (the x2 build-up run is the story;
 98.0 is named, not required). The gold walkthrough is in docs/MARCO-CASES.md
 (case V8).
+
+**A zone traded through is not a failed trap [CALIBRATION, measured and
+built 2026-09-27 — case V9].** When the LB that tells the story is traded
+through (§2.3), the read used to say "the trap failed; treat as
+continuation" and took the side of the run. Measured on the engine's own
+reads — MGC / MES / MNQ / 6E, 240 from Dec 2023, 60 from Nov 2025, 30 from
+Mar 2026, 1385 such reads, first passage from the close of the bar the read
+appears on — price went X ATR with the run before X ATR against it in 49 /
+50 / 49% for X = 1, 2, 3, whatever the zone's qualification, its `trap`
+flag, its life or the reaction it had given. 52% of those reads became a
+deeper trap on the same side within a median of two bars, 37% a breakdown
+within three. So the read is the PENDING family (§3.1): mode `zone_run`,
+**direction 0** — "the zone was traded through: the run deepened; a close
+back makes the new LB, a miss within `confirm_bars` is the breakdown" — and
+nothing is triggered out of it without an explicit bias. `resolveBias` keeps
+the side of the run as a *lean* (`story.lean`), so a daily zone run against
+a weekly trap is still a `pullback`: the weekly layer is unchanged (4704
+cuts of 240 / 60 on the same history, no difference in bias, regime, targets
+or invalidation). The breakdown — no close back within `confirm_bars` —
+keeps its `continuation` read and its direction: it measured the same coin
+(50 / 48 / 49%, n 1182) and waits for a decision of its own. Not Marco's
+words: V9 says the trap stands when the run deepens ("no more sells"), and
+that did not measure as a direction either (docs/MARCO-CASES.md, case V9).
 
 **Bias source [CALIBRATION].** The author's bias is a liquidity read, never
 the block: the *draw* (where liquidity built — "the only logical liquidity
@@ -925,6 +949,7 @@ Everything below is ours to tune — the videos show it by eye only.
 | The swing whose extreme is a move's reaction origin (§3, V8) flips on which runs | any consumed level — no parameter | — |
 | An unrefined LB (origin / single-touch swing intact beyond it) sets the story unless an opposing anchor is alive (§3, V8 over E1) | — | on |
 | Trap pointer: the intact origin of the last inducing move per side, drawn unless it sits at an alive same-side LB extreme (§3, V8) | `Trap pointers` (Pine) / `trap_pointers` (engine) | on |
+| What the story reads after its LB is traded through: a side, or none (§3, case V9) | — (engine: mode `zone_run`, direction 0; the run's side kept as `story.lean` for `resolveBias`) | none |
 | The timing line's local clock (§3.1) | `local_tz` | Europe/Athens |
 
 The `minZoneAtr`, `stopBufAtr` and `story_fresh_bars` rows come from the
@@ -1019,6 +1044,18 @@ tuning any default:
     pending and the block, `ind`/`trap`/`leftKind` on the block, "· trap" in
     the label, the *Trap pointers* input (dashed line + label per side) and
     two alerts (origin run, bull/bear).
+  - V9 (2026-09-27): `storyRead` reads a story LB traded through as mode
+    `zone_run`, direction 0, and returns `lean` (the direction, or the side
+    of that run) and `killed` (`side`, `zone`, `bars_ago`, `pending` — the
+    sweep the kill opened: `level`, `ext`, `bars_left`);
+    `analyzeMarco().story` carries both, `resolveBias` leans on `lean`. The
+    daily brief's 1h line prints "зону пройдено, напрямку немає" with the
+    two closes that resolve it instead of "NOISE · continuation … проти
+    біасу". No Pine counterpart: the indicator draws zones, and its Auto
+    bias follows the last clean LB created — it never read a kill as a side.
+    Tests: four in `tests/marco.test.js` (the read, its two resolutions,
+    `analyzeMarco`, `resolveBias`), one in `tests/marco_grid.test.js` (the
+    1h line).
   - `node src/cli/index.js marco weekly --compact` — the weekly brief in
     two layers (§3.1): global bias W→D with the big targets (≈Nw = distance
     in weekly ATRs) and invalidation; intraweek phase (D vs 4h), reachable
@@ -1032,7 +1069,14 @@ tuning any default:
     pocket flag (`flagPocket`), scenarios A/B/C/D (`dailyScenarios`), the
     contract-roll check (`detectRoll`, `shiftPrices`, `basisBars`) and the
     approved brief (`renderDailyMarkdown`) — all pure, in
-    `src/core/marco_grid.js`, tested in `tests/marco_grid.test.js`. Writes
+    `src/core/marco_grid.js`, tested in `tests/marco_grid.test.js`. The brief
+    is format v4 since 2026-09-27 (docs/MARCO-CASES.md → Approved changes):
+    "what to expect" per instrument first (`expectBlock` — the week's bias,
+    the day's state, events at W / D / 4h levels, no entries), the setups in
+    their own section below, checked against the journal's plan
+    (`--plan <file>`, `matchPlanSetup`) and recommended only by the
+    strategy's own numbers (`notRecommended`); `--format v3` keeps the
+    per-instrument setups layout. Writes
     `briefs/daily/<date>.md` + `.json` (gitignored); the `.json` carries the
     basis the next run compares against. These are reads over the same
     map — no new state and no new parameter — so the Pine indicator is

@@ -154,12 +154,83 @@ test("story: recent bullish LB reads as a buy story", () => {
   assert.match(story.read, /longs at the bullish LB 99\.5–100/);
 });
 
-test("story: an invalidated LB reads as a failed trap, not a buy story", () => {
+// Case V9 (docs/MARCO-CASES.md, measured 2026-09-27): a trap LB traded through
+// carries no direction — 49 / 50 / 49% on 1385 reads — and resolves within
+// confirm_bars into a deeper trap or a breakdown. It used to read "the trap
+// failed; treat as continuation" with the run's direction.
+test("story: a trap LB traded through is a zone run — no direction, not a buy story, the pending sweep named", () => {
   const bars = mkBars([...SWEEP_RECLAIM, INVALIDATE_DEEP]);
   const map = buildLiquidityMap(bars, CFG);
   const story = storyRead(map, bars, CFG);
-  assert.equal(story.mode, "down_continuation");
-  assert.match(story.read, /trap failed/);
+  assert.equal(story.mode, "zone_run");
+  assert.equal(story.direction, 0);
+  assert.equal(story.lean, -1, "the run's side stays as a lean for resolveBias");
+  assert.equal(story.lb, null);
+  assert.deepEqual(story.killed, { side: "bull", zone: [99.5, 100], bars_ago: 0, pending: { level: 99.5, ext: 98, bars_left: 2, confirm_bars: 2 } });
+  assert.match(story.read, /^the bullish LB 99\.5–100 was traded through 0 bars ago — the run deepened, no direction from it: a close back above 99\.5 makes the new LB \(extreme 98, 2 of 2 bars left\), a miss is the breakdown/);
+  assert.doesNotMatch(story.read, /failed|continuation/);
+});
+
+test("story: a zone run resolves by the close — back above = the deeper LB is the story, a miss = the breakdown keeps its direction", () => {
+  const back = mkBars([...SWEEP_RECLAIM, INVALIDATE_DEEP, [99.2, 100.6, 99.0, 100.3]]);
+  const backMap = buildLiquidityMap(back, CFG);
+  const s1 = storyRead(backMap, back, CFG);
+  assert.equal(s1.mode, "buy_story");
+  assert.deepEqual(s1.lb.zone, [98, 99.5]);
+  assert.equal(s1.direction, 1);
+  assert.equal(s1.lean, 1);
+  assert.equal(s1.killed, null);
+
+  const miss = mkBars([...SWEEP_RECLAIM, INVALIDATE_DEEP, [99.2, 99.4, 98.6, 98.9], [98.9, 99.3, 98.5, 98.8], [98.8, 99.2, 98.4, 98.7]]);
+  const missMap = buildLiquidityMap(miss, CFG);
+  assert.ok(missMap.events.some((e) => e.type === "low_breakdown" && e.level === 99.5));
+  const s2 = storyRead(missMap, miss, CFG);
+  assert.equal(s2.mode, "down_continuation");
+  assert.equal(s2.direction, -1);
+  assert.match(s2.read, /^lows were consumed .* without a reclaim — continuation, no trap/);
+});
+
+test("analyzeMarco: a zone run sets no side — no roles, no triggers out of it without an explicit bias", () => {
+  // six wide, slowly descending bars in front: no pivots, no gaps — only the
+  // history analyzeMarco asks for
+  const lead = [
+    [104.5, 105.0, 101.8, 104.0],
+    [104.0, 104.8, 101.6, 103.8],
+    [103.8, 104.6, 101.4, 103.6],
+    [103.6, 104.4, 101.2, 103.4],
+    [103.4, 104.2, 101.0, 103.2],
+    [103.2, 104.0, 100.9, 101.0],
+  ];
+  const bars = mkBars([...lead, ...SWEEP_RECLAIM, INVALIDATE_DEEP]);
+  const read = analyzeMarco(bars, CFG);
+  assert.equal(read.story.mode, "zone_run");
+  assert.equal(read.story.direction, 0);
+  assert.equal(read.story.lean, -1);
+  assert.deepEqual(read.story.killed.zone, [99.5, 100]);
+  assert.equal(read.bias_used, 0);
+  assert.deepEqual(read.triggers, []);
+  assert.deepEqual(read.false_reactions, []);
+  // an explicit bias still leads
+  assert.equal(analyzeMarco(bars, CFG, { bias: 1 }).bias_used, 1);
+});
+
+test("resolveBias: a junior zone run against a senior trap stays a pullback; without the lean it would be weekly_only", () => {
+  const w = {
+    direction: 1, lean: 1, mode: "buy_story", read: "w", fresh: true,
+    intact_above: [{ price: 120, touches: 1, buildup: false }, { price: 130, touches: 2, buildup: true }],
+    intact_below: [], lb: { zone: [90, 95], alive: true },
+  };
+  const dRun = { direction: 0, lean: -1, mode: "zone_run", read: "d", intact_above: [{ price: 105, touches: 1, buildup: false }], intact_below: [], lb: null };
+  const p = resolveBias(w, dRun);
+  assert.equal(p.regime, "pullback");
+  assert.equal(p.bias, 1);
+  assert.equal(p.primary_target, 130);
+  assert.equal(p.daily.mode, "zone_run");
+  assert.equal(resolveBias(w, { ...dRun, lean: 0 }).regime, "weekly_only");
+  // the run of a bear zone with a live weekly buy story reads as before: aligned
+  assert.equal(resolveBias(w, { ...dRun, lean: 1 }).regime, "aligned");
+  // two zone runs, no trap anywhere: no bias
+  assert.equal(resolveBias({ ...w, direction: 0, lean: -1, mode: "zone_run", lb: null }, dRun).regime, "no_bias");
 });
 
 test("story: both sides intact with no runs is no-man's land", () => {

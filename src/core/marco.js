@@ -23,6 +23,11 @@ import {
   dailyScenarios,
   dailySetups,
   renderDailyMarkdown,
+  renderDailyMarkdownV3,
+  expectBlock,
+  matchPlanSetup,
+  normalizePlan,
+  notRecommended,
 } from "./marco_grid.js";
 import {
   DIRECTION_DEFAULTS,
@@ -41,7 +46,7 @@ import {
   directionBlockUa,
 } from "./marco_direction.js";
 
-export { h4Grid, flagPocket, clipToGrid, detectRoll, shiftPrices, basisBars, splitForming, dailyScenarios, dailySetups, renderDailyMarkdown };
+export { h4Grid, flagPocket, clipToGrid, detectRoll, shiftPrices, basisBars, splitForming, dailyScenarios, dailySetups, renderDailyMarkdown, renderDailyMarkdownV3, expectBlock, matchPlanSetup, normalizePlan, notRecommended };
 export {
   DIRECTION_DEFAULTS,
   ICT_DEFAULTS,
@@ -1064,15 +1069,38 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
 
   let mode;
   let read;
+  // the side of the run that traded through the story's zone: a lean for
+  // resolveBias (a pullback stays a pullback), never a direction
+  let runSide = 0;
+  let killed = null;
   const lbBlock = blockOf(lastLb);
   if (lastLb && lbBlock?.dead && lbBlock.death === "invalidated" && (!lastBreak || lastBreak.bar < lastLb.bar)) {
+    // A trap LB traded through says nothing about the side (docs/MARCO.md §3,
+    // case V9 — measured 2026-09-27 on 1385 such reads, four futures, 240/60/30:
+    // X ATR with the run first in 49 / 50 / 49% for X = 1, 2, 3; 52% became a
+    // deeper trap on the same side within a median of two bars, 37% a
+    // breakdown within three). It used to read "the trap failed; treat as
+    // continuation" with the run's direction — now the PENDING family (§3.1),
+    // direction 0. [CALIBRATION]
     const bull = lastLb.type === "bull_lb_created";
-    mode = bull ? "down_continuation" : "up_continuation";
+    mode = "zone_run";
+    runSide = bull ? -1 : 1;
+    const p = map.pending?.[bull ? "bull" : "bear"] ?? null;
+    // only the sweep this kill (or a later run) opened — not an older one
+    const pend = p && p.run_bar >= lbBlock.died ? p : null;
+    killed = {
+      side: bull ? "bull" : "bear",
+      zone: [round(lastLb.zone[0]), round(lastLb.zone[1])],
+      bars_ago: n - 1 - lbBlock.died,
+      pending: pend ? { level: round(pend.level), ext: round(pend.ext), bars_left: pend.bars_left, confirm_bars: cfg.confirm_bars } : null,
+    };
     read =
-      `${bull ? "lows" : "highs"} were run and briefly reclaimed, but the ` +
-      `${bull ? "bullish" : "bearish"} LB ${round(lastLb.zone[0])}–${round(lastLb.zone[1])} ` +
-      `was invalidated ${ago(lbBlock.died)} — the trap failed; treat as continuation ` +
-      `and wait for the next story to build`;
+      `the ${bull ? "bullish" : "bearish"} LB ${round(lastLb.zone[0])}–${round(lastLb.zone[1])} ` +
+      `was traded through ${ago(lbBlock.died)} — the run deepened, no direction from it: ` +
+      (pend
+        ? `a close back ${bull ? "above" : "below"} ${round(pend.level)} makes the new LB (extreme ${round(pend.ext)}, ` +
+          `${pend.bars_left} of ${cfg.confirm_bars} bars left), a miss is the breakdown`
+        : `wait for the next run and its close back`);
   } else if (lastLb && (!lastBreak || lastBreak.bar < lastLb.bar)) {
     if (lastLb.type === "bear_lb_created") {
       mode = "sell_story";
@@ -1246,6 +1274,10 @@ export function storyRead(map, bars, cfg = MARCO_DEFAULTS) {
     price: round(price),
     mode,
     direction,
+    // what resolveBias leans on: the direction, or — for a zone traded through —
+    // the side of the run that did it (descriptive; the read itself has none)
+    lean: direction !== 0 ? direction : runSide,
+    killed,
     fresh,
     lb,
     draw,
@@ -1648,7 +1680,7 @@ export function analyzeMarco(bars, cfg = MARCO_DEFAULTS, { bias = null, seed = n
   return {
     bars_analyzed: n,
     last_price: story.price,
-    story: { mode: story.mode, direction: story.direction, fresh: story.fresh, read: story.read, lb: story.lb, draw: story.draw },
+    story: { mode: story.mode, direction: story.direction, lean: story.lean, killed: story.killed, fresh: story.fresh, read: story.read, lb: story.lb, draw: story.draw },
     bias_used: dir,
     bias_source: biasSource,
     blocks,
@@ -1686,7 +1718,10 @@ export function resolveBias(w, d, names = { senior: "weekly", junior: "daily" })
   // a "story" is a confirmed trap (buy/sell_story); a "lean" also counts the
   // continuation states — continuation alone never makes a counter-trend case
   const story = (s) => (s?.mode === "buy_story" ? 1 : s?.mode === "sell_story" ? -1 : 0);
-  const lean = (s) => s?.direction ?? 0;
+  // a zone traded through (`zone_run`) has no direction, but the side of its
+  // run still says which way the junior timeframe went: a daily run against a
+  // weekly trap stays a pullback (case V9, 2026-09-27)
+  const lean = (s) => s?.lean ?? s?.direction ?? 0;
   const sW = story(w);
   const sD = story(d);
   const lW = lean(w);
@@ -2417,8 +2452,14 @@ export function basisReference({ prev, prevDaily, weekly, wk0, execTf }) {
  * run (or the weekly brief) so a contract roll with back-adjustment shifts
  * the weekly layer instead of silently misplacing it. Writes
  * briefs/daily/<date>.json + .md.
+ *
+ * The markdown is format v4 since 2026-09-27 — "what to expect" first, the
+ * setups in their own section below, checked against the journal's plan when
+ * `plan_path` names its JSON (the `plan_get_active` object; the CLI has no
+ * way into the journal, so whoever runs the brief hands the plan over).
+ * `format: "v3"` keeps the per-instrument setups layout.
  */
-export async function runMarcoDaily({ rules_path, symbols, timeframes, today, shift, out_dir } = {}) {
+export async function runMarcoDaily({ rules_path, symbols, timeframes, today, shift, out_dir, plan_path, format } = {}) {
   let rules = {};
   try {
     rules = loadRules(rules_path).rules;
@@ -2449,6 +2490,12 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
   const prevDaily = loadLatestDaily(dailyDir, { before: now.toISOString().slice(0, 10) });
   const prevFor = (symbol) => prevDaily?.results?.find((s) => s.symbol === symbol && !s.error) ?? null;
   const manualShift = parseShift(shift);
+  // the journal's plan, read before the chart is touched: a bad path fails here
+  let plan = null;
+  if (plan_path) {
+    plan = normalizePlan(JSON.parse(readFileSync(resolve(plan_path), "utf8")));
+    if (!plan) throw new Error(`--plan ${plan_path}: not a plan object`);
+  }
 
   let originalSymbol;
   let originalTimeframe;
@@ -2663,17 +2710,26 @@ export async function runMarcoDaily({ rules_path, symbols, timeframes, today, sh
       : "closed — counter-trend entries are Mon–Tue only",
     direction_from: `briefs/weekly/${weekly.week} (global layer)`,
     risk_cap: cfg.max_risk_per_trade,
+    min_rr: cfg.target_min_rr,
     contracts_path: contractsPath,
     timeframes: tfs,
     exec_timeframe: execTf,
     exchange_tz: cfg.h4?.exchange_tz ?? "America/New_York",
     local_tz: cfg.local_tz ?? null,
     methodology: "docs/MARCO.md — Accettone liquidity blocks; docs/MARCO-CASES.md — the nested read and the brief format",
+    format: format === "v3" ? "v3" : "v4",
+    plan,
     results,
   };
   // the setups in the journal shape (plan_add_setup fields + the UA
-  // setup_description) — the brief prints them, the JSON carries them
-  for (const r of results) if (r.grid && r.scenarios) r.setups = dailySetups(r, result).setups;
+  // setup_description) — the brief prints them, the JSON carries them; with a
+  // plan at hand each one says which plan setup already covers it
+  for (const r of results) {
+    if (!r.grid || !r.scenarios) continue;
+    r.setups = dailySetups(r, result).setups;
+    if (plan) for (const s of r.setups) s.in_plan = matchPlanSetup(s, plan.setups, (r.grid.respect ?? 0) / 3)?.id ?? null;
+    r.expect = expectBlock(r, result);
+  }
   mkdirSync(dailyDir, { recursive: true });
   const jsonPath = join(dailyDir, `${result.trading_day}.json`);
   const mdPath = join(dailyDir, `${result.trading_day}.md`);

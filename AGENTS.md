@@ -100,15 +100,19 @@ ChrisFX, CLS, EMA/RSI or the regular morning-brief reads.**
   liquidity story, LB zones and the 10 a.m. gate per symbol. Render per the
   `instruction` field. Allow a generous timeout for a live scan.
 - **Single symbol:** `node src/cli/index.js marco scan COMEX_MINI:MGC1! --tf 15`
-- **Morning brief:** `node src/cli/index.js marco daily --compact` — the nested
-  read (W/D direction → H4 grid → 1h inside it) on closed bars only, rendered as
-  **journal setups in Ukrainian** (format v3, 2026-09-23): per instrument Bias · Now ·
-  Grid, then every scenario as a `plan_add_setup`-shaped setup (title with the
-  structured fields + a fenced `setup_description` in the journal grammar), reachable
-  ones first. The same objects sit in the JSON as `results[].setups` — the trader
-  picks, you add. Writes `briefs/daily/<date>.md` + `.json`. The case log and the
-  brief format live in `docs/MARCO-CASES.md`; the case procedure is the
-  `marco-case-review` skill.
+- **Morning brief:** `node src/cli/index.js marco daily --compact --plan <plan.json>`
+  — the nested read (W/D direction → H4 grid → 1h inside it) on closed bars only,
+  rendered in Ukrainian as **format v4** (2026-09-27): per instrument *what to
+  expect* — the week's bias, the day's state, the events we wait for at W / D / 4h
+  levels, one levels line — with no entries, stops or size; then one **Сетапи**
+  section in the journal grammar. Execution in the moment is the trader's: do not
+  add 15m / 5m analysis or entry models to the brief. Before the run, read the
+  journal's plan (`plan_get_active`) and write it to a file for `--plan`: setups the
+  plan already covers are named in one line, only what is new and passes the
+  strategy's numbers is printed in full. `--format v3` gives the former layout.
+  Writes `briefs/daily/<date>.md` + `.json` (`results[].expect`, `results[].setups`
+  with `in_plan`). The case log and the brief format live in `docs/MARCO-CASES.md`;
+  the case procedure is the `marco-case-review` skill.
 - **Indicator:** `scripts/marco_liquidity_blocks.pine`, saved on TradingView
   as the user's script "Liq blocks". It mirrors the exact state machine in
   `src/core/marco.js` — change defaults in both or neither. **Every change to

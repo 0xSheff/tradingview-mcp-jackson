@@ -740,6 +740,7 @@ export function dailyScenarios({ grid, reads, bias, cfg, tfs = ["240", "60", "15
         ? {
             story: reads["60"].story.read,
             mode: reads["60"].story.mode ?? null,
+            killed: reads["60"].story.killed ?? null,
             alignment: reads["60"].alignment,
             noise_note: reads["60"].noise_note ?? null,
             lb: reads["60"].story.lb,
@@ -791,6 +792,8 @@ const MODE_UA = {
   sell_story: "sell story",
   up_continuation: "continuation вгору",
   down_continuation: "continuation вниз",
+  // a trap LB traded through: no direction (docs/MARCO.md §3, case V9)
+  zone_run: "зону пройдено, напрямку немає",
   no_mans_land: "no-man's land",
 };
 const PHASE_UA = { forming: "ще формується", active: "активна", closed: "закрита" };
@@ -1381,7 +1384,8 @@ export function dailySetups(r, daily = {}) {
   return { state, setups, alerts, partials: sc.partials ?? [], top, skip, windows: win, dist };
 }
 
-export function renderDailyMarkdown(daily) {
+/** The brief in format v3 — every scenario a journal setup, per instrument (`marco daily --format v3`). */
+export function renderDailyMarkdownV3(daily) {
   const tz = daily.local_tz ?? null;
   const exch = daily.exchange_tz ?? "America/New_York";
   const at = (h, zone, m = 0) => (tz ? hourIn(tz, daily.trading_day, h, zone, m) : null);
@@ -1519,8 +1523,15 @@ export function renderDailyMarkdown(daily) {
         const sideTxt = (x) => (x ? `${fmt(x.price)}${x.touches ? ` x${x.touches}` : ""}` : "—");
         const against = sc.h1.alignment === "noise" || sc.h1.alignment === "against";
         const st = sc.h1.story ?? "";
-        const mode = sc.h1.mode ?? (/^highs were consumed/.test(st) ? "up_continuation" : /^lows were consumed/.test(st) ? "down_continuation" : /^lows were run and reclaimed/.test(st) ? "buy_story" : /^highs were run and reclaimed/.test(st) ? "sell_story" : null);
-        out.push(`1h: ${sc.h1.alignment === "noise" ? "NOISE · " : ""}${MODE_UA[mode] ?? mode ?? "—"}${against ? " проти біасу — вхід лише з 15m-структури повернення" : ""}${f ? ` · рамка ${sideTxt(f.below)} ↔ ${sideTxt(f.above)}` : ""}.`);
+        const mode = sc.h1.mode ?? (/^highs were consumed/.test(st) ? "up_continuation" : /^lows were consumed/.test(st) ? "down_continuation" : /^lows were run and reclaimed/.test(st) ? "buy_story" : /^highs were run and reclaimed/.test(st) ? "sell_story" : /^the (bullish|bearish) LB \S+ was traded through/.test(st) ? "zone_run" : null);
+        // a zone traded through: name the two closes that resolve it
+        const k = mode === "zone_run" ? sc.h1.killed : null;
+        const resolves = !k
+          ? ""
+          : k.pending
+            ? ` · LB ${zoneTxt(k.zone)}: закриття назад ${k.side === "bull" ? "над" : "під"} ${fmt(k.pending.level)} → новий LB (лишилось ${k.pending.bars_left} з ${k.pending.confirm_bars} барів), без нього → breakdown`
+            : ` · LB ${zoneTxt(k.zone)}: чекаємо наступний run і закриття назад`;
+        out.push(`1h: ${sc.h1.alignment === "noise" ? "NOISE · " : ""}${MODE_UA[mode] ?? mode ?? "—"}${resolves}${against ? " проти біасу — вхід лише з 15m-структури повернення" : ""}${f ? ` · рамка ${sideTxt(f.below)} ↔ ${sideTxt(f.above)}` : ""}.`);
       }
     } else if (!w.bias) {
       out.push("", "Без біасу на тиждень — сетапів нема.");
@@ -1555,5 +1566,333 @@ export function renderDailyMarkdown(daily) {
     `**Сьогодні.** Вікна ${sessions} — рівень, узятий поза ними, = алерт, який читаємо з сіткою, не вхід сам по собі. Гейт: 4h-свічка ${gl}; з ${gw[0]} до ${gw[1]} входи з біасом після трейду за її екстремум (V5).${clock0 ? ` Наступні 4h-закриття: ${clock0.closes(3).join(" · ")}${tz ? "" : " ET"}.` : ""} Контр-тренд: ${ctOpen ? "відкритий — лише до найближчої цілі, ніколи не тримати проти глобального біасу" : "закритий (лише пн–вт)"}.`,
     "",
     ...blocks,
+  ].join("\n");
+}
+
+// ------------------------------------------------ format v4: what to expect --
+
+/**
+ * The journal's plan in the shape the brief checks against: the structured
+ * fields of every setup, the text left behind. Takes the `plan_get_active`
+ * object (setups under `watchlist`) or `{ setups: [...] }`.
+ */
+export function normalizePlan(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  const clean = (s) => String(s ?? "").replace(/^\[user-authored[^\]]*\]\s*/, "");
+  const items = Array.isArray(plan.setups) ? plan.setups : Array.isArray(plan.watchlist) ? plan.watchlist : [];
+  return {
+    id: plan.id ?? null,
+    trading_day: plan.trading_day ?? null,
+    period_end: plan.period_end ?? null,
+    status: plan.status ?? null,
+    setups: items.map((s) => ({
+      id: s.id ?? null,
+      instrument: clean(s.instrument),
+      direction: clean(s.direction),
+      setup_type: clean(s.setup_type),
+      key_levels: (s.key_levels ?? []).filter(Number.isFinite),
+      targets: (s.targets ?? []).filter(Number.isFinite),
+    })),
+  };
+}
+
+/**
+ * The plan setup that already covers an engine setup: the same instrument and
+ * side, and a key level of the engine's inside the span of the plan's key
+ * levels, `tol` either way (the 4h eq_tolerance). [CALIBRATION]
+ */
+export function matchPlanSetup(setup, planSetups, tol = 0) {
+  for (const p of planSetups ?? []) {
+    if (p.instrument !== setup.instrument || p.direction !== setup.direction || !p.key_levels?.length) continue;
+    const lo = Math.min(...p.key_levels) - tol;
+    const hi = Math.max(...p.key_levels) + tol;
+    if ((setup.key_levels ?? []).some((k) => k >= lo && k <= hi)) return p;
+  }
+  return null;
+}
+
+/**
+ * Why a setup outside the plan is not recommended, or null when it is. The
+ * strategy's own numbers, nothing new: reachable today, inside the dollar cap,
+ * min RR (the planned one, or — when the stop is only known after the run —
+ * the floor the cap-sized stop gives), and no counter-trend trade while the
+ * bias-side trap is in force on the 4h or the 1h (Principle 7, V9: after the trap the
+ * other side is off the cards). A reason, never a block: the line stays in
+ * the brief. [CALIBRATION — target_min_rr, max_risk_per_trade reused]
+ */
+export function notRecommended(s, r, daily = {}, state = null) {
+  const minRr = daily.min_rr ?? 1.5;
+  const cap = daily.risk_cap ?? null;
+  const upp = r.contract?.usd_per_point ?? null;
+  if (!s.actionable && s.far) return s.far;
+  if (s.over_cap) return `стоп над лімітом $${cap ?? "—"}`;
+  if (s.setup_type === "early-week-counter-trend" && state === "VALID") return "контр-тренд проти trap у бік біасу, який у силі (Principle 7)";
+  const t1 = s.targets?.[0] ?? null;
+  const k = s.trigger ?? s.key_levels?.[0] ?? null;
+  if (s.planned_r != null) return s.planned_r < minRr ? `RR ${fmtRr(s.planned_r)} < ${minRr}` : null;
+  if (t1 == null || k == null) return "цілі немає";
+  if (upp && cap != null) {
+    const floor = Math.abs(t1 - k) / (cap / upp);
+    if (floor < minRr) return `RR ${fmtRr(floor)} за стопу на весь ліміт; для ${minRr} стоп має бути не більший за $${Math.round((Math.abs(t1 - k) * upp) / minRr)}`;
+  }
+  return null;
+}
+
+const DAY_KIND_UA = {
+  close_above_prev_high: "закрився над хаєм попереднього дня",
+  close_below_prev_low: "закрився під лоу попереднього дня",
+  outside_closed_inside: "зняв обидві сторони попереднього дня й закрився всередині",
+  ran_prev_high_closed_back: "зняв хай попереднього дня й закрився назад",
+  ran_prev_low_closed_back: "зняв лоу попереднього дня й закрився назад",
+  inside: "лишився всередині попереднього дня",
+};
+const DAY_ROLE_UA = {
+  continuation_day: "за напрямком",
+  correction_day: "день корекції проти напрямку; його екстремум наступного дня знімають ≈63% випадків, важить закриття",
+  failed_push: "поштовх за напрямком не вдався, пауза",
+  one_day_sweep: "одноденний sweep проти напрямку, ще не розворот",
+};
+
+/**
+ * "What to expect" for one instrument (format v4 — the trader, 2026-09-27:
+ * the week's bias, the day's state, the events we wait for, the levels;
+ * execution is his). Meaning first, prices only in the events and on the one
+ * levels line (v3.1); events sit on W / D / 4h levels, never lower.
+ * Returns { name, header, week, today, expect[], levels, cell }.
+ */
+export function expectBlock(r, daily = {}) {
+  const w = r.weekly ?? {};
+  const bias = w.bias === "long" ? 1 : w.bias === "short" ? -1 : 0;
+  const long = bias > 0;
+  const dir = r.direction && !r.direction.error ? r.direction : null;
+  const g = r.grid ?? null;
+  const sc = r.scenarios ?? null;
+  const T = tickFns(r.contract?.tick ?? null);
+  const price = r.quote?.last ?? g?.price ?? null;
+  const name = r.contract?.journal ?? r.symbol;
+  const over = long ? "над" : "під";
+  const under = long ? "під" : "над";
+  const arrowOf = (x) => (x > 0 ? "↑" : x < 0 ? "↓" : "—");
+  const dmy = (iso) => (iso ? `${String(iso).slice(8, 10)}.${String(iso).slice(5, 7)}` : null);
+  const layer = (x, n) => {
+    if (!x || x.error) return `${n} —`;
+    if (x.done) return `${n} ${arrowOf(x.done.side)} завершено`;
+    if (!x.heading) return `${n} —`;
+    const since = dmy(x.since?.decide_date);
+    return `${n} ${arrowOf(x.heading)}${since ? ` з ${since}` : ""}`;
+  };
+  const W = dir?.W && !dir.W.error ? dir.W : null;
+  const D = dir?.D && !dir.D.error ? dir.D : null;
+  const vs = biasVsDirection(r.direction, bias);
+
+  // ---- the week: the story, then the direction as a fact
+  const week = [];
+  if (bias) week.push(`Story ${long ? "лонг" : "шорт"}: W ${MODE_UA[w.mode] ?? w.mode ?? "—"}${w.daily_mode ? ` · D ${MODE_UA[w.daily_mode] ?? w.daily_mode}` : ""}${w.stale ? " (stale)" : ""}.`);
+  else week.push("Trap не було ні на W, ні на D — біасу немає.");
+  if (dir) {
+    const none = !W?.heading && !D?.heading && !W?.done && !D?.done;
+    const rel = !bias ? "" : vs.state === "against" ? " — обидва шари проти біасу" : vs.state === "mixed" ? " — один шар проти біасу" : vs.state === "with" ? " — за біасом" : "";
+    week.push(none ? "Напрямку на W і D немає." : `Напрямок: ${layer(W, "W")} · ${layer(D, "D")}${rel}.`);
+  }
+
+  // ---- today: the last day's bar, the 4h state, the leg
+  const biasEdge = g && bias ? (long ? g.lower : g.upper) : null;
+  const counterEdge = g && bias ? (long ? g.upper : g.lower) : null;
+  const pend = biasEdge?.pending ?? null;
+  const wf = sc?.wait_for ?? null;
+  const state = !bias || !sc ? null : pend ? "PENDING" : wf?.answer === "yes" ? "VALID" : "WAITING";
+  const day = dir?.day ?? null;
+  const today = [];
+  if (day) today.push(`Останній день (${dmy(day.date)}) ${DAY_KIND_UA[day.kind] ?? day.kind}${DAY_ROLE_UA[day.role] ? ` — ${DAY_ROLE_UA[day.role]}` : ""}.`);
+  if (state === "PENDING") today.push("4h: run краю біасу ще не вирішений (PENDING).");
+  else if (state === "VALID") today.push(`${tfLabel(wf.timeframe ?? "240")}: trap у бік біасу в силі (VALID${wf.fresh === false ? ", stale" : ""}).`);
+  else if (state === "WAITING") today.push("4h: trap у бік біасу немає (WAITING).");
+  if (dir?.leg?.heading) today.push(`H4 leg ${arrowOf(dir.leg.heading)}${dir.leg.since ? ` з ${dmy(dir.leg.since.decide_date)}` : ""}.`);
+
+  // ---- what we wait for: events at D / 4h / W levels, nearest decision first.
+  // A zone dies by a trade beyond its extreme (§2.3) — the edge itself, not
+  // the buffered stop the setups use.
+  const expect = [];
+  const kill = biasEdge?.edge ?? null;
+  if (day?.pd_level != null && D?.heading) {
+    const up = D.heading > 0;
+    expect.push(`run ${day.pd_kind} ${fmt(day.pd_level)} і закриття назад ${up ? "над" : "під"} ним — денний напрямок ${arrowOf(D.heading)} у силі`);
+    expect.push(`денне закриття ${up ? "під" : "над"} ${fmt(day.pd_level)} — корекція триває${D.kill != null ? `; run ${fmt(D.kill)} знімає денний напрямок` : ""}`);
+  } else if (D?.heading && D.kill != null) {
+    expect.push(`run ${fmt(D.kill)} — денний напрямок ${arrowOf(D.heading)} знято`);
+  }
+  if (bias && biasEdge?.edge != null) {
+    if (pend) expect.push(`4h-закриття назад ${over} ${fmt(pend.level)} — trap у бік біасу; без нього за ${pend.bars_left} з ${pend.confirm_bars} барів — breakdown`);
+    else if (wf?.answer === "yes") expect.push(`4h-трейд ${under} ${fmt(kill)} — зону trap пройдено, стан нейтральний до закриття назад`);
+    else expect.push(`run ${fmt(biasEdge.edge)} із закриттям назад ${over} ним — trap у бік біасу`);
+  }
+  if (bias && counterEdge?.edge != null) {
+    const beyond = counterEdge.beyond?.[0] ? itemTxt(counterEdge.beyond[0]) : null;
+    expect.push(`run ${fmt(counterEdge.edge)} — ${long ? "верхній" : "нижній"} край сітки${beyond ? `, за ним ${beyond}` : ""}`);
+  }
+  if (!bias && g && (g.upper?.edge != null || g.lower?.edge != null)) {
+    expect.push(`run ${[g.upper?.edge, g.lower?.edge].filter((p) => p != null).map(fmt).join(" або ")} і закриття назад — перший trap; до того читати нічого`);
+  }
+  for (const e of W?.pending ?? []) expect.push(`тижневе закриття відносно ${fmt(e.level)} — рішення по W`);
+  if (bias && w.invalidation) expect.push(`${invalUa(w.invalidation.rule)} ${fmt(w.invalidation.level)} — story ${long ? "лонг" : "шорт"} знято`);
+
+  // ---- the levels line: at most seven, high to low, one price each; levels
+  // closer than the 4h eq_tolerance are one draw (§3.1), named by the first
+  const lv = [];
+  const tol = (g?.respect ?? 0) / 3;
+  const add = (p, tag, rank) => {
+    if (p == null || !Number.isFinite(p)) return;
+    const v = T.near(p);
+    const hit = lv.find((x) => fmt(x.price) === fmt(v) || Math.abs(x.price - v) <= tol);
+    if (hit) {
+      if (!hit.tags.includes(tag)) hit.tags.push(tag);
+      hit.rank = Math.min(hit.rank, rank);
+    } else lv.push({ price: v, tags: [tag], rank });
+  };
+  const touches = (it) => (it?.touches > 1 ? ` x${it.touches}` : "");
+  if (bias) {
+    add(biasEdge?.edge, "край біасу", 1);
+    add(counterEdge?.edge, `контр-край${touches(counterEdge?.anchor)}`, 1);
+    const b = counterEdge?.beyond?.[0];
+    if (b) add(b.kind === "lb" ? b.zone[long ? 0 : 1] : b.price, `далі${touches(b)}`, 5);
+    if (w.primary_target != null && (w.primary_atr_weeks == null || w.primary_atr_weeks <= 1)) add(w.primary_target, "ціль story", 3);
+    if (w.invalidation) add(w.invalidation.level, "інвалідація", 2);
+  } else if (g) {
+    add(g.upper?.edge, `верхній край${touches(g.upper?.anchor)}`, 1);
+    add(g.lower?.edge, `нижній край${touches(g.lower?.anchor)}`, 1);
+  }
+  if (D?.heading && D.kill != null) add(D.kill, "kill D", 2);
+  const prev = dir?.levels?.prev ?? null;
+  if (prev?.D) {
+    add(prev.D.high, "PDH", 3);
+    add(prev.D.low, "PDL", 3);
+  }
+  if (!bias && prev?.W) {
+    add(prev.W.high, "PWH", 4);
+    add(prev.W.low, "PWL", 4);
+  }
+  const kept = [...lv].sort((a, b) => a.rank - b.rank).slice(0, 7).sort((a, b) => b.price - a.price);
+  const levels = kept.map((x) => `${fmt(x.price)} (${x.tags.join(", ")})`).join(" · ");
+
+  // ---- the one-line answer for the summary table
+  const cell = !bias
+    ? "чекаємо run однієї зі сторін"
+    : day?.pd_level != null && D?.heading
+      ? `вирішує закриття відносно ${fmt(day.pd_level)}`
+      : state === "PENDING"
+        ? `PENDING: 4h-закриття ${over} ${fmt(pend.level)}`
+        : state === "VALID"
+          ? `trap у силі, зона тримається до ${fmt(kill)}`
+          : biasEdge?.edge != null
+            ? `чекаємо run ${fmt(biasEdge.edge)}`
+            : "краю біасу в полі зору немає";
+
+  const tail = !bias ? "без біасу" : vs.state === "against" ? `${w.bias.toUpperCase()}, зараз проти напрямку` : vs.state === "mixed" ? `${w.bias.toUpperCase()}, напрямок змішаний` : w.bias.toUpperCase();
+  return {
+    name,
+    header: `## ${name} · ${fmt(price)} · ${tail}${r.roll?.status === "rolled" ? " · CONTRACT ROLLED" : ""}`,
+    bias: (w.bias ?? "none").toUpperCase(),
+    direction: dir ? `${layer(W, "W").replace(/ з \d\d\.\d\d$/, "")} · ${layer(D, "D").replace(/ з \d\d\.\d\d$/, "")}` : "—",
+    state,
+    week: week.join(" "),
+    today: today.join(" "),
+    expect,
+    levels,
+    cell,
+  };
+}
+
+/**
+ * The daily brief (format v4 — the trader, 2026-09-27): first "what to
+ * expect" per instrument, no entries; then the setups in their own section,
+ * checked against the journal's plan (`daily.plan`) so nothing is offered
+ * twice. `daily.format === "v3"` keeps the older per-instrument setups layout.
+ */
+export function renderDailyMarkdown(daily) {
+  if (daily.format === "v3") return renderDailyMarkdownV3(daily);
+  const tz = daily.local_tz ?? null;
+  const exch = daily.exchange_tz ?? "America/New_York";
+  const at = (h, zone, m = 0) => (tz ? hourIn(tz, daily.trading_day, h, zone, m) : null);
+  const ctOpen = daily.counter_trend_open ?? !/^closed/i.test(daily.counter_trend_note ?? "");
+  const cap = daily.risk_cap ?? null;
+  const plan = normalizePlan(daily.plan);
+
+  const summary = [];
+  const blocks = [];
+  const setupBlocks = [];
+  let clock0 = null;
+  for (const r of daily.results) {
+    if (r.skipped) {
+      blocks.push(`## ${r.symbol} — пропущено: ${r.skipped}`, "");
+      continue;
+    }
+    if (r.error) {
+      blocks.push(`## ${r.symbol} — ПОМИЛКА: ${r.error}`, "");
+      continue;
+    }
+    clock0 ??= briefClock(daily, r);
+    const e = expectBlock(r, daily);
+    blocks.push(e.header);
+    if (r.roll?.status === "rolled") blocks.push(`**Roll.** ${r.roll.note} Рівні тижневого шару зсунуто на ${r.roll.offset > 0 ? "+" : ""}${fmt(r.roll.offset)}; перемалюй лінії і план у журналі на ту саму величину.`);
+    else if (r.roll?.status === "inconsistent") blocks.push(`**Дані.** ${r.roll.note}`);
+    if (r.direction?.error) blocks.push(`**Напрямок.** ${r.direction.error}.`);
+    blocks.push(`- **Тиждень.** ${e.week}`);
+    if (e.today) blocks.push(`- **Сьогодні.** ${e.today}`);
+    if (e.expect.length) blocks.push("- **Чекаємо:**", ...e.expect.map((x) => `  - ${x};`).map((x, i, a) => (i === a.length - 1 ? x.replace(/;$/, ".") : x)));
+    if (e.levels) blocks.push(`- **Рівні:** ${e.levels}.`);
+    blocks.push("");
+    summary.push(`| ${e.name} | ${e.bias} | ${e.direction} | ${e.state ?? "—"} | ${e.cell} |`);
+
+    // ---- the setups of this instrument against the plan
+    const S = r.grid && r.scenarios ? dailySetups(r, daily) : { setups: [] };
+    const mine = (plan?.setups ?? []).filter((p) => p.instrument === e.name);
+    if (!S.setups.length && !mine.length) continue;
+    const tol = (r.grid?.respect ?? 0) / 3;
+    const matched = S.setups.map((s) => ({ s, p: plan ? matchPlanSetup(s, plan.setups, tol) : null }));
+    const out = [`## ${e.name}`];
+    for (const p of mine) {
+      const seen = matched.filter((m) => m.p === p).map((m) => `K ${m.s.key_levels.map(fmt).join(" / ")}`);
+      out.push(`- у плані: ${row(p.direction, p.setup_type, `K ${p.key_levels.map(fmt).join(" / ")}`, p.targets.length ? `T ${p.targets.map(fmt).join(" / ")}` : null)} — ${seen.length ? `engine бачить те саме (${seen.join("; ")})` : "engine сьогодні цього рівня не називає"}.`);
+    }
+    // what is left is recommended only when it can be taken by the strategy's
+    // own numbers; the rest is named in one line with the reason, never hidden
+    const fresh = matched.filter((m) => !m.p).map((m) => ({ s: m.s, why: notRecommended(m.s, r, daily, e.state) }));
+    const good = fresh.filter((x) => !x.why);
+    if (!good.length) out.push(plan ? "- рекомендованих поза планом немає." : "- рекомендованих сетапів немає.");
+    for (const { s } of good) {
+      out.push(`### ${plan ? "Поза планом" : "Сетап"}: ${s.title}`);
+      out.push("```", s.setup_description, "```");
+    }
+    for (const { s, why } of fresh.filter((x) => x.why)) {
+      const far = why.startsWith("не сьогодні");
+      out.push(`- ${far ? "пізніше" : "не рекомендую"}: ${row(s.direction, s.setup_type, `K ${s.key_levels.map(fmt).join(" / ")}`, s.targets.length ? `T ${s.targets.map(fmt).join(" / ")}` : null)} — ${why}.`);
+    }
+    out.push("");
+    setupBlocks.push(...out);
+  }
+
+  const sessions = tz ? `London ${at(8, "Europe/London")}–${at(16, "Europe/London", 30)} · NY ${at(9, exch, 30)}–${at(16, exch)} ${tz}` : WINDOWS_FALLBACK;
+  const stampMs = Date.parse(daily.generated_at);
+  const stamp = clock0 && Number.isFinite(stampMs) ? `Знято ${clock0.stamp(stampMs)}${tz ? ` ${tz}` : ""}` : `Знято ${daily.generated_at}`;
+  const planLine = plan
+    ? `Звірено з планом журналу ${plan.trading_day ?? "—"}${plan.period_end ? ` – ${plan.period_end}` : ""}${plan.status ? ` (${plan.status})` : ""}: сетапів у плані ${plan.setups.length}. Нижче повністю лише те, чого в плані немає.`
+    : "План журналу не передано (`--plan`), тож звірки не було: нижче все, що бачить engine.";
+  return [
+    `# Marco daily brief — ${daily.trading_day} (${daily.weekday}) · чого чекати`,
+    "",
+    `${stamp}. Напрям із ${daily.direction_from}; лише закриті бари. Формат v4: спершу «чого чекати» — біас тижня, стан дня, події на рівнях W / D / 4h, без входів; сетапи окремим блоком унизу; виконання за трейдером (docs/MARCO-CASES.md → Approved changes; пороги [CALIBRATION], docs/MARCO.md §6).`,
+    "",
+    "| | Біас | Напрямок | Стан | Сьогодні |",
+    "|---|---|---|---|---|",
+    ...summary,
+    "",
+    `**Вікна.** ${sessions}.${clock0 ? ` Наступні 4h-закриття: ${clock0.closes(3).join(" · ")}${tz ? "" : " ET"}.` : ""} Контр-тренд: ${ctOpen ? "відкритий (пн–вт)" : "закритий (лише пн–вт)"}.`,
+    "",
+    ...blocks,
+    "# Сетапи",
+    "",
+    `${planLine} Size 1, ліміт $${cap ?? "—"}.`,
+    "",
+    ...(setupBlocks.length ? setupBlocks : ["Сетапів немає.", ""]),
   ].join("\n");
 }
